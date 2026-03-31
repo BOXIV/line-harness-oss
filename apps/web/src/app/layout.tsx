@@ -3,8 +3,11 @@ import './globals.css'
 import AppShell from '@/components/app-shell'
 
 export const metadata: Metadata = {
-  title: 'LINE CRM 管理画面',
-  description: 'LINE公式アカウント CRM 管理画面',
+  title: 'BOXIV LINE Connect 管理画面',
+  description: 'BOXIV LINE Connect 管理画面',
+  icons: {
+    icon: { url: '/favicon.svg', type: 'image/svg+xml' },
+  },
 }
 
 export default function RootLayout({
