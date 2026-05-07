@@ -337,7 +337,7 @@ export interface CalendarBooking {
 }
 
 // ─── Staff ──────────────────────────────────────────────
-export type StaffRole = 'owner' | 'admin' | 'staff'
+export type StaffRole = 'owner' | 'admin' | 'manager' | 'staff'
 
 export interface StaffMember {
   id: string

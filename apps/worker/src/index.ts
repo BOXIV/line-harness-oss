@@ -69,7 +69,7 @@ export type Env = {
     NOTION_PROP_ADDRESS?: string;
   };
   Variables: {
-    staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
+    staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
   };
 };
 

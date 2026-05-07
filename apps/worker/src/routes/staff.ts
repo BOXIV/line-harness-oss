@@ -68,8 +68,8 @@ staff.get('/api/staff/me', async (c) => {
   }
 });
 
-// GET /api/staff — owner only. List all staff with masked API keys.
-staff.get('/api/staff', requireRole('owner'), async (c) => {
+// GET /api/staff — owner/manager. List all staff with masked API keys.
+staff.get('/api/staff', requireRole('owner', 'manager'), async (c) => {
   try {
     const members = await getStaffMembers(c.env.DB);
     return c.json({ success: true, data: members.map((m) => serializeStaff(m, true)) });
@@ -79,8 +79,8 @@ staff.get('/api/staff', requireRole('owner'), async (c) => {
   }
 });
 
-// GET /api/staff/:id — owner only. Get staff detail with masked key.
-staff.get('/api/staff/:id', requireRole('owner'), async (c) => {
+// GET /api/staff/:id — owner/manager. Get staff detail with masked key.
+staff.get('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
   try {
     const id = c.req.param('id')!;
     const member = await getStaffById(c.env.DB, id);
@@ -94,24 +94,30 @@ staff.get('/api/staff/:id', requireRole('owner'), async (c) => {
   }
 });
 
-// POST /api/staff — owner only. Create staff. Returns full API key (one-time visible).
-staff.post('/api/staff', requireRole('owner'), async (c) => {
+// POST /api/staff — owner/manager. Create staff. Returns full API key (one-time visible).
+// manager cannot create owner role (would be self-elevation).
+staff.post('/api/staff', requireRole('owner', 'manager'), async (c) => {
   try {
     const body = await c.req.json<{ name: string; email?: string; role: string }>();
+    const currentStaff = c.get('staff');
 
     if (!body.name) {
       return c.json({ success: false, error: 'name is required' }, 400);
     }
 
-    const validRoles = ['owner', 'admin', 'staff'] as const;
+    const validRoles = ['owner', 'admin', 'manager', 'staff'] as const;
     if (!body.role || !validRoles.includes(body.role as (typeof validRoles)[number])) {
-      return c.json({ success: false, error: 'role must be owner, admin, or staff' }, 400);
+      return c.json({ success: false, error: 'role must be owner, admin, manager, or staff' }, 400);
+    }
+
+    if (currentStaff.role === 'manager' && body.role === 'owner') {
+      return c.json({ success: false, error: 'マネージャーはオーナーロールを付与できません' }, 403);
     }
 
     const member = await createStaffMember(c.env.DB, {
       name: body.name,
       email: body.email ?? null,
-      role: body.role as 'owner' | 'admin' | 'staff',
+      role: body.role as 'owner' | 'admin' | 'manager' | 'staff',
     });
 
     // Return full (unmasked) API key one-time
@@ -122,10 +128,12 @@ staff.post('/api/staff', requireRole('owner'), async (c) => {
   }
 });
 
-// PATCH /api/staff/:id — owner only. Update staff.
-staff.patch('/api/staff/:id', requireRole('owner'), async (c) => {
+// PATCH /api/staff/:id — owner/manager. Update staff.
+// manager cannot edit owner records and cannot promote anyone to owner.
+staff.patch('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
   try {
     const id = c.req.param('id')!;
+    const currentStaff = c.get('staff');
     const body = await c.req.json<{
       name?: string;
       email?: string | null;
@@ -133,15 +141,23 @@ staff.patch('/api/staff/:id', requireRole('owner'), async (c) => {
       isActive?: boolean;
     }>();
 
-    const validRoles = ['owner', 'admin', 'staff'] as const;
+    const validRoles = ['owner', 'admin', 'manager', 'staff'] as const;
     if (body.role !== undefined && !validRoles.includes(body.role as (typeof validRoles)[number])) {
-      return c.json({ success: false, error: 'role must be owner, admin, or staff' }, 400);
+      return c.json({ success: false, error: 'role must be owner, admin, manager, or staff' }, 400);
     }
 
     // Prevent removing the last active owner
     const target = await getStaffById(c.env.DB, id);
     if (!target) {
       return c.json({ success: false, error: 'Staff member not found' }, 404);
+    }
+    if (currentStaff.role === 'manager') {
+      if (target.role === 'owner') {
+        return c.json({ success: false, error: 'マネージャーはオーナーを編集できません' }, 403);
+      }
+      if (body.role === 'owner') {
+        return c.json({ success: false, error: 'マネージャーはオーナーロールを付与できません' }, 403);
+      }
     }
     if (target.role === 'owner' && target.is_active === 1) {
       const willLoseOwner =
@@ -158,7 +174,7 @@ staff.patch('/api/staff/:id', requireRole('owner'), async (c) => {
     const updated = await updateStaffMember(c.env.DB, id, {
       name: body.name,
       email: body.email,
-      role: body.role as 'owner' | 'admin' | 'staff' | undefined,
+      role: body.role as 'owner' | 'admin' | 'manager' | 'staff' | undefined,
       is_active: body.isActive !== undefined ? (body.isActive ? 1 : 0) : undefined,
     });
 
@@ -173,8 +189,9 @@ staff.patch('/api/staff/:id', requireRole('owner'), async (c) => {
   }
 });
 
-// DELETE /api/staff/:id — owner only. Cannot delete self. Must keep at least 1 owner.
-staff.delete('/api/staff/:id', requireRole('owner'), async (c) => {
+// DELETE /api/staff/:id — owner/manager. Cannot delete self. Must keep at least 1 owner.
+// manager cannot delete owner records.
+staff.delete('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
   try {
     const id = c.req.param('id')!;
     const currentStaff = c.get('staff');
@@ -186,6 +203,10 @@ staff.delete('/api/staff/:id', requireRole('owner'), async (c) => {
     const target = await getStaffById(c.env.DB, id);
     if (!target) {
       return c.json({ success: false, error: 'Staff member not found' }, 404);
+    }
+
+    if (currentStaff.role === 'manager' && target.role === 'owner') {
+      return c.json({ success: false, error: 'マネージャーはオーナーを削除できません' }, 403);
     }
 
     if (target.role === 'owner' && target.is_active === 1) {
@@ -212,13 +233,18 @@ staff.delete('/api/staff/:id', requireRole('owner'), async (c) => {
   }
 });
 
-// POST /api/staff/:id/regenerate-key — owner only. Return new API key.
-staff.post('/api/staff/:id/regenerate-key', requireRole('owner'), async (c) => {
+// POST /api/staff/:id/regenerate-key — owner/manager. Return new API key.
+// manager cannot regenerate owner's keys.
+staff.post('/api/staff/:id/regenerate-key', requireRole('owner', 'manager'), async (c) => {
   try {
     const id = c.req.param('id')!;
+    const currentStaff = c.get('staff');
     const exists = await getStaffById(c.env.DB, id);
     if (!exists) {
       return c.json({ success: false, error: 'Staff member not found' }, 404);
+    }
+    if (currentStaff.role === 'manager' && exists.role === 'owner') {
+      return c.json({ success: false, error: 'マネージャーはオーナーのキーを再生成できません' }, 403);
     }
     const newKey = await regenerateStaffApiKey(c.env.DB, id);
     return c.json({ success: true, data: { apiKey: newKey } });

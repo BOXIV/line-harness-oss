@@ -1,7 +1,7 @@
 import type { Context, Next } from 'hono';
 import type { Env } from '../index.js';
 
-type Role = 'owner' | 'admin' | 'staff';
+type Role = 'owner' | 'admin' | 'manager' | 'staff';
 
 export function requireRole(...allowed: Role[]) {
   return async (c: Context<Env>, next: Next): Promise<Response | void> => {
