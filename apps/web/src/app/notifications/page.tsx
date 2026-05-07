@@ -215,7 +215,7 @@ export default function NotificationsPage() {
           <button
             onClick={() => setShowCreate(true)}
             className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
-            style={{ backgroundColor: '#06C755' }}
+            style={{ backgroundColor: '#0f172a' }}
           >
             + 新規ルール
           </button>
@@ -282,7 +282,7 @@ export default function NotificationsPage() {
                 onClick={handleCreate}
                 disabled={saving}
                 className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                style={{ backgroundColor: '#06C755' }}
+                style={{ backgroundColor: '#0f172a' }}
               >
                 {saving ? '作成中...' : '作成'}
               </button>

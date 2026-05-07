@@ -139,7 +139,7 @@ export default function ScoringPage() {
           <button
             onClick={() => setShowCreate(true)}
             className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
-            style={{ backgroundColor: '#06C755' }}
+            style={{ backgroundColor: '#0f172a' }}
           >
             + 新規ルール
           </button>
@@ -155,7 +155,7 @@ export default function ScoringPage() {
           </div>
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500">有効なルール</p>
-            <p className="text-2xl font-bold" style={{ color: '#06C755' }}>{activeRules}</p>
+            <p className="text-2xl font-bold" style={{ color: '#0f172a' }}>{activeRules}</p>
           </div>
         </div>
       )}
@@ -210,7 +210,7 @@ export default function ScoringPage() {
                 onClick={handleCreate}
                 disabled={saving}
                 className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                style={{ backgroundColor: '#06C755' }}
+                style={{ backgroundColor: '#0f172a' }}
               >
                 {saving ? '作成中...' : '作成'}
               </button>
@@ -251,7 +251,7 @@ export default function ScoringPage() {
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{rule.eventType}</span>
                   </td>
                   <td className="px-4 py-3 text-sm font-semibold">
-                    <span style={{ color: rule.scoreValue >= 0 ? '#06C755' : '#EF4444' }}>
+                    <span style={{ color: rule.scoreValue >= 0 ? '#0f172a' : '#EF4444' }}>
                       {rule.scoreValue >= 0 ? `+${rule.scoreValue}` : rule.scoreValue}
                     </span>
                   </td>

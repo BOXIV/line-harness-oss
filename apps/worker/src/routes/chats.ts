@@ -8,6 +8,7 @@ import {
   deleteOperator,
   getChats,
   getChatById,
+  getChatByFriendId,
   createChat,
   updateChat,
   jstNow,
@@ -211,8 +212,20 @@ chats.post('/api/chats', async (c) => {
   try {
     const body = await c.req.json<{ friendId: string; operatorId?: string; lineAccountId?: string | null }>();
     if (!body.friendId) return c.json({ success: false, error: 'friendId is required' }, 400);
+
+    // Find-or-create: avoid creating duplicate chat sessions for the same friend.
+    // The webhook path already uses upsertChatOnMessage; this brings the
+    // operator-initiated path in line with that behaviour.
+    const existing = await getChatByFriendId(c.env.DB, body.friendId);
+    if (existing) {
+      if (body.lineAccountId) {
+        await c.env.DB.prepare(`UPDATE chats SET line_account_id = ? WHERE id = ?`)
+          .bind(body.lineAccountId, existing.id).run();
+      }
+      return c.json({ success: true, data: { id: existing.id, friendId: existing.friend_id, status: existing.status } });
+    }
+
     const item = await createChat(c.env.DB, body);
-    // Save line_account_id if provided
     if (body.lineAccountId) {
       await c.env.DB.prepare(`UPDATE chats SET line_account_id = ? WHERE id = ?`)
         .bind(body.lineAccountId, item.id).run();

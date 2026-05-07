@@ -1,0 +1,54 @@
+#!/usr/bin/env node
+/**
+ * Deploy the admin web app to BOXIV PRODUCTION Cloudflare Pages.
+ *
+ *   - Worker (API)        : line-connect.boxiv.workers.dev
+ *   - Pages (Admin UI)    : line-connect-admin.pages.dev
+ *
+ * Mirrors deploy-boxiv-test.mjs but targets prod resources. The OSS upstream
+ * scripts are left untouched so upstream merges stay clean.
+ */
+import { execSync, spawnSync } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
+
+loadDotenv();
+requireEnv('LINE_HARNESS_API_URL');
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const webDir = resolve(__dirname, '..');
+
+const PROD_API_URL = process.env.LINE_HARNESS_API_URL;
+const PAGES_PROJECT = 'line-connect-admin';
+
+console.log('▶ next build (NEXT_PUBLIC_API_URL=' + PROD_API_URL + ')');
+execSync('pnpm exec next build', {
+  cwd: webDir,
+  stdio: 'inherit',
+  env: { ...process.env, NEXT_PUBLIC_API_URL: PROD_API_URL },
+});
+
+console.log('▶ ensuring Pages project exists: ' + PAGES_PROJECT);
+const createRes = spawnSync(
+  'pnpm',
+  ['exec', 'wrangler', 'pages', 'project', 'create', PAGES_PROJECT, '--production-branch', 'main'],
+  { cwd: webDir, encoding: 'utf8' }
+);
+if (createRes.status !== 0) {
+  const stderr = createRes.stderr || '';
+  if (/already exists/i.test(stderr) || /already in use/i.test(stderr)) {
+    console.log('  (project already exists, continuing)');
+  } else {
+    console.error(stderr);
+    process.exit(createRes.status || 1);
+  }
+} else {
+  console.log(createRes.stdout);
+}
+
+console.log('▶ wrangler pages deploy');
+execSync(
+  `pnpm exec wrangler pages deploy out --project-name ${PAGES_PROJECT} --branch main --commit-dirty=true --commit-message "deploy: line-connect-admin"`,
+  { cwd: webDir, stdio: 'inherit' }
+);

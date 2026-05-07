@@ -22,6 +22,8 @@ export * from './tracked-links';
 export * from './forms';
 export * from './ad-platforms';
 export * from './staff';
+export * from './staff-availability';
+export * from './booking-requests';
 
 /**
  * Thin wrapper around D1Database.

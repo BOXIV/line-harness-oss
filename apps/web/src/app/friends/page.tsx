@@ -38,6 +38,8 @@ export default function FriendsPage() {
   const [page, setPage] = useState(1)
   const [hasNextPage, setHasNextPage] = useState(false)
   const [selectedTagId, setSelectedTagId] = useState('')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -60,6 +62,7 @@ export default function FriendsPage() {
       }
       if (selectedTagId) params.tagId = selectedTagId
       if (selectedAccountId) params.accountId = selectedAccountId
+      if (searchQuery) params.search = searchQuery
 
       const res = await api.friends.list(params)
       if (res.success) {
@@ -74,7 +77,7 @@ export default function FriendsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, selectedTagId, selectedAccountId])
+  }, [page, selectedTagId, selectedAccountId, searchQuery])
 
   useEffect(() => {
     loadTags()
@@ -82,7 +85,13 @@ export default function FriendsPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [selectedTagId, selectedAccountId])
+  }, [selectedTagId, selectedAccountId, searchQuery])
+
+  // 検索 debounce（300ms）
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(searchInput.trim()), 300)
+    return () => clearTimeout(t)
+  }, [searchInput])
 
   useEffect(() => {
     loadFriends()
@@ -97,11 +106,28 @@ export default function FriendsPage() {
       <Header title="友だち管理" />
 
       {/* Filters */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-2 flex-1 min-w-[240px] max-w-md">
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="🔍 名前 / LINE ユーザーID / 内部IDで検索"
+            className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:border-slate-900"
+          />
+          {searchInput && (
+            <button
+              onClick={() => setSearchInput('')}
+              className="text-xs text-gray-500 hover:text-gray-700 whitespace-nowrap"
+            >
+              クリア
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-gray-600 font-medium whitespace-nowrap">タグで絞り込み:</label>
+          <label className="text-sm text-gray-600 font-medium whitespace-nowrap">タグ:</label>
           <select
-            className="text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:ring-2 focus:ring-green-500 flex-1 sm:flex-none"
+            className="text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:border-slate-900 flex-1 sm:flex-none"
             value={selectedTagId}
             onChange={(e) => handleTagFilter(e.target.value)}
           >

@@ -20,3 +20,8 @@ bucket_name = "line-harness-images"
 
 [triggers]
 crons = ["*/5 * * * *"]
+
+# Test environment is NOT defined here because @cloudflare/vite-plugin
+# strips [env.*] sections from the generated dist/line_harness/wrangler.json.
+# Use `pnpm --filter worker deploy:test` (scripts/deploy-test.mjs) instead,
+# which patches the generated config to point at line-harness-test resources.

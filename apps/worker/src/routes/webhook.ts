@@ -66,7 +66,7 @@ webhook.post('/webhook', async (c) => {
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin);
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL);
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -85,6 +85,7 @@ async function handleEvent(
   lineAccessToken: string,
   lineAccountId: string | null = null,
   workerUrl?: string,
+  liffUrl?: string,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -273,7 +274,7 @@ async function handleEvent(
               },
               body: { type: 'box', layout: 'vertical', paddingAll: '20px',
                 contents: [
-                  { type: 'text', text: '別アカウントからのアクションを検知しました。', size: 'sm', color: '#06C755', weight: 'bold', wrap: true },
+                  { type: 'text', text: '別アカウントからのアクションを検知しました。', size: 'sm', color: '#0f172a', weight: 'bold', wrap: true },
                   { type: 'text', text: 'アカウント連携が正常に動作しています。体験ありがとうございました。', size: 'sm', color: '#1e293b', wrap: true, margin: 'md' },
                   { type: 'separator', margin: 'lg' },
                   { type: 'text', text: 'ステップ配信・フォーム即返信・アカウント連携・リッチメニュー・自動返信 — 全て無料、全てOSS。', size: 'xs', color: '#64748b', wrap: true, margin: 'lg' },
@@ -281,8 +282,8 @@ async function handleEvent(
               },
               footer: { type: 'box', layout: 'vertical', paddingAll: '16px',
                 contents: [
-                  { type: 'button', action: { type: 'message', label: '導入について相談する', text: '導入支援を希望します' }, style: 'primary', color: '#06C755' },
-                  ...(c.env.LIFF_URL ? [{ type: 'button', action: { type: 'uri', label: 'フィードバックを送る', uri: `${c.env.LIFF_URL}?page=form` }, style: 'secondary', margin: 'sm' }] : []),
+                  { type: 'button', action: { type: 'message', label: '導入について相談する', text: '導入支援を希望します' }, style: 'primary', color: '#0f172a' },
+                  ...(liffUrl ? [{ type: 'button', action: { type: 'uri', label: 'フィードバックを送る', uri: `${liffUrl}?page=form` }, style: 'secondary', margin: 'sm' }] : []),
                 ],
               },
             }))]);
@@ -293,7 +294,7 @@ async function handleEvent(
             type: 'bubble',
             body: { type: 'box', layout: 'vertical', paddingAll: '20px',
               contents: [
-                { type: 'text', text: 'Account ① にメッセージを送りました', size: 'sm', color: '#06C755', weight: 'bold', align: 'center' },
+                { type: 'text', text: 'Account ① にメッセージを送りました', size: 'sm', color: '#0f172a', weight: 'bold', align: 'center' },
                 { type: 'text', text: 'Account ① のトーク画面を確認してください', size: 'xs', color: '#64748b', align: 'center', margin: 'md' },
               ],
             },

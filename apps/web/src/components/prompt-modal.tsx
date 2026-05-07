@@ -89,7 +89,7 @@ export default function PromptModal({ isOpen, onClose, prompts }: PromptModalPro
                     className="mt-2 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors min-h-[36px]"
                     style={
                       copiedIndex === i
-                        ? { backgroundColor: '#06C755', color: '#fff' }
+                        ? { backgroundColor: '#0f172a', color: '#fff' }
                         : { backgroundColor: '#f3f4f6', color: '#374151' }
                     }
                   >

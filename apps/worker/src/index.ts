@@ -37,6 +37,11 @@ import { forms } from './routes/forms.js';
 import { adPlatforms } from './routes/ad-platforms.js';
 import { staff } from './routes/staff.js';
 import { images } from './routes/images.js';
+// 撮影予約システム
+import { booking } from './routes/booking.js';
+import { bookingInvites } from './routes/booking-invites.js';
+import { bookingRequests } from './routes/booking-requests.js';
+import { staffAvailability } from './routes/staff-availability.js';
 
 export type Env = {
   Bindings: {
@@ -51,6 +56,17 @@ export type Env = {
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
+    SESSION_SECRET?: string;  // 撮影予約セッションCookie署名用
+    BOOKING_BASE_URL?: string;  // 撮影予約リンクのベースURL（未設定時はWORKER_URL or origin）
+    // Notion連携（撮影予約 招待生成時にお客様情報を取得）
+    NOTION_API_KEY?: string;
+    NOTION_DATABASE_ID?: string;
+    NOTION_PROP_LINE_USER_ID?: string;
+    NOTION_PROP_NAME?: string;
+    NOTION_PROP_PREFECTURE?: string;
+    NOTION_PROP_VEHICLE?: string;
+    NOTION_PROP_PHONE?: string;
+    NOTION_PROP_ADDRESS?: string;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -99,6 +115,12 @@ app.route('/', adPlatforms);
 app.route('/', staff);
 app.route('/', images);
 
+// 撮影予約システム
+app.route('/', booking);
+app.route('/', bookingInvites);
+app.route('/', bookingRequests);
+app.route('/', staffAvailability);
+
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
   const ref = c.req.param('ref');
@@ -120,7 +142,7 @@ body{font-family:'Hiragino Sans',system-ui,sans-serif;background:#0d1117;color:#
 .card{text-align:center;max-width:400px;width:90%;padding:48px 24px}
 h1{font-size:28px;font-weight:800;margin-bottom:8px}
 .sub{font-size:14px;color:rgba(255,255,255,0.5);margin-bottom:40px}
-.btn{display:block;width:100%;padding:18px;border:none;border-radius:12px;font-size:18px;font-weight:700;text-decoration:none;text-align:center;color:#fff;background:#06C755;transition:opacity .15s}
+.btn{display:block;width:100%;padding:18px;border:none;border-radius:12px;font-size:18px;font-weight:700;text-decoration:none;text-align:center;color:#fff;background:#0f172a;transition:opacity .15s}
 .btn:active{opacity:.85}
 .note{font-size:12px;color:rgba(255,255,255,0.3);margin-top:24px;line-height:1.6}
 </style>

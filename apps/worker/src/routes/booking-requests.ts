@@ -1,0 +1,452 @@
+/**
+ * 撮影予約申請 管理API
+ *
+ * 管理者が予約一覧を確認し、承認・却下・スタッフ変更・編集・削除を行うAPI。
+ */
+
+import { Hono } from 'hono';
+import {
+  listBookingRequests,
+  getBookingRequestById,
+  updateBookingRequest,
+  approveBookingRequest,
+  rejectBookingRequest,
+  getStaffById,
+  deleteBookingRequest,
+  getStaffAvailabilityById,
+  markSlotBooked,
+  markSlotUnbooked,
+  getFriendById,
+  getStaffMembers,
+  findAvailableStaffForSlot,
+} from '@line-crm/db';
+import type { Env } from '../index.js';
+
+const bookingRequests = new Hono<Env>();
+
+/** GET /api/booking-requests — 一覧（フィルタ付き）
+ *
+ * 権限: staffロールは自分が担当する予約のみ。admin/ownerは全体。
+ */
+bookingRequests.get('/api/booking-requests', async (c) => {
+  try {
+    const currentStaff = c.get('staff');
+    const isStaffRole = currentStaff?.role === 'staff';
+
+    const status = c.req.query('status') ?? undefined;
+    const area = c.req.query('area') ?? undefined;
+    let staffId = c.req.query('staffId') ?? undefined;
+    const friendId = c.req.query('friendId') ?? undefined;
+    const dateFrom = c.req.query('dateFrom') ?? undefined;
+    const dateTo = c.req.query('dateTo') ?? undefined;
+
+    if (isStaffRole) {
+      staffId = currentStaff.id;
+    }
+
+    const items = await listBookingRequests(c.env.DB, {
+      status,
+      area,
+      staffId,
+      friendId,
+      dateFrom,
+      dateTo,
+    });
+
+    // スタッフ + 友だち情報を結合
+    const staffList = await getStaffMembers(c.env.DB);
+    const staffMap = new Map(staffList.map((s) => [s.id, s]));
+
+    const data = await Promise.all(
+      items.map(async (row) => {
+        const friend = row.friend_id ? await getFriendById(c.env.DB, row.friend_id) : null;
+        const slot = row.slot_id ? await getStaffAvailabilityById(c.env.DB, row.slot_id) : null;
+        return {
+          id: row.id,
+          friendId: row.friend_id,
+          friendName: friend?.display_name ?? null,
+          staffId: row.staff_id,
+          staffName: row.staff_id ? staffMap.get(row.staff_id)?.name ?? null : null,
+          inviteToken: row.invite_token,
+          customerName: row.customer_name,
+          prefecture: row.prefecture,
+          area: row.area,
+          vehicleInfo: row.vehicle_info,
+          slot: slot
+            ? {
+                id: slot.id,
+                date: slot.date,
+                startTime: slot.start_time,
+                endTime: slot.end_time,
+                area: slot.area,
+              }
+            : null,
+          plateNumber: row.plate_number,
+          status: row.status,
+          notes: row.notes,
+          approvedBy: row.approved_by,
+          approvedAt: row.approved_at,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+      }),
+    );
+
+    return c.json({ success: true, data });
+  } catch (err) {
+    console.error('GET /api/booking-requests error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+/** GET /api/booking-requests/:id — 詳細 + 同時間帯の代替スタッフ候補 */
+bookingRequests.get('/api/booking-requests/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const row = await getBookingRequestById(c.env.DB, id);
+    if (!row) return c.json({ success: false, error: 'Not found' }, 404);
+
+    const friend = row.friend_id ? await getFriendById(c.env.DB, row.friend_id) : null;
+    const slot = row.slot_id ? await getStaffAvailabilityById(c.env.DB, row.slot_id) : null;
+
+    // 同時間帯の代替スタッフ候補（変更用）
+    let alternativeStaff: unknown[] = [];
+    if (slot) {
+      const candidates = await findAvailableStaffForSlot(
+        c.env.DB,
+        slot.area,
+        slot.date,
+        slot.start_time,
+        slot.end_time,
+      );
+      const staffList = await getStaffMembers(c.env.DB);
+      const staffMap = new Map(staffList.map((s) => [s.id, s]));
+      alternativeStaff = candidates.map((cand) => ({
+        availabilityId: cand.id,
+        staffId: cand.staff_id,
+        staffName: staffMap.get(cand.staff_id)?.name ?? null,
+      }));
+    }
+
+    return c.json({
+      success: true,
+      data: {
+        ...row,
+        friend_name: friend?.display_name ?? null,
+        slot,
+        alternativeStaff,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/booking-requests/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+/**
+ * PUT /api/booking-requests/:id — 編集（スタッフ変更等）
+ * body: { staffId?, slotId?, plateNumber?, notes?, status? }
+ *
+ * スタッフ/スロット変更時:
+ *  - 旧スロットがあれば is_booked=0 に戻す
+ *  - 新スロットを is_booked=1 にする
+ */
+bookingRequests.put('/api/booking-requests/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const currentStaff = c.get('staff');
+    const body = await c.req.json<{
+      staffId?: string;
+      slotId?: string;
+      plateNumber?: string;
+      notes?: string;
+      status?: string;
+    }>();
+
+    const existing = await getBookingRequestById(c.env.DB, id);
+    if (!existing) return c.json({ success: false, error: 'Not found' }, 404);
+
+    // staffロールは自分担当のみ編集可、かつ担当変更は不可
+    if (currentStaff?.role === 'staff') {
+      if (existing.staff_id !== currentStaff.id) {
+        return c.json({ success: false, error: 'Forbidden' }, 403);
+      }
+      if (body.staffId && body.staffId !== currentStaff.id) {
+        return c.json({ success: false, error: 'Forbidden: cannot reassign booking' }, 403);
+      }
+      if (body.status && ['approved', 'rejected'].includes(body.status)) {
+        return c.json({ success: false, error: 'Forbidden: only admin/owner can change status' }, 403);
+      }
+    }
+
+    // スロット差し替え処理
+    if (body.slotId !== undefined && body.slotId !== existing.slot_id) {
+      if (existing.slot_id) {
+        await markSlotUnbooked(c.env.DB, existing.slot_id);
+      }
+      if (body.slotId) {
+        await markSlotBooked(c.env.DB, body.slotId);
+      }
+    }
+
+    const updated = await updateBookingRequest(c.env.DB, id, body);
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('PUT /api/booking-requests/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+/** PUT /api/booking-requests/:id/approve — 承認 + LINE通知
+ *
+ * body (optional): { selectedCandidate?: 1|2|3 } — 「その他の県」の3候補から選ぶ場合に指定
+ */
+bookingRequests.put('/api/booking-requests/:id/approve', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const staff = c.get('staff');
+    if (!staff) return c.json({ success: false, error: 'Unauthorized' }, 401);
+
+    // 権限: admin/owner のみ承認可能
+    if (staff.role !== 'admin' && staff.role !== 'owner') {
+      return c.json({ success: false, error: 'Forbidden: admin/owner only' }, 403);
+    }
+
+    // body に selectedCandidate が含まれる場合は保存
+    const body = await c.req
+      .json<{ selectedCandidate?: number }>()
+      .catch(() => ({} as { selectedCandidate?: number }));
+
+    if (body.selectedCandidate && [1, 2, 3].includes(body.selectedCandidate)) {
+      await updateBookingRequest(c.env.DB, id, { selectedCandidate: body.selectedCandidate });
+    }
+
+    // env-owner や実在しないスタッフIDの場合は FK 違反を避けるため null を渡す
+    const realStaff = await getStaffById(c.env.DB, staff.id);
+    const approverId = realStaff ? staff.id : null;
+    const updated = await approveBookingRequest(c.env.DB, id, approverId);
+    if (!updated) return c.json({ success: false, error: 'Not found' }, 404);
+
+    // LINE通知（非ブロッキング、ただしレスポンス後もWorkerを生かす）
+    c.executionCtx.waitUntil(
+      sendBookingStatusNotification(c.env, id, 'approved').catch((err) =>
+        console.error('approve notification failed:', err),
+      ),
+    );
+
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('PUT /api/booking-requests/:id/approve error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+/** PUT /api/booking-requests/:id/reject — 却下 + LINE通知（admin/owner のみ） */
+bookingRequests.put('/api/booking-requests/:id/reject', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const staff = c.get('staff');
+    if (!staff) return c.json({ success: false, error: 'Unauthorized' }, 401);
+    if (staff.role !== 'admin' && staff.role !== 'owner') {
+      return c.json({ success: false, error: 'Forbidden: admin/owner only' }, 403);
+    }
+
+    const body = await c.req.json<{ notes?: string }>().catch(() => ({} as { notes?: string }));
+
+    const existing = await getBookingRequestById(c.env.DB, id);
+    if (!existing) return c.json({ success: false, error: 'Not found' }, 404);
+
+    // 紐付くスロットを開放
+    if (existing.slot_id) {
+      await markSlotUnbooked(c.env.DB, existing.slot_id);
+    }
+
+    const realStaff = await getStaffById(c.env.DB, staff.id);
+    const approverId = realStaff ? staff.id : null;
+    const updated = await rejectBookingRequest(c.env.DB, id, approverId, body.notes);
+
+    c.executionCtx.waitUntil(
+      sendBookingStatusNotification(c.env, id, 'rejected').catch((err) =>
+        console.error('reject notification failed:', err),
+      ),
+    );
+
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('PUT /api/booking-requests/:id/reject error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+/** DELETE /api/booking-requests/:id （admin/owner のみ） */
+bookingRequests.delete('/api/booking-requests/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const staff = c.get('staff');
+    if (staff && staff.role !== 'admin' && staff.role !== 'owner') {
+      return c.json({ success: false, error: 'Forbidden: admin/owner only' }, 403);
+    }
+    const existing = await getBookingRequestById(c.env.DB, id);
+    if (!existing) return c.json({ success: false, error: 'Not found' }, 404);
+
+    if (existing.slot_id) {
+      await markSlotUnbooked(c.env.DB, existing.slot_id);
+    }
+    await deleteBookingRequest(c.env.DB, id);
+    return c.json({ success: true, data: null });
+  } catch (err) {
+    console.error('DELETE /api/booking-requests/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// ─── LINE通知ヘルパー ──────────────────────────────────────
+
+async function sendBookingStatusNotification(
+  env: Env['Bindings'],
+  bookingId: string,
+  status: 'approved' | 'rejected',
+): Promise<void> {
+  const booking = await getBookingRequestById(env.DB, bookingId);
+  if (!booking?.friend_id) return;
+  const friend = await getFriendById(env.DB, booking.friend_id);
+  if (!friend?.line_user_id) return;
+
+  const { formatJstDateLabel } = await import('../utils/area.js');
+  const slot = booking.slot_id ? await getStaffAvailabilityById(env.DB, booking.slot_id) : null;
+  let dateLabel = '';
+  let timeLabel = '';
+  if (slot) {
+    dateLabel = formatJstDateLabel(slot.date);
+    timeLabel = `${slot.start_time} 〜 ${slot.end_time}`;
+  } else if (booking.area === 'other' && booking.selected_candidate) {
+    const n = booking.selected_candidate;
+    const row = booking as unknown as Record<string, string | null>;
+    const date = row[`candidate_${n}_date`];
+    const start = row[`candidate_${n}_start`];
+    const end = row[`candidate_${n}_end`];
+    if (date && start && end) {
+      dateLabel = formatJstDateLabel(date);
+      timeLabel = `${start} 〜 ${end}`;
+    }
+  }
+
+  const isApproved = status === 'approved';
+  const headerColor = isApproved ? '#0f172a' : '#dc2626';
+  const headerEmoji = isApproved ? '🎉' : '⚠️';
+  const headerText = isApproved ? '撮影日が確定しました' : 'ご予約日程について';
+  const headerSub = isApproved ? '下記の日程でお伺いします' : '日程の再調整をお願いします';
+  const bodyText = isApproved
+    ? '当日は車両のナンバープレートを確認の上、撮影スタッフがお伺いいたします。お時間に余裕を持ってご準備ください。'
+    : '申し訳ございませんが、ご予約日程の調整をお願いいたします。担当者より別途ご連絡いたします。';
+
+  const hasDateInfo = !!dateLabel && !!timeLabel;
+
+  const flex = {
+    type: 'bubble',
+    size: 'mega',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      contents: [
+        { type: 'text', text: `${headerEmoji} ${headerText}`, weight: 'bold', size: 'lg', color: '#ffffff' },
+        { type: 'text', text: headerSub, size: 'xs', color: '#ffffff', margin: 'sm' },
+      ],
+      backgroundColor: headerColor,
+      paddingAll: '20px',
+    },
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'md',
+      contents: [
+        // 日時を大きく目立たせるカード
+        ...(hasDateInfo
+          ? [
+              {
+                type: 'box',
+                layout: 'vertical',
+                backgroundColor: isApproved ? '#f0fdf4' : '#fef2f2',
+                cornerRadius: 'lg',
+                paddingAll: '20px',
+                contents: [
+                  {
+                    type: 'text',
+                    text: '📅 撮影日時',
+                    size: 'xs',
+                    color: isApproved ? '#15803d' : '#b91c1c',
+                    weight: 'bold',
+                  },
+                  {
+                    type: 'text',
+                    text: dateLabel,
+                    size: 'xl',
+                    weight: 'bold',
+                    color: '#0f172a',
+                    margin: 'sm',
+                    wrap: true,
+                  },
+                  {
+                    type: 'text',
+                    text: timeLabel,
+                    size: 'xl',
+                    weight: 'bold',
+                    color: '#0f172a',
+                    margin: 'xs',
+                  },
+                ],
+              },
+              { type: 'separator', margin: 'md' },
+              {
+                type: 'box',
+                layout: 'vertical',
+                spacing: 'sm',
+                margin: 'md',
+                contents: [
+                  {
+                    type: 'box',
+                    layout: 'horizontal',
+                    contents: [
+                      { type: 'text', text: 'お客様', size: 'xs', color: '#94a3b8', flex: 3 },
+                      { type: 'text', text: booking.customer_name || '-', size: 'sm', color: '#1e293b', weight: 'bold', flex: 7, wrap: true },
+                    ],
+                  },
+                  {
+                    type: 'box',
+                    layout: 'horizontal',
+                    contents: [
+                      { type: 'text', text: '都道府県', size: 'xs', color: '#94a3b8', flex: 3 },
+                      { type: 'text', text: booking.prefecture, size: 'sm', color: '#1e293b', weight: 'bold', flex: 7 },
+                    ],
+                  },
+                  {
+                    type: 'box',
+                    layout: 'horizontal',
+                    contents: [
+                      { type: 'text', text: 'ナンバー下4桁', size: 'xs', color: '#94a3b8', flex: 3 },
+                      { type: 'text', text: booking.plate_number || '-', size: 'sm', color: '#1e293b', weight: 'bold', flex: 7 },
+                    ],
+                  },
+                ],
+              },
+              { type: 'separator', margin: 'md' },
+            ]
+          : []),
+        { type: 'text', text: bodyText, size: 'sm', color: '#475569', wrap: true, margin: 'md' },
+      ],
+      paddingAll: '20px',
+    },
+  };
+
+  const { LineClient } = await import('@line-crm/line-sdk');
+  const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
+  await client.pushMessage(friend.line_user_id, [
+    {
+      type: 'flex',
+      altText: isApproved ? '撮影日が確定しました' : 'ご予約日程について',
+      contents: flex,
+    },
+  ]);
+}
+
+export { bookingRequests };

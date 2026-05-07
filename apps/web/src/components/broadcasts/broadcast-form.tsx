@@ -279,7 +279,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
             onClick={handleSave}
             disabled={saving}
             className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-            style={{ backgroundColor: '#06C755' }}
+            style={{ backgroundColor: '#0f172a' }}
           >
             {saving ? '作成中...' : '作成'}
           </button>

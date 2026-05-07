@@ -23,6 +23,7 @@ export default function LoginPage() {
       if (res.ok) {
         localStorage.setItem('lh_api_key', apiKey)
         // Fetch staff profile for name/role display
+        let role: string | null = null
         try {
           const profileRes = await fetch(`${apiUrl}/api/staff/me`, {
             headers: { Authorization: `Bearer ${apiKey}` },
@@ -32,12 +33,14 @@ export default function LoginPage() {
             if (profileData.success && profileData.data) {
               localStorage.setItem('lh_staff_name', profileData.data.name)
               localStorage.setItem('lh_staff_role', profileData.data.role)
+              role = profileData.data.role
             }
           }
         } catch {
           // Profile fetch is best-effort
         }
-        router.push('/')
+        // 撮影スタッフは /staff-availability へ、それ以外はダッシュボードへ
+        router.push(role === 'staff' ? '/staff-availability' : '/')
       } else {
         setError('APIキーが正しくありません')
       }
@@ -49,7 +52,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#06C755' }}>
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#0f172a' }}>
       <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm">
         <div className="text-center mb-6">
           <img src="/logo.png" alt="BOXIV" className="w-12 h-12 mx-auto mb-3" />
@@ -78,7 +81,7 @@ export default function LoginPage() {
             type="submit"
             disabled={loading || !apiKey}
             className="w-full py-3 text-white font-medium rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50"
-            style={{ backgroundColor: '#06C755' }}
+            style={{ backgroundColor: '#0f172a' }}
           >
             {loading ? 'ログイン中...' : 'ログイン'}
           </button>

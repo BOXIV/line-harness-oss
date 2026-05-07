@@ -18,6 +18,35 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
   const [selectedTagId, setSelectedTagId] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [messageFriend, setMessageFriend] = useState<FriendWithTags | null>(null)
+  const [messageContent, setMessageContent] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState('')
+  const [sendSuccess, setSendSuccess] = useState(false)
+
+  async function handleSendMessage() {
+    if (!messageFriend || !messageContent.trim()) return
+    setSending(true)
+    setSendError('')
+    setSendSuccess(false)
+    try {
+      const res = await api.friends.sendMessage(messageFriend.id, {
+        content: messageContent,
+        messageType: 'text',
+      })
+      if (res.success) {
+        setSendSuccess(true)
+        setMessageContent('')
+        setTimeout(() => { setMessageFriend(null); setSendSuccess(false) }, 1200)
+      } else {
+        setSendError(res.error || '送信に失敗しました')
+      }
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : '送信に失敗しました')
+    } finally {
+      setSending(false)
+    }
+  }
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id)
@@ -185,9 +214,24 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   <tr key={`${friend.id}-detail`} className="bg-gray-50">
                     <td colSpan={5} className="px-6 py-4">
                       <div className="space-y-3">
-                        <div>
-                          <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
-                          <p className="text-xs text-gray-600 font-mono">{friend.lineUserId}</p>
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
+                            <p className="text-xs text-gray-600 font-mono break-all">{friend.lineUserId}</p>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setMessageFriend(friend)
+                              setMessageContent('')
+                              setSendError('')
+                              setSendSuccess(false)
+                            }}
+                            className="shrink-0 px-3 py-2 text-xs font-medium text-white rounded-lg hover:opacity-90 transition-opacity"
+                            style={{ backgroundColor: '#0f172a' }}
+                          >
+                            💬 メッセージ送信
+                          </button>
                         </div>
 
                         {/* Tag management */}
@@ -219,7 +263,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                                 onClick={() => handleAddTag(friend.id)}
                                 disabled={!selectedTagId || loading}
                                 className="px-3 py-1 text-xs font-medium rounded-md text-white disabled:opacity-50 transition-opacity"
-                                style={{ backgroundColor: '#06C755' }}
+                                style={{ backgroundColor: '#0f172a' }}
                               >
                                 追加
                               </button>
@@ -254,6 +298,83 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
         </tbody>
       </table>
       </div>
+
+      {/* メッセージ送信モーダル */}
+      {messageFriend && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => !sending && setMessageFriend(null)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-base font-bold text-gray-900">💬 メッセージを送信</h2>
+              <button
+                onClick={() => !sending && setMessageFriend(null)}
+                className="text-gray-400 hover:text-gray-600"
+                disabled={sending}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+                {messageFriend.pictureUrl ? (
+                  <img src={messageFriend.pictureUrl} alt="" className="w-10 h-10 rounded-full object-cover" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 font-medium">
+                    {messageFriend.displayName?.charAt(0) ?? '?'}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-gray-900 text-sm">{messageFriend.displayName}</div>
+                  <div className="text-[11px] text-gray-500 font-mono break-all">{messageFriend.lineUserId}</div>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">メッセージ</label>
+                <textarea
+                  value={messageContent}
+                  onChange={(e) => setMessageContent(e.target.value)}
+                  rows={5}
+                  placeholder="送信するメッセージを入力してください"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-slate-900"
+                  disabled={sending}
+                />
+                <div className="text-[11px] text-gray-500 mt-1">
+                  ※ LINE Push Message として送信されます（配信枠を消費します）
+                </div>
+              </div>
+              {sendError && (
+                <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800">
+                  ⚠️ {sendError}
+                </div>
+              )}
+              {sendSuccess && (
+                <div className="px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-xs text-green-800">
+                  ✅ 送信完了
+                </div>
+              )}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => !sending && setMessageFriend(null)}
+                  disabled={sending}
+                  className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg disabled:opacity-50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleSendMessage}
+                  disabled={sending || !messageContent.trim()}
+                  className="flex-1 px-4 py-2 text-white text-sm font-medium rounded-lg hover:opacity-90 disabled:opacity-50"
+                  style={{ backgroundColor: '#0f172a' }}
+                >
+                  {sending ? '送信中...' : '送信'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

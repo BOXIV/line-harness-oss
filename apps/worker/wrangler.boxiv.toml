@@ -1,0 +1,34 @@
+# BOXIV-specific Wrangler config (line-connect on boxiv.workers.dev).
+#
+# Why this file exists:
+#   apps/worker/wrangler.toml is shared with the OSS upstream and uses the
+#   "line-harness" naming. To keep upstream merges clean, BOXIV-specific
+#   resource names live here and are passed via `wrangler deploy --config`.
+#
+# Production deploy (run from line/line-harness-oss/apps/worker):
+#   pnpm exec vite build
+#   pnpm exec wrangler deploy --config wrangler.boxiv.toml
+#
+# After creating the new D1 in the BOXIV account, replace database_id below
+# with the value returned by `wrangler d1 create line-connect`.
+
+name = "line-connect"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
+account_id = "e839830b4102c24f0d03834e09d8b101"
+
+[assets]
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "line-connect"
+database_id = "8f93ece4-0bda-4d92-8836-3a51737213db"
+
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "line-connect-images"
+
+[triggers]
+crons = ["*/5 * * * *"]

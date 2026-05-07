@@ -214,7 +214,7 @@ export default function StepEditor({ step, stepOrder, onSave, onCancel }: StepEd
           onClick={handleSave}
           disabled={saving}
           className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-          style={{ backgroundColor: '#06C755' }}
+          style={{ backgroundColor: '#0f172a' }}
         >
           {saving ? '保存中...' : '保存'}
         </button>

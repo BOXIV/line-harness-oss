@@ -67,8 +67,8 @@ friends.get('/api/friends', async (c) => {
       binds.push(lineAccountId);
     }
     if (search) {
-      conditions.push('f.display_name LIKE ?');
-      binds.push(`%${search}%`);
+      conditions.push('(f.display_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?)');
+      binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
     // Metadata filters: ?metadata.key=value (e.g. ?metadata.monthly_cost=〜100万円)
     const url = new URL(c.req.url);

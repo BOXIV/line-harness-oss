@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --port 3001",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "deploy:test": "node scripts/deploy-test.mjs"
   },
   "dependencies": {
     "@line-crm/shared": "workspace:*",

@@ -44,6 +44,13 @@ const menuSections = [
     ],
   },
   {
+    label: '撮影予約',
+    items: [
+      { href: '/bookings', label: '予約一覧', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+      { href: '/staff-availability', label: 'スタッフシフト', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+    ],
+  },
+  {
     label: '設定',
     items: [
       { href: '/staff', label: 'スタッフ管理', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
@@ -70,7 +77,7 @@ function AccountAvatar({ account, size = 32 }: { account: AccountWithStats; size
   return (
     <div
       className="rounded-full flex items-center justify-center text-white font-bold shrink-0"
-      style={{ width: size, height: size, backgroundColor: '#06C755', fontSize: size * 0.4 }}
+      style={{ width: size, height: size, backgroundColor: '#0f172a', fontSize: size * 0.4 }}
     >
       {displayName.charAt(0)}
     </div>
@@ -178,7 +185,11 @@ export default function Sidebar() {
     return () => { document.body.style.overflow = '' }
   }, [isOpen])
 
-  const isActive = (href: string) => href === '/' ? pathname === '/' : pathname.startsWith(href)
+  const isActive = (href: string) => {
+    if (href === '/') return pathname === '/'
+    // 完全一致 or 直下のサブパス（例: /staff は /staff-availability にマッチしない）
+    return pathname === href || pathname.startsWith(href + '/')
+  }
 
   const sidebarContent = (
     <>
@@ -198,18 +209,25 @@ export default function Sidebar() {
 
       {/* ナビゲーション */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {menuSections.map((section, si) => (
+        {menuSections.map((section, si) => {
+          const visibleItems = section.items.filter((item) => {
+            // staffロール（撮影スタッフ）は撮影予約セクションのみ表示
+            if (staffRole === 'staff') {
+              return item.href === '/bookings' || item.href === '/staff-availability'
+            }
+            if (item.href === '/staff' && staffRole !== 'owner') return false
+            if (item.href === '/accounts' && staffRole === 'staff') return false
+            return true
+          })
+          if (visibleItems.length === 0) return null
+          return (
           <div key={si}>
             {section.label && (
               <div className="pt-5 pb-2 px-3">
                 <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{section.label}</p>
               </div>
             )}
-            {section.items.filter((item) => {
-              if (item.href === '/staff' && staffRole !== 'owner') return false
-              if (item.href === '/accounts' && staffRole === 'staff') return false
-              return true
-            }).map((item) => {
+            {visibleItems.map((item) => {
               const active = isActive(item.href)
               const isDanger = 'danger' in item && item.danger
               return (
@@ -223,7 +241,7 @@ export default function Sidebar() {
                         ? 'text-red-500 hover:bg-red-50'
                         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                   }`}
-                  style={active ? { backgroundColor: isDanger ? '#EF4444' : '#06C755' } : {}}
+                  style={active ? { backgroundColor: isDanger ? '#EF4444' : '#0f172a' } : {}}
                 >
                   <NavIcon d={item.icon} />
                   {item.label}
@@ -231,7 +249,8 @@ export default function Sidebar() {
               )
             })}
           </div>
-        ))}
+          )
+        })}
       </nav>
 
       {/* フッター */}
@@ -244,7 +263,7 @@ export default function Sidebar() {
               staffRole === 'admin' ? 'bg-blue-100 text-blue-800' :
               'bg-gray-100 text-gray-600'
             }`}>
-              {staffRole === 'owner' ? 'オーナー' : staffRole === 'admin' ? '管理者' : 'スタッフ'}
+              {staffRole === 'owner' ? 'オーナー' : staffRole === 'admin' ? '管理者' : '撮影スタッフ'}
             </span>
           </div>
         )}

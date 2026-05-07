@@ -179,7 +179,7 @@ function injectStyles(): void {
       -webkit-appearance: none;
     }
     .form-input:focus, .form-textarea:focus, .form-select:focus {
-      outline: none; border-color: #06C755; background: #fff;
+      outline: none; border-color: #0f172a; background: #fff;
     }
     .form-textarea { resize: vertical; min-height: 80px; }
     .form-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
@@ -190,22 +190,22 @@ function injectStyles(): void {
       cursor: pointer; transition: border-color 0.15s;
     }
     .radio-label:has(input:checked), .checkbox-label:has(input:checked) {
-      border-color: #06C755; background: #e8faf0;
+      border-color: #0f172a; background: #e8faf0;
     }
-    .radio-label input, .checkbox-label input { accent-color: #06C755; width: 18px; height: 18px; }
+    .radio-label input, .checkbox-label input { accent-color: #0f172a; width: 18px; height: 18px; }
     .radio-label input[type="radio"] { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; border: 2px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
-    .radio-label input[type="radio"]:checked { background: #06C755; border-color: #06C755; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3E%3C/svg%3E"); background-size: 14px; background-position: center; background-repeat: no-repeat; }
+    .radio-label input[type="radio"]:checked { background: #0f172a; border-color: #0f172a; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3E%3C/svg%3E"); background-size: 14px; background-position: center; background-repeat: no-repeat; }
     .submit-btn {
       width: 100%; padding: 14px; border: none; border-radius: 8px;
-      background: #06C755; color: #fff; font-size: 16px; font-weight: 700;
+      background: #0f172a; color: #fff; font-size: 16px; font-weight: 700;
       cursor: pointer; font-family: inherit; margin-top: 8px; transition: opacity 0.15s;
     }
     .submit-btn:active { opacity: 0.85; }
     .submit-btn:disabled { background: #bbb; cursor: not-allowed; }
     .form-error { color: #e53e3e; font-size: 12px; margin-top: 4px; }
     .form-success { text-align: center; padding: 40px 20px; }
-    .form-success .check { width: 64px; height: 64px; border-radius: 50%; background: #06C755; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
-    .form-success h2 { font-size: 20px; color: #06C755; margin-bottom: 12px; }
+    .form-success .check { width: 64px; height: 64px; border-radius: 50%; background: #0f172a; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
+    .form-success h2 { font-size: 20px; color: #0f172a; margin-bottom: 12px; }
     .form-success p { font-size: 14px; color: #666; line-height: 1.6; }
   `;
   document.head.appendChild(style);

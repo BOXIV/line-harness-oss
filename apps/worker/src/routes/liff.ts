@@ -16,10 +16,10 @@ import type { Env } from '../index.js';
 
 const liffRoutes = new Hono<Env>();
 
-// ─── LINE Login OAuth (bot_prompt=aggressive) ───────────────────
+// ─── LINE Login OAuth (bot_prompt=normal) ───────────────────
 
 /**
- * GET /auth/line — redirect to LINE Login with bot_prompt=aggressive
+ * GET /auth/line — redirect to LINE Login with bot_prompt=normal
  *
  * This is THE friend-add URL. Put this on LPs, SNS, ads.
  * Query params:
@@ -89,7 +89,7 @@ liffRoutes.get('/auth/line', async (c) => {
   loginUrl.searchParams.set('client_id', channelId);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
   loginUrl.searchParams.set('scope', 'profile openid email');
-  loginUrl.searchParams.set('bot_prompt', 'aggressive');
+  loginUrl.searchParams.set('bot_prompt', 'normal');
   loginUrl.searchParams.set('state', encodedState);
 
   // Build LIFF URL with params (opens LINE app directly on mobile + QR on PC)
@@ -129,7 +129,7 @@ liffRoutes.get('/auth/line', async (c) => {
     .qr { background: #fff; border-radius: 16px; padding: 24px; display: inline-block; margin-bottom: 24px; }
     .qr img { display: block; width: 240px; height: 240px; }
     .hint { font-size: 13px; color: rgba(255,255,255,0.4); line-height: 1.6; }
-    .badge { display: inline-block; margin-top: 24px; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; color: #06C755; background: rgba(6,199,85,0.1); border: 1px solid rgba(6,199,85,0.2); }
+    .badge { display: inline-block; margin-top: 24px; padding: 8px 20px; border-radius: 20px; font-size: 12px; font-weight: 600; color: #0f172a; background: rgba(6,199,85,0.1); border: 1px solid rgba(6,199,85,0.2); }
   </style>
 </head>
 <body>
@@ -444,6 +444,29 @@ liffRoutes.get('/auth/callback', async (c) => {
       }
     } catch (err) {
       console.error('OAuth scenario enrollment error:', err);
+    }
+
+    // 撮影予約ページへのリダイレクトの場合はセッションCookieを発行
+    if (redirect && (redirect.startsWith('/booking') || redirect.includes('/booking?'))) {
+      try {
+        const { createSessionToken, buildSessionCookie } = await import('../utils/session.js');
+        if (c.env.SESSION_SECRET) {
+          const sessionToken = await createSessionToken(
+            { friendId: friend.id, lineUserId, displayName },
+            c.env.SESSION_SECRET,
+          );
+          const cookie = buildSessionCookie(sessionToken);
+          return new Response(null, {
+            status: 302,
+            headers: {
+              Location: redirect,
+              'Set-Cookie': cookie,
+            },
+          });
+        }
+      } catch (err) {
+        console.error('booking session cookie set failed (non-blocking):', err);
+      }
     }
 
     // Redirect or show completion
@@ -853,14 +876,14 @@ function authLandingPage(liffUrl: string, oauthUrl: string): string {
   <title>LINE で開く</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #06C755; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #0f172a; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
     .card { background: #fff; border-radius: 16px; padding: 40px 24px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); text-align: center; max-width: 400px; width: 90%; }
     .line-icon { font-size: 48px; margin-bottom: 16px; }
     h2 { font-size: 20px; color: #333; margin-bottom: 8px; }
     .sub { font-size: 14px; color: #999; margin-bottom: 24px; }
     .btn { display: block; width: 100%; padding: 16px; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; text-decoration: none; text-align: center; cursor: pointer; transition: opacity 0.15s; font-family: inherit; }
     .btn:active { opacity: 0.85; }
-    .btn-line { background: #06C755; color: #fff; margin-bottom: 12px; }
+    .btn-line { background: #0f172a; color: #fff; margin-bottom: 12px; }
     .btn-web { background: #f5f5f5; color: #666; font-size: 13px; padding: 12px; }
     .loading { margin-top: 16px; font-size: 13px; color: #999; }
     .hidden { display: none; }
@@ -920,8 +943,8 @@ function completionPage(displayName: string, pictureUrl: string | null, ref: str
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
     .card { background: #fff; border-radius: 16px; padding: 40px 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; max-width: 400px; width: 90%; }
-    .check { width: 64px; height: 64px; border-radius: 50%; background: #06C755; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
-    h2 { font-size: 20px; color: #06C755; margin-bottom: 16px; }
+    .check { width: 64px; height: 64px; border-radius: 50%; background: #0f172a; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
+    h2 { font-size: 20px; color: #0f172a; margin-bottom: 16px; }
     .profile { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 16px 0; }
     .profile img { width: 48px; height: 48px; border-radius: 50%; }
     .profile .name { font-size: 16px; font-weight: 600; }
@@ -1055,5 +1078,95 @@ async function resolveXHarnessToken(
     return null;
   }
 }
+
+// ─── 撮影予約 LIFF自動認証 ──────────────────────────────────────
+
+/**
+ * POST /api/liff/booking-auth
+ *
+ * LIFF SDKから取得したIDトークンで本人確認 → friendId解決 → セッションCookie発行
+ * 出品者がLINEアプリ内で予約ページを開いた時に自動ログインするためのエンドポイント
+ *
+ * body: { idToken: string }
+ * response: { success, data: { friendId, lineUserId, displayName } }
+ * Set-Cookie: __booking_session=<jwt>
+ */
+liffRoutes.post('/api/liff/booking-auth', async (c) => {
+  try {
+    const body = await c.req.json<{ idToken: string }>();
+    if (!body.idToken) {
+      return c.json({ success: false, error: 'idToken is required' }, 400);
+    }
+    if (!c.env.SESSION_SECRET) {
+      return c.json({ success: false, error: 'SESSION_SECRET is not configured' }, 500);
+    }
+
+    // LIFF IDトークンの client_id は LIFF Channel ID。LINE_CHANNEL_ID を利用。
+    // 既存実装と同様、複数アカウントをフォールバックで試す。
+    const channelIds = [c.env.LINE_CHANNEL_ID, c.env.LINE_LOGIN_CHANNEL_ID].filter(Boolean);
+    const dbAccounts = await getLineAccounts(c.env.DB);
+    for (const acct of dbAccounts) {
+      if (acct.channel_id && !channelIds.includes(acct.channel_id)) {
+        channelIds.push(acct.channel_id);
+      }
+      if (acct.login_channel_id && !channelIds.includes(acct.login_channel_id)) {
+        channelIds.push(acct.login_channel_id);
+      }
+    }
+
+    let verified: { sub: string; name?: string; email?: string } | null = null;
+    for (const channelId of channelIds) {
+      const verifyRes = await fetch('https://api.line.me/oauth2/v2.1/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ id_token: body.idToken, client_id: channelId }),
+      });
+      if (verifyRes.ok) {
+        verified = await verifyRes.json<{ sub: string; name?: string; email?: string }>();
+        break;
+      }
+    }
+    if (!verified) {
+      return c.json({ success: false, error: 'Invalid ID token' }, 401);
+    }
+
+    const lineUserId = verified.sub;
+    const friend = await getFriendByLineUserId(c.env.DB, lineUserId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found in LINE Harness' }, 404);
+    }
+
+    const { createSessionToken, buildSessionCookie } = await import('../utils/session.js');
+    const sessionToken = await createSessionToken(
+      {
+        friendId: friend.id,
+        lineUserId,
+        displayName: friend.display_name || verified.name || 'Unknown',
+      },
+      c.env.SESSION_SECRET,
+    );
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: {
+          friendId: friend.id,
+          lineUserId,
+          displayName: friend.display_name || verified.name || 'Unknown',
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': buildSessionCookie(sessionToken),
+        },
+      },
+    );
+  } catch (err) {
+    console.error('POST /api/liff/booking-auth error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
 
 export { liffRoutes };

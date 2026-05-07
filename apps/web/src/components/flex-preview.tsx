@@ -78,7 +78,7 @@ function FlexText({ node }: { node: FlexNode }) {
 function FlexButton({ node }: { node: FlexNode }) {
   const isPrimary = node.style === 'primary'
   const isLink = node.style === 'link'
-  const btnColor = node.color || (isPrimary ? '#06C755' : undefined)
+  const btnColor = node.color || (isPrimary ? '#0f172a' : undefined)
   const style: React.CSSProperties = {
     display: 'block',
     width: '100%',
@@ -90,7 +90,7 @@ function FlexButton({ node }: { node: FlexNode }) {
     cursor: 'default',
     border: isPrimary || isLink ? 'none' : '1px solid #ccc',
     backgroundColor: isPrimary ? btnColor : 'transparent',
-    color: isPrimary ? '#fff' : isLink ? (btnColor || '#06C755') : '#333',
+    color: isPrimary ? '#fff' : isLink ? (btnColor || '#0f172a') : '#333',
   }
   return <div style={style}>{node.action?.label || 'Button'}</div>
 }

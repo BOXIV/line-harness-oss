@@ -111,7 +111,7 @@ export default function FormSubmissionsPage() {
                     ? 'text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
-                style={selectedFormId === form.id ? { backgroundColor: '#06C755' } : {}}
+                style={selectedFormId === form.id ? { backgroundColor: '#0f172a' } : {}}
               >
                 {form.name}
               </button>

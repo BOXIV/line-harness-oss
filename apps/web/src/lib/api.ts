@@ -67,6 +67,7 @@ export type FriendListParams = {
   limit?: string
   tagId?: string
   accountId?: string
+  search?: string
 }
 
 export type FriendWithTags = Friend & { tags: Tag[] }
@@ -79,12 +80,18 @@ export const api = {
       if (params?.limit) query.limit = params.limit
       if (params?.tagId) query.tagId = params.tagId
       if (params?.accountId) query.lineAccountId = params.accountId
+      if (params?.search) query.search = params.search
       return fetchApi<ApiResponse<PaginatedResponse<FriendWithTags>>>(
         '/api/friends?' + new URLSearchParams(query)
       )
     },
     get: (id: string) =>
       fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}`),
+    sendMessage: (id: string, data: { content: string; messageType?: string; altText?: string }) =>
+      fetchApi<ApiResponse<{ messageId: string }>>(`/api/friends/${id}/messages`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
     count: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<{ count: number }>>('/api/friends/count' + query)
@@ -507,5 +514,95 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/staff/${id}`, { method: 'DELETE' }),
     regenerateKey: (id: string) =>
       fetchApi<ApiResponse<{ apiKey: string }>>(`/api/staff/${id}/regenerate-key`, { method: 'POST' }),
+  },
+  staffAvailability: {
+    list: (params?: { staffId?: string; date?: string; dateFrom?: string; dateTo?: string; area?: string; includeBooked?: boolean }) => {
+      const query: Record<string, string> = {}
+      if (params?.staffId) query.staffId = params.staffId
+      if (params?.date) query.date = params.date
+      if (params?.dateFrom) query.dateFrom = params.dateFrom
+      if (params?.dateTo) query.dateTo = params.dateTo
+      if (params?.area) query.area = params.area
+      if (params?.includeBooked) query.includeBooked = 'true'
+      const qs = new URLSearchParams(query).toString()
+      return fetchApi<ApiResponse<Array<{
+        id: string; staffId: string; staffName: string | null; date: string;
+        startTime: string; endTime: string; area: string; isBooked: boolean; createdAt: string;
+      }>>>('/api/staff-availability' + (qs ? '?' + qs : ''))
+    },
+    create: (data: { staffId: string; date: string; startTime: string; endTime: string; area: string }) =>
+      fetchApi<ApiResponse<unknown>>('/api/staff-availability', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    bulkCreate: (data: { staffId: string; area: string; dates: string[]; slots: { startTime: string; endTime: string }[] }) =>
+      fetchApi<ApiResponse<{ count: number }>>('/api/staff-availability/bulk', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: Partial<{ staffId: string; date: string; startTime: string; endTime: string; area: string }>) =>
+      fetchApi<ApiResponse<unknown>>(`/api/staff-availability/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/staff-availability/${id}`, { method: 'DELETE' }),
+  },
+  bookingRequests: {
+    list: (params?: { status?: string; area?: string; staffId?: string; dateFrom?: string; dateTo?: string }) => {
+      const query: Record<string, string> = {}
+      if (params?.status) query.status = params.status
+      if (params?.area) query.area = params.area
+      if (params?.staffId) query.staffId = params.staffId
+      if (params?.dateFrom) query.dateFrom = params.dateFrom
+      if (params?.dateTo) query.dateTo = params.dateTo
+      const qs = new URLSearchParams(query).toString()
+      return fetchApi<ApiResponse<Array<{
+        id: string; friendId: string | null; friendName: string | null;
+        staffId: string | null; staffName: string | null;
+        inviteToken: string; customerName: string | null; prefecture: string; area: string;
+        vehicleInfo: string | null;
+        slot: { id: string; date: string; startTime: string; endTime: string; area: string } | null;
+        plateNumber: string | null; status: string; notes: string | null;
+        approvedBy: string | null; approvedAt: string | null;
+        createdAt: string; updatedAt: string;
+      }>>>('/api/booking-requests' + (qs ? '?' + qs : ''))
+    },
+    get: (id: string) =>
+      fetchApi<ApiResponse<{
+        id: string; status: string; plate_number: string | null; customer_name: string | null;
+        prefecture: string; area: string; vehicle_info: string | null; notes: string | null;
+        friend_id: string | null; staff_id: string | null; friend_name: string | null;
+        candidate_1_date: string | null; candidate_1_start: string | null; candidate_1_end: string | null;
+        candidate_2_date: string | null; candidate_2_start: string | null; candidate_2_end: string | null;
+        candidate_3_date: string | null; candidate_3_start: string | null; candidate_3_end: string | null;
+        selected_candidate: number | null;
+        slot: { id: string; date: string; start_time: string; end_time: string; area: string } | null;
+        alternativeStaff: Array<{ availabilityId: string; staffId: string; staffName: string | null }>;
+      }>>(`/api/booking-requests/${id}`),
+    update: (id: string, data: { staffId?: string; slotId?: string; plateNumber?: string; notes?: string; status?: string }) =>
+      fetchApi<ApiResponse<unknown>>(`/api/booking-requests/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    approve: (id: string, selectedCandidate?: 1 | 2 | 3) =>
+      fetchApi<ApiResponse<unknown>>(`/api/booking-requests/${id}/approve`, {
+        method: 'PUT',
+        body: JSON.stringify(selectedCandidate ? { selectedCandidate } : {}),
+      }),
+    reject: (id: string, notes?: string) =>
+      fetchApi<ApiResponse<unknown>>(`/api/booking-requests/${id}/reject`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes }),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/booking-requests/${id}`, { method: 'DELETE' }),
+  },
+  bookingInvites: {
+    create: (data: { lineUserId?: string; friendId?: string; customerName?: string; prefecture: string; vehicleInfo?: string | Record<string, unknown>; sendLineMessage?: boolean }) =>
+      fetchApi<ApiResponse<{ id: string; token: string; url: string; area: string; customerName: string | null; prefecture: string; friendId: string }>>(
+        '/api/booking-invites',
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
   },
 }

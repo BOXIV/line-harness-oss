@@ -308,7 +308,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                 onClick={handleSaveScenario}
                 disabled={saving}
                 className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                style={{ backgroundColor: '#06C755' }}
+                style={{ backgroundColor: '#0f172a' }}
               >
                 {saving ? '保存中...' : '保存'}
               </button>
@@ -367,7 +367,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           <button
             onClick={openAddStep}
             className="px-3 py-1.5 min-h-[44px] text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
-            style={{ backgroundColor: '#06C755' }}
+            style={{ backgroundColor: '#0f172a' }}
           >
             + ステップ追加
           </button>
@@ -433,7 +433,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                   onClick={handleSaveStep}
                   disabled={stepSaving}
                   className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                  style={{ backgroundColor: '#06C755' }}
+                  style={{ backgroundColor: '#0f172a' }}
                 >
                   {stepSaving ? '保存中...' : editingStepId ? '更新' : '追加'}
                 </button>
@@ -467,7 +467,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       <div className="flex items-center gap-3 mb-2">
                         <span
                           className="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold text-white shrink-0"
-                          style={{ backgroundColor: '#06C755' }}
+                          style={{ backgroundColor: '#0f172a' }}
                         >
                           {step.stepOrder}
                         </span>

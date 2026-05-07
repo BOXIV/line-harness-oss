@@ -15,7 +15,7 @@ function RoleBadge({ role }: { role: string }) {
         ? 'bg-blue-100 text-blue-800'
         : 'bg-gray-100 text-gray-600'
   const label =
-    role === 'owner' ? 'オーナー' : role === 'admin' ? '管理者' : 'スタッフ'
+    role === 'owner' ? 'オーナー' : role === 'admin' ? '管理者' : '撮影スタッフ'
   return (
     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${styles}`}>
       {label}
@@ -153,7 +153,7 @@ export default function StaffPage() {
           <button
             onClick={() => setShowForm(!showForm)}
             className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
-            style={{ backgroundColor: '#06C755' }}
+            style={{ backgroundColor: '#0f172a' }}
           >
             + スタッフを追加
           </button>
@@ -190,6 +190,17 @@ export default function StaffPage() {
       {showForm && (
         <div className="mb-6 p-5 bg-white border border-gray-200 rounded-lg shadow-sm">
           <h2 className="text-sm font-semibold text-gray-900 mb-4">新しいスタッフを追加</h2>
+
+          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-900">
+            <p className="font-bold mb-2">ロール別権限</p>
+            <ul className="space-y-1 leading-relaxed">
+              <li><span className="inline-block px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 font-bold mr-2">オーナー</span>全機能（スタッフ管理含む）</li>
+              <li><span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-bold mr-2">管理者</span>スタッフ管理以外の全機能（予約承認、配信、友だち管理など）</li>
+              <li><span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700 font-bold mr-2">撮影スタッフ</span>シフト登録と自分の担当予約確認のみ</li>
+            </ul>
+            <p className="mt-2 text-[11px] text-blue-700">※ 撮影スタッフ用アカウントは「撮影スタッフ」を選択してください</p>
+          </div>
+
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div>
@@ -220,7 +231,7 @@ export default function StaffPage() {
                   onChange={(e) => setFormRole(e.target.value as 'admin' | 'staff')}
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
                 >
-                  <option value="staff">スタッフ</option>
+                  <option value="staff">撮影スタッフ（シフト登録専用）</option>
                   <option value="admin">管理者</option>
                 </select>
               </div>
@@ -233,7 +244,7 @@ export default function StaffPage() {
                 type="submit"
                 disabled={formLoading || !formName}
                 className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
-                style={{ backgroundColor: '#06C755' }}
+                style={{ backgroundColor: '#0f172a' }}
               >
                 {formLoading ? '作成中...' : '作成'}
               </button>
