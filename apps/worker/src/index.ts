@@ -42,6 +42,8 @@ import { booking } from './routes/booking.js';
 import { bookingInvites } from './routes/booking-invites.js';
 import { bookingRequests } from './routes/booking-requests.js';
 import { staffAvailability } from './routes/staff-availability.js';
+// 出品フォーム LINE 連携 (BOXIV)
+import { listingFormLine } from './routes/listing-form-line.js';
 
 export type Env = {
   Bindings: {
@@ -67,6 +69,9 @@ export type Env = {
     NOTION_PROP_VEHICLE?: string;
     NOTION_PROP_PHONE?: string;
     NOTION_PROP_ADDRESS?: string;
+    // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用
+    SLACK_BOT_TOKEN?: string;
+    SLACK_LISTING_LINK_CHANNEL_ID?: string;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
@@ -120,6 +125,9 @@ app.route('/', booking);
 app.route('/', bookingInvites);
 app.route('/', bookingRequests);
 app.route('/', staffAvailability);
+
+// 出品フォーム LINE 連携 (BOXIV)
+app.route('/', listingFormLine);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
