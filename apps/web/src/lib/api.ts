@@ -635,6 +635,28 @@ export const api = {
         { method: 'POST', body: JSON.stringify(data) },
       ),
   },
+  // チャット用メディアアップロード (BOXIV — image / video / PDF)
+  media: {
+    async upload(file: File): Promise<ApiResponse<{
+      id: string
+      key: string
+      url: string
+      kind: 'image' | 'video' | 'file'
+      mimeType: string
+      filename: string | null
+      size: number
+    }>> {
+      const apiKey = getApiKey()
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`${API_URL}/api/media`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      })
+      return res.json()
+    },
+  },
   // 個別チャット送信予約 (BOXIV)
   scheduledMessages: {
     list: (friendId: string, status?: 'scheduled' | 'sent' | 'cancelled' | 'failed') => {

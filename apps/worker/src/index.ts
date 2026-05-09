@@ -49,6 +49,8 @@ import { listingFormLine } from './routes/listing-form-line.js';
 import { friendStatus } from './routes/friend-status.boxiv.js';
 // 個別チャット送信予約 (BOXIV)
 import { scheduledMessages } from './routes/scheduled-messages.boxiv.js';
+// チャット用メディア (画像 / 動画 / PDF, BOXIV)
+import { media } from './routes/media.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -144,6 +146,9 @@ app.route('/', friendStatus);
 
 // 個別チャット送信予約 (BOXIV)
 app.route('/', scheduledMessages);
+
+// チャット用メディア (BOXIV)
+app.route('/', media);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {

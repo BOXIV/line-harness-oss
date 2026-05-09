@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { extractFlexAltText } from '../utils/flex-alt-text.js';
+import { buildMessage } from '../services/step-delivery.js';
 import {
   getOperators,
   getOperatorById,
@@ -307,17 +307,12 @@ chats.post('/api/chats/:id/send', async (c) => {
       .first<{ id: string; line_user_id: string }>();
     if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
 
-    // LINE APIでメッセージ送信
+    // LINE APIでメッセージ送信 — buildMessage で text / image / video / flex / file を統一処理
     const { LineClient } = await import('@line-crm/line-sdk');
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
     const messageType = body.messageType ?? 'text';
-
-    if (messageType === 'text') {
-      await lineClient.pushTextMessage(friend.line_user_id, body.content);
-    } else if (messageType === 'flex') {
-      const contents = JSON.parse(body.content);
-      await lineClient.pushFlexMessage(friend.line_user_id, extractFlexAltText(contents), contents);
-    }
+    const lineMessage = buildMessage(messageType, body.content);
+    await lineClient.pushMessage(friend.line_user_id, [lineMessage]);
 
     // メッセージログに記録
     const logId = crypto.randomUUID();

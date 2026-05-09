@@ -269,6 +269,8 @@ export default function ChatsPage() {
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [showSchedulePanel, setShowSchedulePanel] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     try {
@@ -382,6 +384,43 @@ export default function ChatsPage() {
       setError('メッセージの送信に失敗しました。')
     } finally {
       setSending(false)
+    }
+  }
+
+  const handleAttachFile = async (file: File) => {
+    if (!selectedChatId) return
+    setUploading(true)
+    setError('')
+    try {
+      const upload = await api.media.upload(file)
+      if (!upload.success) {
+        setError(`アップロード失敗: ${upload.error}`)
+        return
+      }
+      const { url, kind, filename, size, mimeType } = upload.data
+      let messageType: 'image' | 'video' | 'file'
+      let content: string
+      if (kind === 'image') {
+        messageType = 'image'
+        content = JSON.stringify({ originalContentUrl: url, previewImageUrl: url })
+      } else if (kind === 'video') {
+        messageType = 'video'
+        // LINE requires both. Use the same URL as preview (LINE will frame-extract).
+        content = JSON.stringify({ originalContentUrl: url, previewImageUrl: url })
+      } else {
+        // file (PDF) — sent as Flex bubble with download button (worker side)
+        messageType = 'file'
+        content = JSON.stringify({ url, filename, size, mimeType })
+      }
+      await api.chats.send(selectedChatId, { content, messageType })
+      loadChatDetail(selectedChatId)
+      loadChats()
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : 'unknown'
+      setError(`添付の送信に失敗: ${detail}`)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
 
@@ -628,11 +667,56 @@ export default function ChatsPage() {
                     } else if (msg.messageType === 'image') {
                       try {
                         const parsed = JSON.parse(msg.content)
-                        bubbleContent = (
-                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-[200px] rounded" />
+                        const src = parsed.originalContentUrl || parsed.previewImageUrl || parsed.url
+                        bubbleContent = src ? (
+                          <a href={src} target="_blank" rel="noreferrer">
+                            <img src={src} alt="" className="max-w-[240px] rounded" />
+                          </a>
+                        ) : (
+                          <span>🖼️ [画像]</span>
                         )
                       } catch {
                         bubbleContent = <span>🖼️ [画像]</span>
+                      }
+                    } else if (msg.messageType === 'video') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        const src = parsed.originalContentUrl || parsed.url
+                        bubbleContent = src ? (
+                          <video src={src} controls preload="metadata" className="max-w-[280px] rounded" />
+                        ) : (
+                          <span>🎬 [動画]</span>
+                        )
+                      } catch {
+                        bubbleContent = <span>🎬 [動画]</span>
+                      }
+                    } else if (msg.messageType === 'audio') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        const src = parsed.url
+                        bubbleContent = src ? (
+                          <audio src={src} controls className="w-[240px]" />
+                        ) : (
+                          <span>🎵 [音声]</span>
+                        )
+                      } catch {
+                        bubbleContent = <span>🎵 [音声]</span>
+                      }
+                    } else if (msg.messageType === 'file') {
+                      try {
+                        const parsed = JSON.parse(msg.content)
+                        const url = parsed.url
+                        const filename = parsed.filename || parsed.fileName || 'file'
+                        bubbleContent = url ? (
+                          <a href={url} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-2 py-1.5 rounded bg-white/20 hover:bg-white/30 transition-colors">
+                            <span className="text-xl">📄</span>
+                            <span className="text-xs underline truncate max-w-[200px]">{filename}</span>
+                          </a>
+                        ) : (
+                          <span>📄 [ファイル]</span>
+                        )
+                      } catch {
+                        bubbleContent = <span>📄 [ファイル]</span>
                       }
                     } else {
                       bubbleContent = <span>{msg.content}</span>
@@ -719,6 +803,26 @@ export default function ChatsPage() {
                   </select>
                 </div>
                 <div className="flex items-center gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) void handleAttachFile(file)
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || uploading}
+                    className="px-3 py-2 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    aria-label="ファイルを添付"
+                    title="画像・動画・PDF を添付"
+                  >
+                    {uploading ? '⏳' : '📎'}
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowTemplatePicker(true)}

@@ -303,6 +303,69 @@ export function buildMessage(messageType: string, messageContent: string, altTex
     }
   }
 
+  // BOXIV: video — JSON { originalContentUrl, previewImageUrl }
+  if (messageType === 'video') {
+    try {
+      const parsed = JSON.parse(messageContent) as {
+        originalContentUrl: string;
+        previewImageUrl: string;
+      };
+      return {
+        type: 'video',
+        originalContentUrl: parsed.originalContentUrl,
+        previewImageUrl: parsed.previewImageUrl,
+      } as unknown as Message;
+    } catch {
+      return { type: 'text', text: messageContent };
+    }
+  }
+
+  // BOXIV: file (PDF etc.) — LINE has no native file push, render as a Flex
+  // bubble with a download button linking to the public URL.
+  if (messageType === 'file') {
+    try {
+      const parsed = JSON.parse(messageContent) as {
+        url: string;
+        filename?: string;
+        size?: number;
+      };
+      const filename = parsed.filename || 'file';
+      const sizeKb = parsed.size ? Math.max(1, Math.round(parsed.size / 1024)) : null;
+      const sizeText = sizeKb ? `${sizeKb.toLocaleString()} KB` : '';
+      return {
+        type: 'flex',
+        altText: altText || `📄 ${filename}`,
+        contents: {
+          type: 'bubble',
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: [
+              { type: 'text', text: '📄 ファイル', weight: 'bold', size: 'sm', color: '#666666' },
+              { type: 'text', text: filename, weight: 'bold', size: 'md', wrap: true },
+              ...(sizeText ? [{ type: 'text', text: sizeText, size: 'xs', color: '#aaaaaa' }] : []),
+            ],
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#0f172a',
+                action: { type: 'uri', label: 'ダウンロード', uri: parsed.url },
+              },
+            ],
+          },
+        },
+      } as unknown as Message;
+    } catch {
+      return { type: 'text', text: messageContent };
+    }
+  }
+
   // Fallback
   return { type: 'text', text: messageContent };
 }
