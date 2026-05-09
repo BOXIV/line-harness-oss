@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { buildMessage } from '../services/step-delivery.js';
+import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
 import {
   getOperators,
   getOperatorById,
@@ -107,16 +108,31 @@ chats.delete('/api/operators/:id', async (c) => {
 
 // ========== チャットCRUD ==========
 
+function parseFriendNotion(metadataJson: unknown): { source: string; pageId: string; label: string | null; realName: string | null } | null {
+  if (typeof metadataJson !== 'string' || !metadataJson) return null;
+  try {
+    const meta = JSON.parse(metadataJson) as { notion?: { source: string; pageId: string; label: string | null; realName: string | null } };
+    return meta.notion ?? null;
+  } catch {
+    return null;
+  }
+}
+
 chats.get('/api/chats', async (c) => {
   try {
     const status = c.req.query('status') ?? undefined;
     const operatorId = c.req.query('operatorId') ?? undefined;
     const lineAccountId = c.req.query('lineAccountId') ?? undefined;
+    const statusOptionId = c.req.query('statusOptionId') ?? undefined;
 
-    // JOIN friends to get display_name and picture_url
-    let sql = `SELECT c.*, f.display_name, f.picture_url, f.line_user_id
+    // JOIN friends to get display_name / picture / metadata + current Notion-synced status.
+    let sql = `SELECT c.*, f.display_name, f.picture_url, f.line_user_id, f.metadata,
+                      so.id AS status_option_id, so.name AS status_option_name,
+                      so.color AS status_option_color, so.source AS status_option_source
                FROM chats c
-               LEFT JOIN friends f ON c.friend_id = f.id`;
+               LEFT JOIN friends f ON c.friend_id = f.id
+               LEFT JOIN friend_status_assignments fsa ON fsa.friend_id = f.id
+               LEFT JOIN status_options so ON so.id = fsa.status_option_id`;
     const conditions: string[] = [];
     const bindings: unknown[] = [];
 
@@ -131,6 +147,10 @@ chats.get('/api/chats', async (c) => {
     if (lineAccountId) {
       conditions.push('f.line_account_id = ?');
       bindings.push(lineAccountId);
+    }
+    if (statusOptionId) {
+      conditions.push('fsa.status_option_id = ?');
+      bindings.push(statusOptionId);
     }
 
     if (conditions.length > 0) {
@@ -150,6 +170,15 @@ chats.get('/api/chats', async (c) => {
         friendId: ch.friend_id,
         friendName: ch.display_name || '名前なし',
         friendPictureUrl: ch.picture_url || null,
+        notion: parseFriendNotion(ch.metadata),
+        customerStatus: ch.status_option_id
+          ? {
+              id: ch.status_option_id,
+              name: ch.status_option_name,
+              color: ch.status_option_color,
+              source: ch.status_option_source,
+            }
+          : null,
         operatorId: ch.operator_id,
         status: ch.status,
         notes: ch.notes,
@@ -171,9 +200,9 @@ chats.get('/api/chats/:id', async (c) => {
 
     // 友だち情報を取得
     const friend = await c.env.DB
-      .prepare(`SELECT display_name, picture_url, line_user_id FROM friends WHERE id = ?`)
+      .prepare(`SELECT display_name, picture_url, line_user_id, metadata FROM friends WHERE id = ?`)
       .bind(item.friend_id)
-      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string }>();
+      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string; metadata: string | null }>();
 
     // チャットに関連するメッセージログも取得
     const messages = await c.env.DB
@@ -188,6 +217,7 @@ chats.get('/api/chats/:id', async (c) => {
         friendId: item.friend_id,
         friendName: friend?.display_name || '名前なし',
         friendPictureUrl: friend?.picture_url || null,
+        notion: parseFriendNotion(friend?.metadata ?? null),
         operatorId: item.operator_id,
         status: item.status,
         notes: item.notes,
@@ -304,7 +334,7 @@ chats.post('/api/chats/:id/send', async (c) => {
     const friend = await c.env.DB
       .prepare(`SELECT * FROM friends WHERE id = ?`)
       .bind(chat.friend_id)
-      .first<{ id: string; line_user_id: string }>();
+      .first<{ id: string; line_user_id: string; metadata: string | null }>();
     if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
 
     // LINE APIでメッセージ送信 — buildMessage で text / image / video / flex / file を統一処理
@@ -323,6 +353,18 @@ chats.post('/api/chats/:id/send', async (c) => {
 
     // チャットの最終メッセージ日時を更新
     await updateChat(c.env.DB, chatId, { status: 'in_progress', lastMessageAt: jstNow() });
+
+    // BOXIV: Notion 出品者DB との初回自動連携 (metadata.notion 未設定のときだけ)
+    let needsNotionLink = true;
+    try {
+      const meta = friend.metadata ? JSON.parse(friend.metadata) : {};
+      if (meta.notion?.pageId) needsNotionLink = false;
+    } catch { /* malformed metadata — try anyway */ }
+    if (needsNotionLink) {
+      const promise = linkFriendToNotion(c.env.DB, c.env, friend.id, friend.line_user_id)
+        .catch((err) => console.error('auto notion link failed for', friend.id, err));
+      c.executionCtx.waitUntil(promise);
+    }
 
     return c.json({ success: true, data: { sent: true, messageId: logId } });
   } catch (err) {

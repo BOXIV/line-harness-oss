@@ -51,6 +51,8 @@ import { friendStatus } from './routes/friend-status.boxiv.js';
 import { scheduledMessages } from './routes/scheduled-messages.boxiv.js';
 // チャット用メディア (画像 / 動画 / PDF, BOXIV)
 import { media } from './routes/media.boxiv.js';
+// 友だち↔Notion 連携 (BOXIV)
+import { friendNotion } from './routes/friend-notion.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -84,6 +86,7 @@ export type Env = {
     NOTION_BUYER_DB_ID?: string;
     NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
     NOTION_BUYER_STATUS_PROP?: string;
+    NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
@@ -149,6 +152,9 @@ app.route('/', scheduledMessages);
 
 // チャット用メディア (BOXIV)
 app.route('/', media);
+
+// 友だち↔Notion 連携 (BOXIV)
+app.route('/', friendNotion);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {

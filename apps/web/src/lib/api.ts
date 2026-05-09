@@ -338,11 +338,12 @@ export const api = {
       ),
   },
   chats: {
-    list: (params?: { status?: string; operatorId?: string; accountId?: string }) => {
+    list: (params?: { status?: string; operatorId?: string; accountId?: string; statusOptionId?: string }) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status
       if (params?.operatorId) query.operatorId = params.operatorId
       if (params?.accountId) query.lineAccountId = params.accountId
+      if (params?.statusOptionId) query.statusOptionId = params.statusOptionId
       return fetchApi<ApiResponse<Chat[]>>(
         '/api/chats?' + new URLSearchParams(query),
       )
@@ -366,6 +367,18 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+    notionLink: (friendId: string) =>
+      fetchApi<ApiResponse<{
+        linked: boolean
+        message?: string
+        link?: {
+          source: 'seller'
+          pageId: string
+          label: string | null
+          realName: string | null
+          linkedAt: string
+        }
+      }>>(`/api/friends/${friendId}/notion-link`, { method: 'POST' }),
   },
   reminders: {
     list: (params?: { accountId?: string }) => {

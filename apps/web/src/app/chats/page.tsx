@@ -10,12 +10,30 @@ import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
 import { detectFriendSource } from '@/lib/friend-source'
+import { notionPillClass } from '@/lib/notion-color'
+
+interface NotionFriendLink {
+  source: 'seller' | 'buyer'
+  pageId: string
+  label: string | null
+  realName: string | null
+  linkedAt?: string
+}
+
+interface CustomerStatus {
+  id: string
+  name: string
+  color: string | null
+  source: 'seller' | 'buyer'
+}
 
 interface Chat {
   id: string
   friendId: string
   friendName: string
   friendPictureUrl: string | null
+  notion: NotionFriendLink | null
+  customerStatus: CustomerStatus | null
   operatorId: string | null
   status: 'unread' | 'in_progress' | 'resolved'
   notes: string | null
@@ -38,20 +56,16 @@ interface ChatDetail extends Chat {
   messages?: ChatMessage[]
 }
 
-type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
-
-const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
-  unread: { label: '未読', className: 'bg-red-100 text-red-700' },
-  in_progress: { label: '対応中', className: 'bg-yellow-100 text-yellow-700' },
-  resolved: { label: '解決済', className: 'bg-green-100 text-green-700' },
+/** Format chat list display name: "{label} {realName} ({nickname})" or fallback to nickname. */
+function formatChatLabel(chat: { friendName: string; notion: NotionFriendLink | null }): string {
+  const nickname = chat.friendName || '名前なし'
+  if (!chat.notion) return nickname
+  const parts: string[] = []
+  if (chat.notion.label) parts.push(chat.notion.label)
+  if (chat.notion.realName) parts.push(chat.notion.realName)
+  if (parts.length === 0) return nickname
+  return `${parts.join(' ')} (${nickname})`
 }
-
-const statusFilters: { key: StatusFilter; label: string }[] = [
-  { key: 'all', label: '全て' },
-  { key: 'unread', label: '未読' },
-  { key: 'in_progress', label: '対応中' },
-  { key: 'resolved', label: '解決済' },
-]
 
 const SHOW_LOADING_PREF_KEY = 'lh_chat_show_loading_indicator'
 const LOADING_SECONDS_PREF_KEY = 'lh_chat_loading_seconds'
@@ -208,7 +222,10 @@ export default function ChatsPage() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null)
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [customerStatusFilter, setCustomerStatusFilter] = useState<string>('all')
+  const [statusOptions, setStatusOptions] = useState<Array<{ id: string; name: string; color: string | null; source: 'seller' | 'buyer' }>>([])
+  const [linkingNotion, setLinkingNotion] = useState(false)
+  const [notionMessage, setNotionMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
@@ -254,8 +271,8 @@ export default function ChatsPage() {
     setLoading(true)
     setError('')
     try {
-      const params: { status?: string; accountId?: string } = {}
-      if (statusFilter !== 'all') params.status = statusFilter
+      const params: { statusOptionId?: string; accountId?: string } = {}
+      if (customerStatusFilter !== 'all') params.statusOptionId = customerStatusFilter
       if (selectedAccountId) params.accountId = selectedAccountId
       const [chatRes, friendRes] = await Promise.allSettled([
         api.chats.list(params),
@@ -273,7 +290,14 @@ export default function ChatsPage() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, selectedAccountId])
+  }, [customerStatusFilter, selectedAccountId])
+
+  // Load all Notion-synced status options (both seller + buyer) for the filter dropdown.
+  useEffect(() => {
+    api.friendStatus.listOptions().then((res) => {
+      if (res.success) setStatusOptions(res.data.map((o) => ({ id: o.id, name: o.name, color: o.color, source: o.source })))
+    }).catch(() => { /* non-blocking */ })
+  }, [])
 
   const loadChatDetail = useCallback(async (chatId: string) => {
     setDetailLoading(true)
@@ -410,17 +434,6 @@ export default function ChatsPage() {
     }
   }
 
-  const handleStatusUpdate = async (newStatus: Chat['status']) => {
-    if (!selectedChatId) return
-    try {
-      await api.chats.update(selectedChatId, { status: newStatus })
-      loadChatDetail(selectedChatId)
-      loadChats()
-    } catch {
-      setError('ステータスの更新に失敗しました。')
-    }
-  }
-
   const handleSaveNotes = async () => {
     if (!selectedChatId) return
     setSavingNotes(true)
@@ -479,22 +492,25 @@ export default function ChatsPage() {
       <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
         {/* Left Panel: Chat List */}
         <div className={`w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
-          {/* Status Filter Tabs */}
-          <div className="flex border-b border-gray-200">
-            {statusFilters.map((filter) => (
-              <button
-                key={filter.key}
-                onClick={() => { setStatusFilter(filter.key); setSelectedChatId(null) }}
-                className={`flex-1 px-3 py-2.5 min-h-[44px] text-xs font-medium transition-colors ${
-                  statusFilter === filter.key
-                    ? 'text-white'
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-                style={statusFilter === filter.key ? { backgroundColor: '#0f172a' } : undefined}
-              >
-                {filter.label}
-              </button>
-            ))}
+          {/* Customer status filter (Notion-synced) */}
+          <div className="px-3 py-2 border-b border-gray-200">
+            <select
+              value={customerStatusFilter}
+              onChange={(e) => { setCustomerStatusFilter(e.target.value); setSelectedChatId(null) }}
+              className="w-full text-xs border border-gray-300 rounded-lg px-2 py-2 min-h-[36px] bg-white focus:outline-none focus:border-slate-900"
+            >
+              <option value="all">すべての顧客ステータス</option>
+              <optgroup label="出品者">
+                {statusOptions.filter((o) => o.source === 'seller').map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="購入者">
+                {statusOptions.filter((o) => o.source === 'buyer').map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </optgroup>
+            </select>
           </div>
 
           {/* Chat List */}
@@ -516,8 +532,8 @@ export default function ChatsPage() {
             ) : (
               <>
                 {chats.map((chat) => {
-                  const statusInfo = statusConfig[chat.status]
                   const isSelected = selectedChatId === chat.id
+                  const label = formatChatLabel(chat)
                   return (
                     <button
                       key={chat.id}
@@ -531,16 +547,18 @@ export default function ChatsPage() {
                           <img src={chat.friendPictureUrl} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
                         ) : (
                           <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                            <span className="text-gray-500 text-sm">{chat.friendName.charAt(0)}</span>
+                            <span className="text-gray-500 text-sm">{(chat.friendName || '?').charAt(0)}</span>
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-gray-900 truncate">{chat.friendName}</p>
+                          <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
                           <p className="text-xs text-gray-400 mt-0.5">{formatDatetime(chat.lastMessageAt)}</p>
                         </div>
-                        <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${statusInfo.className}`}>
-                          {statusInfo.label}
-                        </span>
+                        {chat.customerStatus && (
+                          <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${notionPillClass(chat.customerStatus.color)}`}>
+                            {chat.customerStatus.name}
+                          </span>
+                        )}
                       </div>
                     </button>
                   )
@@ -587,47 +605,54 @@ export default function ChatsPage() {
                   )}
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">
-                      {chatDetail.friendName}
+                      {formatChatLabel(chatDetail)}
                     </p>
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                      <span
-                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusConfig[chatDetail.status].className}`}
-                      >
-                        {statusConfig[chatDetail.status].label}
-                      </span>
                       <StatusPicker
                         friendId={chatDetail.friendId}
                         preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
                         compact
                       />
+                      {chatDetail.notion?.label && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+                          {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {chatDetail.status !== 'unread' && (
-                    <button
-                      onClick={() => handleStatusUpdate('unread')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                    >
-                      未読に戻す
-                    </button>
-                  )}
-                  {chatDetail.status !== 'in_progress' && (
-                    <button
-                      onClick={() => handleStatusUpdate('in_progress')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 rounded-md transition-colors"
-                    >
-                      対応中にする
-                    </button>
-                  )}
-                  {chatDetail.status !== 'resolved' && (
-                    <button
-                      onClick={() => handleStatusUpdate('resolved')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-md transition-colors"
-                    >
-                      解決済にする
-                    </button>
-                  )}
+                  <button
+                    onClick={async () => {
+                      if (!chatDetail) return
+                      setLinkingNotion(true)
+                      setNotionMessage('')
+                      try {
+                        const res = await api.chats.notionLink(chatDetail.friendId)
+                        if (res.success) {
+                          if (res.data.linked) {
+                            setNotionMessage(`✓ 連携完了: ${res.data.link?.realName ?? ''}`)
+                            loadChatDetail(chatDetail.id)
+                            loadChats()
+                          } else {
+                            setNotionMessage(res.data.message ?? '該当レコードが見つかりませんでした')
+                          }
+                        } else {
+                          setNotionMessage(`連携失敗: ${res.error}`)
+                        }
+                      } catch (e) {
+                        setNotionMessage(`連携失敗: ${e instanceof Error ? e.message : 'unknown'}`)
+                      } finally {
+                        setLinkingNotion(false)
+                        setTimeout(() => setNotionMessage(''), 5000)
+                      }
+                    }}
+                    disabled={linkingNotion}
+                    className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-md transition-colors"
+                    title="Notion 出品者DB と連携"
+                  >
+                    {linkingNotion ? '⏳' : '🔗'} Notion連携
+                  </button>
                   <button
                     onClick={() => setShowSchedulePanel(true)}
                     className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors"
@@ -636,6 +661,9 @@ export default function ChatsPage() {
                   </button>
                 </div>
               </div>
+              {notionMessage && (
+                <div className="px-4 py-1 text-xs text-slate-600 bg-slate-50 border-b border-slate-200">{notionMessage}</div>
+              )}
 
               {/* Messages — LINE-style chat bubbles */}
               <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
