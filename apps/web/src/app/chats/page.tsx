@@ -224,6 +224,8 @@ export default function ChatsPage() {
   const [showSchedulePanel, setShowSchedulePanel] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
 
   useEffect(() => {
     try {
@@ -265,6 +267,7 @@ export default function ChatsPage() {
       if (friendRes.status === 'fulfilled' && friendRes.value.success) {
         setAllFriends((friendRes.value.data as unknown as { items: FriendItem[] }).items)
       }
+      setLastRefreshedAt(new Date())
     } catch {
       setError('チャットの読み込みに失敗しました。もう一度お試しください。')
     } finally {
@@ -298,6 +301,17 @@ export default function ChatsPage() {
       setChatDetail(null)
     }
   }, [selectedChatId, loadChatDetail])
+
+  // Auto-scroll the messages container to the latest (bottom) whenever a new
+  // chat is opened or new messages arrive.
+  useEffect(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    // Defer to next paint so layout is settled.
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight
+    })
+  }, [chatDetail?.id, chatDetail?.messages?.length])
 
   const handleSelectChat = (chatId: string) => {
     setSelectedChatId(chatId)
@@ -429,7 +443,31 @@ export default function ChatsPage() {
 
   return (
     <div>
-      <Header title="オペレーターチャット" />
+      <Header
+        title="オペレーターチャット"
+        action={
+          <div className="flex items-center gap-2">
+            {lastRefreshedAt && (
+              <span className="text-[11px] text-gray-400 leading-tight">
+                最終更新<br />
+                {lastRefreshedAt.toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+            <button
+              onClick={() => {
+                loadChats()
+                if (selectedChatId) loadChatDetail(selectedChatId)
+              }}
+              disabled={loading}
+              className="px-3 py-2 min-h-[44px] text-sm font-medium text-gray-700 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              aria-label="チャットを更新"
+              title="チャットを更新"
+            >
+              {loading ? '⏳' : '🔄'} 更新
+            </button>
+          </div>
+        }
+      />
 
       {/* Error */}
       {error && (
@@ -600,7 +638,7 @@ export default function ChatsPage() {
               </div>
 
               {/* Messages — LINE-style chat bubbles */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
+              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
                 {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
                   <div className="text-center py-8">
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>
