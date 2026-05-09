@@ -5,6 +5,7 @@ import { getLineAccounts } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
+import { processScheduledMessages } from './services/scheduled-message-delivery.boxiv.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -46,6 +47,8 @@ import { staffAvailability } from './routes/staff-availability.js';
 import { listingFormLine } from './routes/listing-form-line.js';
 // 顧客ステータス (Notion 同期, BOXIV)
 import { friendStatus } from './routes/friend-status.boxiv.js';
+// 個別チャット送信予約 (BOXIV)
+import { scheduledMessages } from './routes/scheduled-messages.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -139,6 +142,9 @@ app.route('/', listingFormLine);
 // 顧客ステータス (BOXIV)
 app.route('/', friendStatus);
 
+// 個別チャット送信予約 (BOXIV)
+app.route('/', scheduledMessages);
+
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
   const ref = c.req.param('ref');
@@ -220,6 +226,8 @@ async function scheduled(
   }
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
+  // BOXIV: 個別チャット送信予約 (友だちに紐づく line_account を内部で解決)
+  jobs.push(processScheduledMessages(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, LineClient));
 
   await Promise.allSettled(jobs);
 }

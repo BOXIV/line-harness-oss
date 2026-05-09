@@ -635,6 +635,39 @@ export const api = {
         { method: 'POST', body: JSON.stringify(data) },
       ),
   },
+  // 個別チャット送信予約 (BOXIV)
+  scheduledMessages: {
+    list: (friendId: string, status?: 'scheduled' | 'sent' | 'cancelled' | 'failed') => {
+      const q = status ? `?status=${status}` : ''
+      return fetchApi<ApiResponse<Array<{
+        id: string
+        friendId: string
+        scheduledAt: string
+        messageType: 'text' | 'image' | 'flex'
+        content: string
+        status: 'scheduled' | 'sent' | 'cancelled' | 'failed'
+        sentAt: string | null
+        error: string | null
+        createdBy: string | null
+        createdAt: string
+        updatedAt: string
+      }>>>(`/api/friends/${friendId}/scheduled-messages${q}`)
+    },
+    create: (friendId: string, data: { scheduledAt: string; messageType: 'text' | 'image' | 'flex'; content: string }) =>
+      fetchApi<ApiResponse<{
+        id: string
+        friendId: string
+        scheduledAt: string
+        messageType: string
+        content: string
+        status: string
+      }>>(`/api/friends/${friendId}/scheduled-messages`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    cancel: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/scheduled-messages/${id}`, { method: 'DELETE' }),
+  },
   // 顧客ステータス (BOXIV — Notion 出品者DB / 購入者DB の Status 同期)
   friendStatus: {
     listOptions: (params?: { source?: 'seller' | 'buyer'; includeArchived?: boolean }) => {

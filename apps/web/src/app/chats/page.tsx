@@ -7,7 +7,7 @@ import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewComponent from '@/components/flex-preview'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
-import FriendReminderPanel from '@/components/chats/friend-reminder-panel'
+import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
 
 interface Chat {
@@ -268,7 +268,7 @@ export default function ChatsPage() {
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
-  const [showReminderPanel, setShowReminderPanel] = useState(false)
+  const [showSchedulePanel, setShowSchedulePanel] = useState(false)
 
   useEffect(() => {
     try {
@@ -599,10 +599,10 @@ export default function ChatsPage() {
                     </button>
                   )}
                   <button
-                    onClick={() => setShowReminderPanel(true)}
+                    onClick={() => setShowSchedulePanel(true)}
                     className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors"
                   >
-                    ⏰ リマインド
+                    📅 送信予約
                   </button>
                 </div>
               </div>
@@ -773,9 +773,9 @@ export default function ChatsPage() {
       />
 
       {chatDetail && (
-        <FriendReminderPanel
-          isOpen={showReminderPanel}
-          onClose={() => setShowReminderPanel(false)}
+        <ScheduledMessagePanel
+          isOpen={showSchedulePanel}
+          onClose={() => setShowSchedulePanel(false)}
           friendId={chatDetail.friendId}
           friendName={chatDetail.friendName}
         />
