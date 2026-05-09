@@ -5,6 +5,8 @@ import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
+import TemplateEditModal from '@/components/templates/template-edit-modal'
+import type { EditingTemplate } from '@/components/templates/template-edit-modal'
 
 interface Template {
   id: string
@@ -72,6 +74,7 @@ export default function TemplatesPage() {
   })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
+  const [editing, setEditing] = useState<EditingTemplate | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -203,7 +206,7 @@ export default function TemplatesPage() {
       {showCreate && (
         <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <h2 className="text-sm font-semibold text-gray-800 mb-4">新規テンプレートを作成</h2>
-          <div className={`grid gap-6 ${form.messageType === 'flex' ? 'lg:grid-cols-2' : 'max-w-lg'}`}>
+          <div className={`grid gap-6 ${form.messageType === 'flex' ? 'lg:grid-cols-[1fr_auto]' : 'max-w-lg'}`}>
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">テンプレート名 <span className="text-red-500">*</span></label>
@@ -275,7 +278,7 @@ export default function TemplatesPage() {
             {form.messageType === 'flex' && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">プレビュー</label>
-                <FlexPreviewPane json={form.messageContent} />
+                <FlexPreviewPane json={form.messageContent} maxWidth={480} />
               </div>
             )}
           </div>
@@ -353,7 +356,14 @@ export default function TemplatesPage() {
                   </td>
 
                   {/* Actions */}
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => setEditing(template)}
+                      className="mr-2 px-3 py-1 text-xs font-medium text-white rounded-md transition-opacity hover:opacity-90"
+                      style={{ backgroundColor: '#0f172a' }}
+                    >
+                      編集
+                    </button>
                     <button
                       onClick={() => handleDelete(template.id)}
                       className="px-3 py-1 text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
@@ -369,6 +379,13 @@ export default function TemplatesPage() {
         </div>
       )}
       <CcPromptButton prompts={ccPrompts} />
+
+      <TemplateEditModal
+        isOpen={editing !== null}
+        template={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => load()}
+      />
     </div>
   )
 }

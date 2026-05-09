@@ -11,7 +11,7 @@ interface FlexPreviewPaneProps {
  * Flex preview wrapper that surfaces JSON.parse errors explicitly so
  * editors can fix syntax issues. On valid JSON, defers to FlexPreview.
  */
-export default function FlexPreviewPane({ json, maxWidth = 320 }: FlexPreviewPaneProps) {
+export default function FlexPreviewPane({ json, maxWidth = 480 }: FlexPreviewPaneProps) {
   if (!json.trim()) {
     return (
       <div className="text-xs text-gray-400 p-3 bg-gray-50 border border-dashed border-gray-200 rounded-lg">
@@ -37,7 +37,10 @@ export default function FlexPreviewPane({ json, maxWidth = 320 }: FlexPreviewPan
   }
 
   return (
-    <div className="bg-gray-100 rounded-lg p-3 overflow-auto max-h-[60vh]">
+    <div
+      className="bg-gray-100 rounded-lg p-4 overflow-auto max-h-[70vh] flex justify-center"
+      style={{ minHeight: 200 }}
+    >
       <FlexPreview content={json} maxWidth={maxWidth} />
     </div>
   )
