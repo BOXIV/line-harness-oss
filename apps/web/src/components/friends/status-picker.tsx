@@ -45,6 +45,7 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   const load = useCallback(async () => {
@@ -77,14 +78,21 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
-    const onScroll = () => setOpen(false)
+    // Capture phase scroll handler — close on OUTER scrolls but ignore
+    // scrolls inside the dropdown itself so the user can browse options.
+    const onScroll = (e: Event) => {
+      const menu = menuRef.current
+      if (menu && e.target instanceof Node && menu.contains(e.target)) return
+      setOpen(false)
+    }
+    const onResize = () => setOpen(false)
     window.addEventListener('keydown', onKey)
     window.addEventListener('scroll', onScroll, true)
-    window.addEventListener('resize', onScroll)
+    window.addEventListener('resize', onResize)
     return () => {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('scroll', onScroll, true)
-      window.removeEventListener('resize', onScroll)
+      window.removeEventListener('resize', onResize)
     }
   }, [open])
 
@@ -144,7 +152,8 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
         <>
           <div className="fixed inset-0 z-[55]" onClick={() => setOpen(false)} />
           <div
-            className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 max-h-64 overflow-y-auto"
+            ref={menuRef}
+            className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 max-h-80 overflow-y-auto overscroll-contain"
             style={{ top: menuPos.top, left: menuPos.left, minWidth: menuPos.width }}
           >
             {error && <div className="px-3 py-2 text-xs text-red-600">{error}</div>}
