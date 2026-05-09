@@ -5,10 +5,11 @@ import { api, fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
-import FlexPreviewComponent from '@/components/flex-preview'
+import MessageBubble from '@/components/chats/message-bubble'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
+import { detectFriendSource } from '@/lib/friend-source'
 
 interface Chat {
   id: string
@@ -94,14 +95,6 @@ interface FriendItem {
   tags?: { id: string; name: string }[]
 }
 
-function detectSourceFromTags(tags?: { name: string }[]): 'seller' | 'buyer' | null {
-  if (!tags) return null
-  const names = tags.map((t) => t.name)
-  if (names.includes('出品者')) return 'seller'
-  if (names.includes('購入者')) return 'buyer'
-  return null
-}
-
 interface MessageLog {
   id: string
   direction: 'incoming' | 'outgoing'
@@ -155,33 +148,6 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
     setSending(false)
   }
 
-  function renderContent(msg: MessageLog) {
-    if (msg.messageType === 'text') return msg.content
-    if (msg.messageType === 'flex') {
-      try {
-        const parsed = JSON.parse(msg.content)
-        // Extract ALL text from flex (up to 200 chars)
-        const texts: string[] = []
-        const collectText = (obj: Record<string, unknown>) => {
-          if (texts.join(' ').length > 200) return
-          if (obj.type === 'text' && typeof obj.text === 'string') {
-            const t = (obj.text as string).trim()
-            if (t && !t.startsWith('{{')) texts.push(t)
-          }
-          for (const key of ['header', 'body', 'footer']) {
-            if (obj[key]) collectText(obj[key] as Record<string, unknown>)
-          }
-          if (Array.isArray(obj.contents)) {
-            for (const c of obj.contents) collectText(c as Record<string, unknown>)
-          }
-        }
-        collectText(parsed)
-        return texts.slice(0, 4).join('\n') || '[Flex Message]'
-      } catch { return '[Flex Message]' }
-    }
-    return `[${msg.messageType}]`
-  }
-
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-4 border-b border-gray-200 flex items-center gap-3">
@@ -208,20 +174,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         ) : messages.length === 0 ? (
           <p className="text-center text-gray-400 text-sm">メッセージ履歴がありません</p>
         ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[75%] rounded-2xl px-4 py-2 ${
-                msg.direction === 'outgoing'
-                  ? 'bg-green-500 text-white'
-                  : 'bg-gray-100 text-gray-900'
-              }`}>
-                <p className="text-sm whitespace-pre-wrap break-words">{renderContent(msg)}</p>
-                <p className={`text-xs mt-1 ${msg.direction === 'outgoing' ? 'text-green-200' : 'text-gray-400'}`}>
-                  {new Date(msg.createdAt).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              </div>
-            </div>
-          ))
+          messages.map((msg) => <MessageBubble key={msg.id} message={msg} variant="compact" />)
         )}
       </div>
       <div className="px-4 py-3 border-t border-gray-200">
@@ -606,7 +559,7 @@ export default function ChatsPage() {
                       </span>
                       <StatusPicker
                         friendId={chatDetail.friendId}
-                        preferredSource={detectSourceFromTags(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
+                        preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
                         compact
                       />
                     </div>
@@ -653,109 +606,13 @@ export default function ChatsPage() {
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>
                   </div>
                 ) : (
-                  (chatDetail.messages ?? []).map((msg) => {
-                    const isOutgoing = msg.direction === 'outgoing'
-
-                    // メッセージ表示の分岐
-                    let bubbleContent: React.ReactNode
-                    if (msg.messageType === 'flex') {
-                      bubbleContent = (
-                        <div className="max-w-[300px]">
-                          <FlexPreviewComponent content={msg.content} maxWidth={280} />
-                        </div>
-                      )
-                    } else if (msg.messageType === 'image') {
-                      try {
-                        const parsed = JSON.parse(msg.content)
-                        const src = parsed.originalContentUrl || parsed.previewImageUrl || parsed.url
-                        bubbleContent = src ? (
-                          <a href={src} target="_blank" rel="noreferrer">
-                            <img src={src} alt="" className="max-w-[240px] rounded" />
-                          </a>
-                        ) : (
-                          <span>🖼️ [画像]</span>
-                        )
-                      } catch {
-                        bubbleContent = <span>🖼️ [画像]</span>
-                      }
-                    } else if (msg.messageType === 'video') {
-                      try {
-                        const parsed = JSON.parse(msg.content)
-                        const src = parsed.originalContentUrl || parsed.url
-                        bubbleContent = src ? (
-                          <video src={src} controls preload="metadata" className="max-w-[280px] rounded" />
-                        ) : (
-                          <span>🎬 [動画]</span>
-                        )
-                      } catch {
-                        bubbleContent = <span>🎬 [動画]</span>
-                      }
-                    } else if (msg.messageType === 'audio') {
-                      try {
-                        const parsed = JSON.parse(msg.content)
-                        const src = parsed.url
-                        bubbleContent = src ? (
-                          <audio src={src} controls className="w-[240px]" />
-                        ) : (
-                          <span>🎵 [音声]</span>
-                        )
-                      } catch {
-                        bubbleContent = <span>🎵 [音声]</span>
-                      }
-                    } else if (msg.messageType === 'file') {
-                      try {
-                        const parsed = JSON.parse(msg.content)
-                        const url = parsed.url
-                        const filename = parsed.filename || parsed.fileName || 'file'
-                        bubbleContent = url ? (
-                          <a href={url} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-2 py-1.5 rounded bg-white/20 hover:bg-white/30 transition-colors">
-                            <span className="text-xl">📄</span>
-                            <span className="text-xs underline truncate max-w-[200px]">{filename}</span>
-                          </a>
-                        ) : (
-                          <span>📄 [ファイル]</span>
-                        )
-                      } catch {
-                        bubbleContent = <span>📄 [ファイル]</span>
-                      }
-                    } else {
-                      bubbleContent = <span>{msg.content}</span>
-                    }
-
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex items-end gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'}`}
-                      >
-                        {/* 相手のアイコン（incoming のみ） */}
-                        {!isOutgoing && (
-                          chatDetail.friendPictureUrl ? (
-                            <img src={chatDetail.friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0 mb-1" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-gray-300 flex-shrink-0 mb-1" />
-                          )
-                        )}
-
-                        <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
-                          {/* メッセージバブル */}
-                          <div
-                            className={`max-w-[320px] px-3 py-2 text-sm break-words whitespace-pre-wrap ${
-                              isOutgoing
-                                ? 'rounded-tl-2xl rounded-tr-md rounded-bl-2xl rounded-br-2xl text-white'
-                                : 'rounded-tl-md rounded-tr-2xl rounded-bl-2xl rounded-br-2xl bg-white text-gray-900'
-                            }`}
-                            style={isOutgoing ? { backgroundColor: '#0f172a' } : undefined}
-                          >
-                            {bubbleContent}
-                          </div>
-                          {/* 時刻 */}
-                          <span className="text-xs text-white/50 mt-0.5 px-1">
-                            {new Date(msg.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  })
+                  (chatDetail.messages ?? []).map((msg) => (
+                    <MessageBubble
+                      key={msg.id}
+                      message={msg}
+                      friendPictureUrl={chatDetail.friendPictureUrl}
+                    />
+                  ))
                 )}
               </div>
 

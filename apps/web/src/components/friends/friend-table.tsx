@@ -6,13 +6,7 @@ import type { FriendWithTags } from '@/lib/api'
 import { api } from '@/lib/api'
 import TagBadge from './tag-badge'
 import StatusPicker from './status-picker'
-
-function detectFriendSource(friend: FriendWithTags): 'seller' | 'buyer' | null {
-  const tagNames = friend.tags.map((t) => t.name)
-  if (tagNames.includes('出品者')) return 'seller'
-  if (tagNames.includes('購入者')) return 'buyer'
-  return null
-}
+import { detectFriendSource } from '@/lib/friend-source'
 
 interface FriendTableProps {
   friends: FriendWithTags[]
@@ -192,7 +186,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <StatusPicker
                       friendId={friend.id}
-                      preferredSource={detectFriendSource(friend)}
+                      preferredSource={detectFriendSource(friend.tags)}
                       compact
                     />
                   </td>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import { notionPillClass } from '@/lib/notion-color'
 
 interface StatusOption {
   id: string
@@ -18,23 +19,6 @@ interface StatusPickerProps {
   /** Compact pill (table row) vs. expanded button (chat header). */
   compact?: boolean
   onChanged?: () => void
-}
-
-const colorClass: Record<string, string> = {
-  default: 'bg-gray-100 text-gray-700',
-  gray: 'bg-gray-100 text-gray-700',
-  brown: 'bg-amber-100 text-amber-800',
-  orange: 'bg-orange-100 text-orange-800',
-  yellow: 'bg-yellow-100 text-yellow-800',
-  green: 'bg-green-100 text-green-700',
-  blue: 'bg-blue-100 text-blue-700',
-  purple: 'bg-purple-100 text-purple-700',
-  pink: 'bg-pink-100 text-pink-700',
-  red: 'bg-red-100 text-red-700',
-}
-
-function pillClassFor(color: string | null | undefined) {
-  return colorClass[color ?? 'default'] || colorClass.default
 }
 
 export default function StatusPicker({ friendId, preferredSource, compact, onChanged }: StatusPickerProps) {
@@ -127,7 +111,7 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
     }
   }
 
-  const pillCls = `inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${pillClassFor(current?.color)}`
+  const pillCls = `inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${notionPillClass(current?.color)}`
 
   return (
     <div className="inline-block">
@@ -179,7 +163,7 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
                 disabled={saving || o.id === current?.id}
                 className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
               >
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${pillClassFor(o.color)}`}>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${notionPillClass(o.color)}`}>
                   {o.name}
                 </span>
                 {o.id === current?.id && <span className="text-gray-400">現在</span>}
