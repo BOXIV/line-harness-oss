@@ -6,6 +6,9 @@ import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewComponent from '@/components/flex-preview'
+import TemplatePickerModal from '@/components/chats/template-picker-modal'
+import FriendReminderPanel from '@/components/chats/friend-reminder-panel'
+import StatusPicker from '@/components/friends/status-picker'
 
 interface Chat {
   id: string
@@ -88,6 +91,15 @@ interface FriendItem {
   displayName: string
   pictureUrl: string | null
   isFollowing: boolean
+  tags?: { id: string; name: string }[]
+}
+
+function detectSourceFromTags(tags?: { name: string }[]): 'seller' | 'buyer' | null {
+  if (!tags) return null
+  const names = tags.map((t) => t.name)
+  if (names.includes('出品者')) return 'seller'
+  if (names.includes('購入者')) return 'buyer'
+  return null
 }
 
 interface MessageLog {
@@ -255,6 +267,8 @@ export default function ChatsPage() {
   const [loadingSeconds, setLoadingSeconds] = useState(5)
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  const [showReminderPanel, setShowReminderPanel] = useState(false)
 
   useEffect(() => {
     try {
@@ -366,6 +380,25 @@ export default function ChatsPage() {
       loadChats()
     } catch {
       setError('メッセージの送信に失敗しました。')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const handleSendTemplate = async (payload: { content: string; messageType: string }) => {
+    if (!selectedChatId) return
+    const trimmed = payload.content.trim()
+    if (!trimmed) return
+    setSending(true)
+    try {
+      await api.chats.send(selectedChatId, {
+        content: trimmed,
+        messageType: payload.messageType,
+      })
+      loadChatDetail(selectedChatId)
+      loadChats()
+    } catch {
+      setError('テンプレートの送信に失敗しました。')
     } finally {
       setSending(false)
     }
@@ -526,11 +559,18 @@ export default function ChatsPage() {
                     <p className="text-sm font-medium text-gray-900 truncate">
                       {chatDetail.friendName}
                     </p>
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${statusConfig[chatDetail.status].className}`}
-                    >
-                      {statusConfig[chatDetail.status].label}
-                    </span>
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusConfig[chatDetail.status].className}`}
+                      >
+                        {statusConfig[chatDetail.status].label}
+                      </span>
+                      <StatusPicker
+                        friendId={chatDetail.friendId}
+                        preferredSource={detectSourceFromTags(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
+                        compact
+                      />
+                    </div>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -558,6 +598,12 @@ export default function ChatsPage() {
                       解決済にする
                     </button>
                   )}
+                  <button
+                    onClick={() => setShowReminderPanel(true)}
+                    className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors"
+                  >
+                    ⏰ リマインド
+                  </button>
                 </div>
               </div>
 
@@ -673,6 +719,16 @@ export default function ChatsPage() {
                   </select>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTemplatePicker(true)}
+                    disabled={sending}
+                    className="px-3 py-2 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    aria-label="テンプレートから挿入"
+                    title="テンプレートから挿入"
+                  >
+                    📋
+                  </button>
                   <input
                     type="text"
                     value={messageContent}
@@ -709,6 +765,21 @@ export default function ChatsPage() {
         </div>
       </div>
       <CcPromptButton prompts={ccPrompts} />
+
+      <TemplatePickerModal
+        isOpen={showTemplatePicker}
+        onClose={() => setShowTemplatePicker(false)}
+        onSubmit={handleSendTemplate}
+      />
+
+      {chatDetail && (
+        <FriendReminderPanel
+          isOpen={showReminderPanel}
+          onClose={() => setShowReminderPanel(false)}
+          friendId={chatDetail.friendId}
+          friendName={chatDetail.friendName}
+        />
+      )}
     </div>
   )
 }

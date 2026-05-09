@@ -44,6 +44,8 @@ import { bookingRequests } from './routes/booking-requests.js';
 import { staffAvailability } from './routes/staff-availability.js';
 // 出品フォーム LINE 連携 (BOXIV)
 import { listingFormLine } from './routes/listing-form-line.js';
+// 顧客ステータス (Notion 同期, BOXIV)
+import { friendStatus } from './routes/friend-status.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -69,9 +71,14 @@ export type Env = {
     NOTION_PROP_VEHICLE?: string;
     NOTION_PROP_PHONE?: string;
     NOTION_PROP_ADDRESS?: string;
-    // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用
-    SLACK_BOT_TOKEN?: string;
+    // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用 (claude-sellentry bot)
+    SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;
+    // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
+    NOTION_SELLER_DB_ID?: string;
+    NOTION_BUYER_DB_ID?: string;
+    NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
+    NOTION_BUYER_STATUS_PROP?: string;
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
@@ -128,6 +135,9 @@ app.route('/', staffAvailability);
 
 // 出品フォーム LINE 連携 (BOXIV)
 app.route('/', listingFormLine);
+
+// 顧客ステータス (BOXIV)
+app.route('/', friendStatus);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {

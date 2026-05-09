@@ -5,6 +5,14 @@ import type { Tag } from '@line-crm/shared'
 import type { FriendWithTags } from '@/lib/api'
 import { api } from '@/lib/api'
 import TagBadge from './tag-badge'
+import StatusPicker from './status-picker'
+
+function detectFriendSource(friend: FriendWithTags): 'seller' | 'buyer' | null {
+  const tagNames = friend.tags.map((t) => t.name)
+  if (tagNames.includes('出品者')) return 'seller'
+  if (tagNames.includes('購入者')) return 'buyer'
+  return null
+}
 
 interface FriendTableProps {
   friends: FriendWithTags[]
@@ -115,7 +123,10 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
               アイコン / 表示名
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              ステータス
+              フォロー
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              顧客ステータス
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               タグ / 流入
@@ -177,6 +188,15 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                     )}
                   </td>
 
+                  {/* Customer status (Notion-synced) */}
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <StatusPicker
+                      friendId={friend.id}
+                      preferredSource={detectFriendSource(friend)}
+                      compact
+                    />
+                  </td>
+
                   {/* Tags + Ref */}
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-1">
@@ -212,7 +232,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                 {/* Expanded detail row */}
                 {isExpanded && (
                   <tr key={`${friend.id}-detail`} className="bg-gray-50">
-                    <td colSpan={5} className="px-6 py-4">
+                    <td colSpan={6} className="px-6 py-4">
                       <div className="space-y-3">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">

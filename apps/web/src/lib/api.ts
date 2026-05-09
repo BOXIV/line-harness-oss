@@ -395,6 +395,36 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/reminders/${reminderId}/steps/${stepId}`, {
         method: 'DELETE',
       }),
+    enrollFriend: (reminderId: string, friendId: string, data: { targetDate: string }) =>
+      fetchApi<ApiResponse<{ id: string; friendId: string; reminderId: string; targetDate: string; status: string }>>(
+        `/api/reminders/${reminderId}/enroll/${friendId}`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    listFriendReminders: (friendId: string) =>
+      fetchApi<ApiResponse<Array<{
+        friendReminderId: string
+        reminderId: string
+        reminderName: string
+        reminderIsActive: boolean
+        targetDate: string
+        status: string
+        totalSteps: number
+        deliveredSteps: number
+      }>>>(`/api/friends/${friendId}/reminders?expand=steps`),
+    cancelFriendReminder: (friendReminderId: string) =>
+      fetchApi<ApiResponse<null>>(`/api/friend-reminders/${friendReminderId}`, { method: 'DELETE' }),
+    listReminderFriends: (reminderId: string, status?: 'active' | 'completed' | 'cancelled') => {
+      const q = status ? `?status=${status}` : ''
+      return fetchApi<ApiResponse<Array<{
+        friendReminderId: string
+        friendId: string
+        friendDisplayName: string | null
+        targetDate: string
+        status: string
+        totalSteps: number
+        deliveredSteps: number
+      }>>>(`/api/reminders/${reminderId}/friends${q}`)
+    },
   },
   scoring: {
     rules: () =>
@@ -603,6 +633,56 @@ export const api = {
       fetchApi<ApiResponse<{ id: string; token: string; url: string; area: string; customerName: string | null; prefecture: string; friendId: string }>>(
         '/api/booking-invites',
         { method: 'POST', body: JSON.stringify(data) },
+      ),
+  },
+  // 顧客ステータス (BOXIV — Notion 出品者DB / 購入者DB の Status 同期)
+  friendStatus: {
+    listOptions: (params?: { source?: 'seller' | 'buyer'; includeArchived?: boolean }) => {
+      const q = new URLSearchParams()
+      if (params?.source) q.set('source', params.source)
+      if (params?.includeArchived) q.set('includeArchived', '1')
+      const qs = q.toString()
+      return fetchApi<ApiResponse<Array<{
+        id: string
+        source: 'seller' | 'buyer'
+        notionId: string
+        name: string
+        color: string | null
+        sortOrder: number
+        isArchived: boolean
+        syncedAt: string
+      }>>>('/api/status-options' + (qs ? '?' + qs : ''))
+    },
+    sync: (sources?: Array<'seller' | 'buyer'>) =>
+      fetchApi<ApiResponse<Array<{
+        source: 'seller' | 'buyer'
+        success: boolean
+        inserted?: number
+        updated?: number
+        archived?: number
+        total?: number
+        error?: string
+      }>>>('/api/status-options/sync', {
+        method: 'POST',
+        body: JSON.stringify(sources ? { sources } : {}),
+      }),
+    getFriend: (friendId: string) =>
+      fetchApi<ApiResponse<{
+        friendId: string
+        option: {
+          id: string
+          source: 'seller' | 'buyer'
+          notionId: string
+          name: string
+          color: string | null
+        }
+        assignedAt: string
+        assignedBy: string | null
+      } | null>>(`/api/friends/${friendId}/status`),
+    setFriend: (friendId: string, statusOptionId: string | null) =>
+      fetchApi<ApiResponse<{ friendId: string; statusOptionId: string } | null>>(
+        `/api/friends/${friendId}/status`,
+        { method: 'PUT', body: JSON.stringify({ statusOptionId }) },
       ),
   },
 }

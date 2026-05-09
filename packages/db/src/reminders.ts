@@ -171,3 +171,103 @@ export async function completeReminderIfDone(db: D1Database, friendReminderId: s
       .bind(jstNow(), friendReminderId).run();
   }
 }
+
+/** 友だちのリマインダ一覧 (拡張): reminder 名と未配信ステップ数を含む */
+export async function getActiveFriendRemindersByFriend(
+  db: D1Database,
+  friendId: string,
+): Promise<Array<{
+  friendReminderId: string;
+  reminderId: string;
+  reminderName: string;
+  reminderIsActive: boolean;
+  targetDate: string;
+  status: string;
+  totalSteps: number;
+  deliveredSteps: number;
+}>> {
+  const rows = await db
+    .prepare(
+      `SELECT fr.id AS friend_reminder_id, fr.reminder_id, fr.target_date, fr.status,
+              r.name AS reminder_name, r.is_active AS reminder_is_active,
+              (SELECT COUNT(*) FROM reminder_steps rs WHERE rs.reminder_id = fr.reminder_id) AS total_steps,
+              (SELECT COUNT(*) FROM friend_reminder_deliveries d WHERE d.friend_reminder_id = fr.id) AS delivered_steps
+       FROM friend_reminders fr
+       INNER JOIN reminders r ON r.id = fr.reminder_id
+       WHERE fr.friend_id = ?
+       ORDER BY fr.target_date ASC`,
+    )
+    .bind(friendId)
+    .all<{
+      friend_reminder_id: string;
+      reminder_id: string;
+      reminder_name: string;
+      reminder_is_active: number;
+      target_date: string;
+      status: string;
+      total_steps: number;
+      delivered_steps: number;
+    }>();
+  return rows.results.map((r) => ({
+    friendReminderId: r.friend_reminder_id,
+    reminderId: r.reminder_id,
+    reminderName: r.reminder_name,
+    reminderIsActive: Boolean(r.reminder_is_active),
+    targetDate: r.target_date,
+    status: r.status,
+    totalSteps: r.total_steps,
+    deliveredSteps: r.delivered_steps,
+  }));
+}
+
+/** 指定 reminder に登録中の友だち一覧 */
+export async function getFriendsByReminderId(
+  db: D1Database,
+  reminderId: string,
+  status?: 'active' | 'completed' | 'cancelled',
+): Promise<Array<{
+  friendReminderId: string;
+  friendId: string;
+  friendDisplayName: string | null;
+  targetDate: string;
+  status: string;
+  totalSteps: number;
+  deliveredSteps: number;
+}>> {
+  const conditions: string[] = ['fr.reminder_id = ?'];
+  const binds: unknown[] = [reminderId];
+  if (status) {
+    conditions.push('fr.status = ?');
+    binds.push(status);
+  }
+  const rows = await db
+    .prepare(
+      `SELECT fr.id AS friend_reminder_id, fr.friend_id, fr.target_date, fr.status,
+              f.display_name,
+              (SELECT COUNT(*) FROM reminder_steps rs WHERE rs.reminder_id = fr.reminder_id) AS total_steps,
+              (SELECT COUNT(*) FROM friend_reminder_deliveries d WHERE d.friend_reminder_id = fr.id) AS delivered_steps
+       FROM friend_reminders fr
+       LEFT JOIN friends f ON f.id = fr.friend_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY fr.target_date ASC`,
+    )
+    .bind(...binds)
+    .all<{
+      friend_reminder_id: string;
+      friend_id: string;
+      display_name: string | null;
+      target_date: string;
+      status: string;
+      total_steps: number;
+      delivered_steps: number;
+    }>();
+  return rows.results.map((r) => ({
+    friendReminderId: r.friend_reminder_id,
+    friendId: r.friend_id,
+    friendDisplayName: r.display_name,
+    targetDate: r.target_date,
+    status: r.status,
+    totalSteps: r.total_steps,
+    deliveredSteps: r.delivered_steps,
+  }));
+}
