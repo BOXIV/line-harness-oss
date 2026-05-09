@@ -128,7 +128,7 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit }: Templ
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
 
-      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+      <div className={`relative bg-white rounded-xl shadow-2xl w-full max-h-[85vh] flex flex-col ${selected?.messageType === 'flex' ? 'max-w-5xl' : 'max-w-2xl'}`}>
         <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-900">
             {selected ? `${selected.name} を編集して送信` : 'テンプレートを選択'}
@@ -257,8 +257,8 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit }: Templ
                     className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-slate-900 resize-y font-mono"
                     placeholder="Flex JSON を編集"
                   />
-                  <div>
-                    <FlexPreviewPane json={editedContent} />
+                  <div className="flex justify-center">
+                    <FlexPreviewPane json={editedContent} maxWidth={420} />
                   </div>
                 </div>
               ) : canEdit ? (

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 
 interface StatusOption {
@@ -44,6 +44,8 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -75,9 +77,32 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
+    const onScroll = () => setOpen(false)
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onScroll)
+    }
   }, [open])
+
+  const toggleOpen = () => {
+    if (!open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect()
+      const menuWidth = Math.max(220, rect.width)
+      const margin = 8
+      const viewportWidth = window.innerWidth
+      // align menu's right edge with button's right edge if it would overflow
+      let left = rect.left
+      if (left + menuWidth + margin > viewportWidth) {
+        left = Math.max(margin, rect.right - menuWidth)
+      }
+      setMenuPos({ top: rect.bottom + 4, left, width: menuWidth })
+    }
+    setOpen((v) => !v)
+  }
 
   const handleSet = async (optionId: string | null) => {
     setSaving(true)
@@ -97,10 +122,11 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
   const pillCls = `inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${pillClassFor(current?.color)}`
 
   return (
-    <div className="relative inline-block">
+    <div className="inline-block">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggleOpen}
         disabled={loading}
         className={
           compact
@@ -114,10 +140,13 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
         </svg>
       </button>
 
-      {open && (
+      {open && menuPos && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute z-50 mt-1 right-0 bg-white rounded-lg shadow-lg border border-gray-200 min-w-[200px] max-h-64 overflow-y-auto">
+          <div className="fixed inset-0 z-[55]" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-[60] bg-white rounded-lg shadow-lg border border-gray-200 max-h-64 overflow-y-auto"
+            style={{ top: menuPos.top, left: menuPos.left, minWidth: menuPos.width }}
+          >
             {error && <div className="px-3 py-2 text-xs text-red-600">{error}</div>}
             {!preferredSource && (
               <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-100">
