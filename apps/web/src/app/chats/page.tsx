@@ -192,19 +192,24 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         )}
       </div>
       <div className="px-4 py-3 border-t border-gray-200">
-        <div className="flex gap-2">
-          <input
-            type="text"
+        <div className="flex items-stretch gap-2">
+          <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-            placeholder="メッセージを入力..."
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            placeholder="メッセージを入力... (Shift+Enter で送信)"
+            rows={2}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none"
           />
           <button
             onClick={handleSend}
             disabled={!message.trim() || sending}
-            className="px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50"
+            className="px-4 rounded-lg text-white text-sm font-medium disabled:opacity-50"
             style={{ backgroundColor: '#0f172a' }}
           >
             {sending ? '...' : '送信'}
@@ -447,8 +452,8 @@ export default function ChatsPage() {
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
     }
@@ -725,7 +730,7 @@ export default function ChatsPage() {
                     ))}
                   </select>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-stretch gap-2">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -740,7 +745,7 @@ export default function ChatsPage() {
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={sending || uploading}
-                    className="px-3 py-2 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    className="px-3 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
                     aria-label="ファイルを添付"
                     title="画像・動画・PDF を添付"
                   >
@@ -750,14 +755,13 @@ export default function ChatsPage() {
                     type="button"
                     onClick={() => setShowTemplatePicker(true)}
                     disabled={sending}
-                    className="px-3 py-2 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    className="px-3 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
                     aria-label="テンプレートから挿入"
                     title="テンプレートから挿入"
                   >
                     📋
                   </button>
-                  <input
-                    type="text"
+                  <textarea
                     value={messageContent}
                     onChange={(e) => {
                       const value = e.target.value
@@ -774,13 +778,14 @@ export default function ChatsPage() {
                     }}
                     onBlur={() => setIsMessageInputFocused(false)}
                     onKeyDown={handleKeyDown}
-                    placeholder="メッセージを入力..."
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                    placeholder="メッセージを入力... (Shift+Enter で送信)"
+                    rows={2}
+                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
                   />
                   <button
                     onClick={handleSendMessage}
                     disabled={sending || !messageContent.trim()}
-                    className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ backgroundColor: '#0f172a' }}
                   >
                     {sending ? '送信中...' : '送信'}
