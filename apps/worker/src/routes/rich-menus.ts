@@ -60,6 +60,36 @@ richMenus.post('/api/rich-menus/:id/default', async (c) => {
   }
 });
 
+// GET /api/friends/:friendId/rich-menu — get rich menu currently assigned to a friend
+richMenus.get('/api/friends/:friendId/rich-menu', async (c) => {
+  try {
+    const friendId = c.req.param('friendId');
+    const db = c.env.DB;
+
+    const friend = await getFriendById(db, friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    try {
+      const result = await lineClient.getRichMenuIdOfUser(friend.line_user_id);
+      return c.json({ success: true, data: { richMenuId: result.richMenuId } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // LINE API は個別アサインが無いユーザーには 404 を返す → null で正常レスポンス
+      if (message.includes('404')) {
+        return c.json({ success: true, data: null });
+      }
+      throw err;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('GET /api/friends/:friendId/rich-menu error:', message);
+    return c.json({ success: false, error: `Failed to get rich menu of friend: ${message}` }, 500);
+  }
+});
+
 // POST /api/friends/:friendId/rich-menu — link rich menu to a specific friend
 richMenus.post('/api/friends/:friendId/rich-menu', async (c) => {
   try {
