@@ -168,7 +168,7 @@ export default function RichMenusPage() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <Link
-                            href={`/rich-menus/${encodeURIComponent(menu.richMenuId)}`}
+                            href={`/rich-menus/detail?id=${encodeURIComponent(menu.richMenuId)}`}
                             className="text-sm font-semibold text-gray-900 hover:text-slate-700 truncate"
                           >
                             {menu.name}

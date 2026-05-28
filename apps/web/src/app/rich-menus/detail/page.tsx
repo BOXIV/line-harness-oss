@@ -1,15 +1,12 @@
 'use client'
 
-import { useEffect, useState, use } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { api } from '@/lib/api'
 import type { RichMenu } from '@/lib/rich-menu-types'
 import Header from '@/components/layout/header'
 import RichMenuPreview from '@/components/rich-menus/rich-menu-preview'
-
-interface Props {
-  params: Promise<{ id: string }>
-}
 
 function actionDisplay(action: RichMenu['areas'][number]['action']): string {
   switch (action.type) {
@@ -21,13 +18,19 @@ function actionDisplay(action: RichMenu['areas'][number]['action']): string {
   }
 }
 
-export default function RichMenuDetailPage({ params }: Props) {
-  const { id } = use(params)
+function RichMenuDetailInner() {
+  const searchParams = useSearchParams()
+  const id = searchParams.get('id') ?? ''
   const [menu, setMenu] = useState<RichMenu | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (!id) {
+      setError('id クエリパラメータが指定されていません')
+      setLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       try {
@@ -149,5 +152,13 @@ export default function RichMenuDetailPage({ params }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function RichMenuDetailPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-gray-500">読み込み中...</div>}>
+      <RichMenuDetailInner />
+    </Suspense>
   )
 }
