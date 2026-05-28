@@ -733,6 +733,36 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/rich-menu`, {
         method: 'DELETE',
       }),
+    // ステータス連動マッピング (BOXIV カスタム)
+    autoSwitch: {
+      list: () =>
+        fetchApi<ApiResponse<Array<{
+          id: string
+          statusOptionId: string
+          statusOptionName?: string
+          statusOptionSource?: 'seller' | 'buyer'
+          richMenuId: string
+          richMenuName: string | null
+          lineAccountId: string | null
+          isActive: boolean
+          createdAt: string
+          updatedAt: string
+        }>>>('/api/rich-menus/auto-switch'),
+      upsert: (
+        statusOptionId: string,
+        data: { richMenuId: string; richMenuName?: string | null; lineAccountId?: string | null; isActive?: boolean },
+      ) =>
+        fetchApi<ApiResponse<unknown>>(`/api/rich-menus/auto-switch/${encodeURIComponent(statusOptionId)}`, {
+          method: 'PUT',
+          body: JSON.stringify(data),
+        }),
+      delete: (statusOptionId: string, lineAccountId?: string | null) => {
+        const q = lineAccountId ? `?lineAccountId=${encodeURIComponent(lineAccountId)}` : ''
+        return fetchApi<ApiResponse<null>>(`/api/rich-menus/auto-switch/${encodeURIComponent(statusOptionId)}${q}`, {
+          method: 'DELETE',
+        })
+      },
+    },
   },
   // 顧客ステータス (BOXIV — Notion 出品者DB / 購入者DB の Status 同期)
   friendStatus: {

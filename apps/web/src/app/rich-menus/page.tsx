@@ -96,13 +96,21 @@ export default function RichMenusPage() {
         title="リッチメニュー"
         description="LINE 公式アカウントのリッチメニューを管理します。デフォルト設定・削除が可能です。"
         action={
-          <Link
-            href="/rich-menus/new"
-            className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
-            style={{ backgroundColor: '#0f172a' }}
-          >
-            + 新規作成
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/rich-menus/auto-switch"
+              className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              自動切替設定
+            </Link>
+            <Link
+              href="/rich-menus/new"
+              className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+              style={{ backgroundColor: '#0f172a' }}
+            >
+              + 新規作成
+            </Link>
+          </div>
         }
       />
 

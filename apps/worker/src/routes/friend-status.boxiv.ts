@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 import { syncStatusOptionsFromNotion, type StatusSource } from '../services/notion-status.boxiv.js';
+import { applyRichMenuForStatus } from '../services/rich-menu-auto-switch.boxiv.js';
 
 const friendStatus = new Hono<Env>();
 
@@ -152,7 +153,24 @@ friendStatus.put('/api/friends/:id/status', async (c) => {
       )
       .bind(friendId, body.statusOptionId, staffId)
       .run();
-    return c.json({ success: true, data: { friendId, statusOptionId: body.statusOptionId } });
+
+    // BOXIV: ステータスに紐付くリッチメニューがあれば LINE 側で自動切替。
+    // 失敗してもステータス更新自体は成功扱いとする (warning のみ data に同梱)。
+    const autoSwitch = await applyRichMenuForStatus(
+      c.env.DB,
+      c.env.LINE_CHANNEL_ACCESS_TOKEN,
+      friendId,
+      body.statusOptionId,
+    );
+
+    return c.json({
+      success: true,
+      data: {
+        friendId,
+        statusOptionId: body.statusOptionId,
+        richMenuAutoSwitch: autoSwitch,
+      },
+    });
   } catch (err) {
     console.error('PUT /api/friends/:id/status error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
