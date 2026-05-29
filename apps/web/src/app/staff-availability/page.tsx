@@ -3,8 +3,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
-import AreaTabs from '@/components/staff-availability/area-tabs'
-import { AREA_LABELS, AREA_IDS, type AreaId } from '@/lib/area-meta'
+
+const AREA_LABELS: Record<string, string> = {
+  shutoken: '首都圏',
+  chubu: '中部',
+  kinki: '近畿',
+  kanto_suburban: '関東郊外',
+  kyushu: '九州',
+}
 
 const SLOT_OPTIONS = [
   { startTime: '10:00', endTime: '12:00' },
@@ -225,9 +231,17 @@ export default function StaffAvailabilityPage() {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-4">
         <div className="px-5 py-4 border-b border-gray-200 flex items-center gap-3 flex-wrap">
           {!isStaffRole && (
-            <div className="flex items-start gap-2 w-full">
-              <label className="text-xs text-gray-500 mt-2 shrink-0">エリア</label>
-              <AreaTabs value={ganttArea} onChange={(v) => setGanttArea(v as AreaId)} />
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500">エリア</label>
+              <select
+                value={ganttArea}
+                onChange={(e) => setGanttArea(e.target.value)}
+                className="text-sm border border-gray-300 rounded-lg px-3 py-1.5"
+              >
+                {Object.entries(AREA_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -426,13 +440,18 @@ export default function StaffAvailabilityPage() {
             {isStaffRole && (
               <div className="text-xs text-gray-500">自分のシフトのみ表示中</div>
             )}
-            <div className="flex items-start gap-2 w-full">
-              <label className="text-xs text-gray-500 mt-2 shrink-0">エリア</label>
-              <AreaTabs
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500">エリア</label>
+              <select
                 value={listAreaFilter}
-                onChange={(v) => setListAreaFilter(v)}
-                includeAll
-              />
+                onChange={(e) => setListAreaFilter(e.target.value)}
+                className="text-sm border border-gray-300 rounded-lg px-3 py-1.5"
+              >
+                <option value="all">すべてのエリア</option>
+                {Object.entries(AREA_LABELS).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-500">状態</label>
