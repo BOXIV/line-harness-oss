@@ -1,11 +1,15 @@
 'use client'
 
+import { useEffect, useState } from 'react'
+import { api } from '@/lib/api'
 import type { RichMenu, RichMenuAction } from '@/lib/rich-menu-types'
 
 interface Props {
   menu: Pick<RichMenu, 'size' | 'areas' | 'name'>
-  /** PNG 画像 URL（任意。PR1 時点では取得 API が無いので未指定で areas のみ描画） */
+  /** PNG 画像 URL（明示的に渡したい場合）。未指定 + richMenuId 指定なら自動取得 */
   imageUrl?: string | null
+  /** richMenuId を渡すと LINE から画像を取得して blob URL として表示する (BOXIV) */
+  richMenuId?: string
   /** プレビューの最大幅 (px)。SVG は aspect-ratio で縦も追随 */
   maxWidth?: number
   className?: string
@@ -26,8 +30,33 @@ function actionSummary(action: RichMenuAction): string {
   }
 }
 
-export default function RichMenuPreview({ menu, imageUrl, maxWidth = 480, className }: Props) {
+export default function RichMenuPreview({ menu, imageUrl, richMenuId, maxWidth = 480, className }: Props) {
   const { width, height } = menu.size
+  const [fetchedUrl, setFetchedUrl] = useState<string | null>(null)
+
+  // If imageUrl is not provided and we have a richMenuId, fetch image from LINE
+  // via the worker proxy (requires Bearer auth, so we convert to blob URL).
+  useEffect(() => {
+    if (imageUrl || !richMenuId) return
+    let cancelled = false
+    let createdUrl: string | null = null
+    ;(async () => {
+      try {
+        const blob = await api.richMenus.fetchImage(richMenuId)
+        if (cancelled || !blob) return
+        createdUrl = URL.createObjectURL(blob)
+        setFetchedUrl(createdUrl)
+      } catch {
+        // ignore — preview just falls back to the placeholder
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
+  }, [imageUrl, richMenuId])
+
+  const resolvedImageUrl = imageUrl ?? fetchedUrl
 
   return (
     <div
@@ -35,10 +64,10 @@ export default function RichMenuPreview({ menu, imageUrl, maxWidth = 480, classN
       style={{ maxWidth, width: '100%' }}
     >
       <div className="relative" style={{ aspectRatio: `${width} / ${height}` }}>
-        {imageUrl ? (
+        {resolvedImageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={imageUrl}
+            src={resolvedImageUrl}
             alt={menu.name}
             className="absolute inset-0 w-full h-full object-cover"
           />

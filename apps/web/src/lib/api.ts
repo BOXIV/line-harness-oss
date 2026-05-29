@@ -722,6 +722,16 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ image, contentType }),
       }),
+    // BOXIV: Fetch the raw rich menu image (LINE-hosted) as a Blob for preview.
+    // Returns null on 404 (image not yet uploaded).
+    fetchImage: async (id: string): Promise<Blob | null> => {
+      const res = await fetch(`${API_URL}/api/rich-menus/${id}/image-content`, {
+        headers: { Authorization: `Bearer ${getApiKey()}` },
+      })
+      if (res.status === 404) return null
+      if (!res.ok) throw new Error(`fetchImage failed: ${res.status}`)
+      return res.blob()
+    },
     getAssignedTo: (friendId: string) =>
       fetchApi<ApiResponse<{ richMenuId: string } | null>>(`/api/friends/${friendId}/rich-menu`),
     assignToFriend: (friendId: string, richMenuId: string) =>

@@ -106,7 +106,7 @@ function RichMenuDetailInner() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <RichMenuPreview menu={menu} maxWidth={800} />
+          <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={800} />
         </div>
 
         <div className="space-y-4">

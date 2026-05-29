@@ -160,7 +160,7 @@ export default function RichMenusPage() {
                     className="shrink-0 w-full sm:w-40 cursor-pointer hover:opacity-90 transition-opacity"
                     aria-label="プレビューを拡大"
                   >
-                    <RichMenuPreview menu={menu} maxWidth={160} />
+                    <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={160} />
                   </button>
 
                   <div className="flex-1 min-w-0">
@@ -215,7 +215,7 @@ export default function RichMenusPage() {
 
                 {isExpanded && (
                   <div className="bg-gray-50 border-t border-gray-200 p-4 flex justify-center">
-                    <RichMenuPreview menu={menu} maxWidth={640} />
+                    <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={640} />
                   </div>
                 )}
               </div>

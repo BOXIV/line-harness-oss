@@ -5,6 +5,41 @@ import type { Env } from '../index.js';
 
 const richMenus = new Hono<Env>();
 
+// BOXIV: GET /api/rich-menus/:id/image-content — download the image LINE has stored for this rich menu (debug)
+richMenus.get('/api/rich-menus/:id/image-content', async (c) => {
+  try {
+    const richMenuId = c.req.param('id');
+    const res = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, {
+      headers: { Authorization: `Bearer ${c.env.LINE_CHANNEL_ACCESS_TOKEN}` },
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      return c.json({ success: false, error: t }, res.status as 500);
+    }
+    const buf = await res.arrayBuffer();
+    return new Response(buf, { headers: { 'Content-Type': res.headers.get('content-type') ?? 'image/png' } });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json({ success: false, error: `Failed to fetch rich menu image: ${message}` }, 500);
+  }
+});
+
+// BOXIV: GET /api/rich-menus/default — return the LINE platform's currently configured default rich menu ID
+richMenus.get('/api/rich-menus/default', async (c) => {
+  try {
+    const res = await fetch('https://api.line.me/v2/bot/user/all/richmenu', {
+      headers: { Authorization: `Bearer ${c.env.LINE_CHANNEL_ACCESS_TOKEN}` },
+    });
+    if (res.status === 404) return c.json({ success: true, data: { richMenuId: null } });
+    const json = await res.json();
+    if (!res.ok) return c.json({ success: false, error: json }, res.status as 500);
+    return c.json({ success: true, data: json });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json({ success: false, error: `Failed to fetch default rich menu: ${message}` }, 500);
+  }
+});
+
 // GET /api/rich-menus — list all rich menus from LINE API
 richMenus.get('/api/rich-menus', async (c) => {
   try {
