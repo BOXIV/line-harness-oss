@@ -9,6 +9,7 @@ import MessageBubble from '@/components/chats/message-bubble'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
+import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import { detectFriendSource } from '@/lib/friend-source'
 import { notionPillClass } from '@/lib/notion-color'
 
@@ -618,6 +619,7 @@ export default function ChatsPage() {
                         preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
                         compact
                       />
+                      <RichMenuPicker friendId={chatDetail.friendId} />
                       {chatDetail.notion?.label && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
                           {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}

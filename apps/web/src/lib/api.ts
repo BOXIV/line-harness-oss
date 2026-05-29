@@ -722,6 +722,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ image, contentType }),
       }),
+    getAssignedTo: (friendId: string) =>
+      fetchApi<ApiResponse<{ richMenuId: string } | null>>(`/api/friends/${friendId}/rich-menu`),
     assignToFriend: (friendId: string, richMenuId: string) =>
       fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/rich-menu`, {
         method: 'POST',
