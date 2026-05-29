@@ -447,6 +447,19 @@ async function sendBookingStatusNotification(
       contents: flex,
     },
   ]);
+  // BOXIV: messages_log に記録して個別チャット画面に表示
+  try {
+    const { jstNow } = await import('@line-crm/db');
+    await env.DB
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'push', ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), jstNow())
+      .run();
+  } catch (err) {
+    console.error('booking-requests log to messages_log failed (non-blocking):', err);
+  }
 }
 
 export { bookingRequests };
