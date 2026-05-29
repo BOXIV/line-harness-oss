@@ -84,15 +84,21 @@ function RichMenuDetailInner() {
     <div>
       <Header
         title={menu.name}
-        description="LINE 仕様上、エリアと画像は作成後の変更ができません。変更したい場合は『これを元に新規作成』を使ってください。"
+        description="LINE 仕様上リッチメニューは作成後に直接編集できません。『編集』は内容を引き継いだ新しいメニューを作成して差し替えます（richMenuId は変わります）。"
         action={
           <div className="flex items-center gap-2">
             <Link
-              href={`/rich-menus/new?from=${encodeURIComponent(menu.richMenuId)}`}
+              href={`/rich-menus/new?edit=${encodeURIComponent(menu.richMenuId)}`}
               className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
               style={{ backgroundColor: '#0f172a' }}
             >
-              これを元に新規作成
+              編集
+            </Link>
+            <Link
+              href={`/rich-menus/new?from=${encodeURIComponent(menu.richMenuId)}`}
+              className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              これを元に複製
             </Link>
             <Link
               href="/rich-menus"
@@ -106,7 +112,7 @@ function RichMenuDetailInner() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <RichMenuPreview menu={menu} maxWidth={800} />
+          <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={800} />
         </div>
 
         <div className="space-y-4">

@@ -722,6 +722,19 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ image, contentType }),
       }),
+    // BOXIV: LINE がホストしている画像本体を Blob で取得（プレビュー / 編集キャンバス背景用）。
+    // 画像未登録なら 404 → null。Bearer 認証が必要なので fetchApi ではなく素の fetch を使う。
+    fetchImage: async (id: string): Promise<Blob | null> => {
+      const res = await fetch(`${API_URL}/api/rich-menus/${id}/image-content`, {
+        headers: { Authorization: `Bearer ${getApiKey()}` },
+      })
+      if (res.status === 404) return null
+      if (!res.ok) throw new Error(`fetchImage failed: ${res.status}`)
+      return res.blob()
+    },
+    // BOXIV: LINE Platform 上で現在アカウント既定になっている richMenuId（無ければ null）。
+    getDefault: () =>
+      fetchApi<ApiResponse<{ richMenuId: string | null }>>('/api/rich-menus/default'),
     getAssignedTo: (friendId: string) =>
       fetchApi<ApiResponse<{ richMenuId: string } | null>>(`/api/friends/${friendId}/rich-menu`),
     assignToFriend: (friendId: string, richMenuId: string) =>
@@ -761,6 +774,24 @@ export const api = {
         return fetchApi<ApiResponse<null>>(`/api/rich-menus/auto-switch/${encodeURIComponent(statusOptionId)}${q}`, {
           method: 'DELETE',
         })
+      },
+      // BOXIV: リッチメニュー差し替え時に、旧 ID を指す全マッピングを新 ID へ付け替える。
+      // fetchApi は非2xxで本文を捨てて throw するため、Worker のエラー文言を拾えるよう生 fetch で本文を読む。
+      rebind: async (data: {
+        fromRichMenuId: string
+        toRichMenuId: string
+        toRichMenuName?: string | null
+      }): Promise<ApiResponse<{ rebound: number }>> => {
+        const res = await fetch(`${API_URL}/api/rich-menus/auto-switch/rebind`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getApiKey()}` },
+          body: JSON.stringify(data),
+        })
+        return res
+          .json()
+          .catch(() => ({ success: false, error: `API error: ${res.status}` })) as Promise<
+          ApiResponse<{ rebound: number }>
+        >
       },
     },
   },

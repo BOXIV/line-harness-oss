@@ -125,6 +125,41 @@ richMenuStatus.put('/api/rich-menus/auto-switch/:statusOptionId', async (c) => {
   }
 });
 
+// POST /api/rich-menus/auto-switch/rebind — リッチメニュー差し替え時に、旧 richMenuId を
+// 指す全マッピングを新 richMenuId へ付け替える。LINE のリッチメニューは作成後に編集できず
+// 「複製→差し替え」運用になるため、ステータス連動が新メニューに引き継がれるようにする。
+richMenuStatus.post('/api/rich-menus/auto-switch/rebind', async (c) => {
+  try {
+    const body = await c.req.json<{
+      fromRichMenuId: string;
+      toRichMenuId: string;
+      toRichMenuName?: string | null;
+    }>();
+
+    if (!body.fromRichMenuId || !body.toRichMenuId) {
+      return c.json({ success: false, error: 'fromRichMenuId and toRichMenuId are required' }, 400);
+    }
+
+    const result = await c.env.DB
+      .prepare(
+        `UPDATE rich_menu_status_mappings
+            SET rich_menu_id   = ?,
+                rich_menu_name = COALESCE(?, rich_menu_name),
+                updated_at     = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
+          WHERE rich_menu_id = ?`,
+      )
+      .bind(body.toRichMenuId, body.toRichMenuName ?? null, body.fromRichMenuId)
+      .run();
+
+    const rebound = result.meta?.changes ?? 0;
+    return c.json({ success: true, data: { rebound } });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('POST /api/rich-menus/auto-switch/rebind error:', message);
+    return c.json({ success: false, error: `Failed to rebind mappings: ${message}` }, 500);
+  }
+});
+
 // DELETE /api/rich-menus/auto-switch/:statusOptionId — remove mapping
 richMenuStatus.delete('/api/rich-menus/auto-switch/:statusOptionId', async (c) => {
   try {
