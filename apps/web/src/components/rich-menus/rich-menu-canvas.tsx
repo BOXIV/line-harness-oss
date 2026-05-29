@@ -1,8 +1,15 @@
 'use client'
 
+// SVG オーバーレイによるリッチメニュー編集キャンバス.
+//
+// viewBox は LINE Platform の実画像 px と同じ座標系を使うため、座標変換は
+// 表示サイズと viewBox 幅の比率だけで済み、追加のマッピングは不要.
+// 空き領域のドラッグで矩形を新規作成、矩形クリックで選択して 8 ハンドルで
+// リサイズ、矩形内側のドラッグで移動、Delete キーで削除する.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import type { RichMenuArea, RichMenuBounds, RichMenuSize } from '@/lib/rich-menu-types'
+import type { RichMenuArea, RichMenuBounds, RichMenuSize } from '@line-crm/shared'
 import { clampBoundsToSize, normalizeBounds } from '@/lib/rich-menu-validate'
 
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'

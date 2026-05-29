@@ -1,15 +1,12 @@
 'use client'
 
-import { useEffect, useState, use } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { api } from '@/lib/api'
-import type { RichMenu } from '@/lib/rich-menu-types'
+import type { RichMenu } from '@line-crm/shared'
 import Header from '@/components/layout/header'
 import RichMenuPreview from '@/components/rich-menus/rich-menu-preview'
-
-interface Props {
-  params: Promise<{ id: string }>
-}
 
 function actionDisplay(action: RichMenu['areas'][number]['action']): string {
   switch (action.type) {
@@ -21,13 +18,19 @@ function actionDisplay(action: RichMenu['areas'][number]['action']): string {
   }
 }
 
-export default function RichMenuDetailPage({ params }: Props) {
-  const { id } = use(params)
+function RichMenuDetailInner() {
+  const searchParams = useSearchParams()
+  const id = searchParams.get('id') ?? ''
   const [menu, setMenu] = useState<RichMenu | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (!id) {
+      setError('id クエリパラメータが指定されていません')
+      setLoading(false)
+      return
+    }
     let cancelled = false
     ;(async () => {
       try {
@@ -81,15 +84,21 @@ export default function RichMenuDetailPage({ params }: Props) {
     <div>
       <Header
         title={menu.name}
-        description="LINE 仕様上、エリアと画像は作成後の変更ができません。変更したい場合は『これを元に新規作成』を使ってください。"
+        description="LINE 仕様上リッチメニューは作成後に直接編集できません。『編集』は内容を引き継いだ新しいメニューを作成して差し替えます（richMenuId は変わります）。"
         action={
           <div className="flex items-center gap-2">
             <Link
-              href={`/rich-menus/new?from=${encodeURIComponent(menu.richMenuId)}`}
+              href={`/rich-menus/new?edit=${encodeURIComponent(menu.richMenuId)}`}
               className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
               style={{ backgroundColor: '#0f172a' }}
             >
-              これを元に新規作成
+              編集
+            </Link>
+            <Link
+              href={`/rich-menus/new?from=${encodeURIComponent(menu.richMenuId)}`}
+              className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              これを元に複製
             </Link>
             <Link
               href="/rich-menus"
@@ -103,7 +112,7 @@ export default function RichMenuDetailPage({ params }: Props) {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <RichMenuPreview menu={menu} maxWidth={800} />
+          <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={800} />
         </div>
 
         <div className="space-y-4">
@@ -149,5 +158,13 @@ export default function RichMenuDetailPage({ params }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function RichMenuDetailPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-gray-500">読み込み中...</div>}>
+      <RichMenuDetailInner />
+    </Suspense>
   )
 }

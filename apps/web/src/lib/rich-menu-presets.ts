@@ -1,4 +1,10 @@
-import type { RichMenuArea, RichMenuSize } from './rich-menu-types'
+// リッチメニュー編集の出発点となるプリセット定義.
+//
+// BOXIV Lightning 運用 (出品者向け / 購入者向け) に最適化したレイアウト.
+// テンプレートピッカーから挿入すると、size / areas / 既定の name + chatBarText が
+// ドラフトに乗る. ユーザーはそこから矩形やアクションを編集して仕上げる.
+
+import type { RichMenuArea, RichMenuSize } from '@line-crm/shared'
 
 export interface RichMenuPreset {
   id: string

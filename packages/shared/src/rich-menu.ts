@@ -1,5 +1,8 @@
-// LINE Messaging API のリッチメニュー型。
-// packages/line-sdk は worker 専用依存のため、web で扱う最小サブセットを定義。
+// LINE Messaging API のリッチメニュー型 (web/worker 共用).
+//
+// LINE 仕様: https://developers.line.biz/en/reference/messaging-api/#rich-menu-object
+// このパッケージは依存ゼロの「型と定数」専用なので、I/O や fetch は呼ばない。
+// 画像サイズ・座標は LINE Platform 上の実画像ピクセル値を保持する。
 
 export interface RichMenuSize {
   width: number
@@ -25,7 +28,7 @@ export interface RichMenuArea {
   action: RichMenuAction
 }
 
-/** GET /api/rich-menus が返す要素 */
+/** GET /api/rich-menus の要素 (LINE Platform 上のメニュー1件). */
 export interface RichMenu {
   richMenuId: string
   size: RichMenuSize
@@ -35,7 +38,7 @@ export interface RichMenu {
   areas: RichMenuArea[]
 }
 
-/** POST /api/rich-menus に渡すペイロード（richMenuId は LINE 側で発番） */
+/** POST /api/rich-menus への入力 (richMenuId は LINE 側で発番). */
 export interface CreateRichMenuInput {
   size: RichMenuSize
   selected: boolean
@@ -44,8 +47,8 @@ export interface CreateRichMenuInput {
   areas: RichMenuArea[]
 }
 
-/** LINE 仕様の許可サイズ */
-export const RICH_MENU_SIZES: Array<RichMenuSize & { label: string }> = [
+/** LINE 仕様の許可サイズ. UI で選択肢を作る用. */
+export const RICH_MENU_SIZES: ReadonlyArray<RichMenuSize & { label: string }> = [
   { width: 2500, height: 1686, label: '2500 × 1686 (大)' },
   { width: 2500, height: 843, label: '2500 × 843 (大・コンパクト)' },
   { width: 1200, height: 810, label: '1200 × 810 (中)' },

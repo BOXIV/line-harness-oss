@@ -1,7 +1,7 @@
 'use client'
 
-import { RICH_MENU_SIZES } from '@/lib/rich-menu-types'
-import type { RichMenuSize } from '@/lib/rich-menu-types'
+import { RICH_MENU_SIZES } from '@line-crm/shared'
+import type { RichMenuSize } from '@line-crm/shared'
 
 interface Props {
   value: RichMenuSize

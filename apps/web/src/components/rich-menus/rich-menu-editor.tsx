@@ -1,7 +1,14 @@
 'use client'
 
+// リッチメニュー編集オーケストレータ.
+//
+// メタ情報フォーム / サイズ選択 / テンプレート挿入 / 画像アップロード /
+// キャンバス / エリア タブ / アクション編集パネル / バリデーション結果 を
+// 1 つに組み合わせる. リッチメニュー本体の persistence は親側 (/rich-menus/new
+// or /rich-menus/detail) が責任を持つ — このエディタは controlled component.
+
 import { useMemo, useState } from 'react'
-import type { RichMenuArea, RichMenuSize } from '@/lib/rich-menu-types'
+import type { RichMenuArea, RichMenuSize } from '@line-crm/shared'
 import type { RichMenuPreset } from '@/lib/rich-menu-presets'
 import { buildHighlightSet, type RichMenuDraft, type ValidationResult } from '@/lib/rich-menu-validate'
 import RichMenuCanvas from './rich-menu-canvas'
@@ -173,7 +180,7 @@ export default function RichMenuEditor({ value, onChange, imageUrl, onImageSelec
           空き領域をドラッグして矩形を作成 / 矩形クリックで選択 / ハンドルでリサイズ / 内側ドラッグで移動 / Delete キーで削除
         </p>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_160px_320px] gap-4">
           <RichMenuCanvas
             size={value.size}
             imageUrl={imageUrl}
@@ -184,13 +191,59 @@ export default function RichMenuEditor({ value, onChange, imageUrl, onImageSelec
             onChange={setAreas}
             onSelect={setSelectedIndex}
           />
+
+          {/* 縦タブ: エリア選択 */}
+          <div className="lg:max-h-[600px] lg:overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-1.5 space-y-1">
+            <div className="px-2 py-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+              エリア ({value.areas.length})
+            </div>
+            {value.areas.length === 0 ? (
+              <p className="px-2 py-3 text-[11px] text-gray-400 leading-relaxed">
+                Canvas を空き領域からドラッグするか、テンプレートを適用してください。
+              </p>
+            ) : (
+              value.areas.map((area, i) => {
+                const err = highlightSet.has(i)
+                const active = i === selectedIndex
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setSelectedIndex(i)}
+                    aria-selected={active}
+                    className={`w-full text-left px-2.5 py-2 rounded text-xs transition-colors border ${
+                      active
+                        ? 'bg-slate-900 text-white border-slate-900'
+                        : err
+                        ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                        : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="font-medium flex items-center gap-1">
+                      <span>エリア {i + 1}</span>
+                      {err && (
+                        <span aria-label="エラー" title="エラーあり" className={active ? 'text-red-300' : 'text-red-500'}>
+                          ⚠
+                        </span>
+                      )}
+                    </div>
+                    <div className={`opacity-75 truncate mt-0.5 ${active ? 'text-gray-200' : ''}`}>
+                      {area.action.label || area.action.type}
+                    </div>
+                  </button>
+                )
+              })
+            )}
+          </div>
+
+          {/* 詳細: 選択中エリアのフォーム */}
           <div className="lg:max-h-[600px] lg:overflow-y-auto">
             {selectedIndex == null ? (
               <div className="bg-gray-50 rounded-lg border border-dashed border-gray-300 p-4 text-xs text-gray-500">
-                エリアを選択すると、ここでアクションを編集できます。
+                左のタブからエリアを選択すると、ここでアクションを編集できます。
                 {value.areas.length === 0 && (
                   <div className="mt-3 text-gray-400">
-                    エリア未登録です。Canvas を空き領域からドラッグするか、テンプレートを適用してください。
+                    まずはエリアを 1 つ作成してください。
                   </div>
                 )}
               </div>
@@ -207,32 +260,6 @@ export default function RichMenuEditor({ value, onChange, imageUrl, onImageSelec
             )}
           </div>
         </div>
-
-        {/* エリア一覧（ジャンプ用） */}
-        {value.areas.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-100">
-            {value.areas.map((area, i) => {
-              const err = highlightSet.has(i)
-              const active = i === selectedIndex
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setSelectedIndex(i)}
-                  className={`px-2 py-1 text-xs rounded transition-colors ${
-                    active
-                      ? 'bg-slate-900 text-white'
-                      : err
-                      ? 'bg-red-50 text-red-700 hover:bg-red-100'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {i + 1}. {area.action.label || area.action.type}
-                </button>
-              )
-            })}
-          </div>
-        )}
       </div>
 
       {/* バリデーション結果 */}

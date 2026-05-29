@@ -1,10 +1,16 @@
+// リッチメニュー編集ドラフトのバリデーション.
+//
+// クライアント側で「LINE Platform にそのまま送って成功する」状態かを判定する.
+// 重なり禁止・最小サイズ警告・action 各フィールドの長さや URL 形式など、
+// LINE API のドキュメント記載の制約をなるべく事前に検出する.
+
 import type {
   RichMenu,
   RichMenuArea,
   RichMenuBounds,
   RichMenuAction,
   RichMenuSize,
-} from './rich-menu-types'
+} from '@line-crm/shared'
 
 export type RichMenuDraft = Pick<RichMenu, 'name' | 'chatBarText' | 'selected' | 'size' | 'areas'>
 
