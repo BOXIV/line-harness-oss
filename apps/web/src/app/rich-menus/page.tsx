@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { api } from '@/lib/api'
 import type { RichMenu } from '@/lib/rich-menu-types'
 import Header from '@/components/layout/header'
@@ -95,14 +96,13 @@ export default function RichMenusPage() {
         title="リッチメニュー"
         description="LINE 公式アカウントのリッチメニューを管理します。デフォルト設定・削除が可能です。"
         action={
-          <button
-            disabled
-            title="新規作成は次バージョンで対応予定（エディタ実装中）"
-            className="px-4 py-2 text-sm font-medium text-white rounded-lg opacity-50 cursor-not-allowed"
+          <Link
+            href="/rich-menus/new"
+            className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
             style={{ backgroundColor: '#0f172a' }}
           >
-            + 新規作成（準備中）
-          </button>
+            + 新規作成
+          </Link>
         }
       />
 
@@ -127,10 +127,14 @@ export default function RichMenusPage() {
         </div>
       ) : menus.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-          <p className="text-gray-500 mb-2">リッチメニューが登録されていません。</p>
-          <p className="text-xs text-gray-400">
-            現状は curl / MCP / LINE Developer Console で作成してください。GUI 作成は次バージョンで対応予定です。
-          </p>
+          <p className="text-gray-500 mb-3">リッチメニューが登録されていません。</p>
+          <Link
+            href="/rich-menus/new"
+            className="inline-block px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+            style={{ backgroundColor: '#0f172a' }}
+          >
+            + 最初のリッチメニューを作成
+          </Link>
         </div>
       ) : (
         <div className="space-y-4">
@@ -155,7 +159,12 @@ export default function RichMenusPage() {
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-sm font-semibold text-gray-900 truncate">{menu.name}</h3>
+                          <Link
+                            href={`/rich-menus/${encodeURIComponent(menu.richMenuId)}`}
+                            className="text-sm font-semibold text-gray-900 hover:text-slate-700 truncate"
+                          >
+                            {menu.name}
+                          </Link>
                           {menu.selected && (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
                               デフォルト
