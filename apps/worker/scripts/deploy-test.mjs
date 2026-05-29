@@ -8,13 +8,13 @@
  *   test Worker (line-harness-test) we patch the generated config in-place
  *   and call `wrangler deploy --config <patched>`.
  *
- * Test resources (separate from production):
- *   - Worker name : line-harness-test
- *   - D1 database : line-harness-test (id 9160ddee-2272-4cd0-81b4-35e60a3ee675)
- *   - R2 bucket   : line-harness-images-test
+ * Test resources (BOXIV; separate from production line-connect):
+ *   - Worker name : line-connect-test
+ *   - D1 database : line-connect-test (id 37bf4b77-536b-418a-ab48-45c8950524c1)
+ *   - R2 bucket   : line-connect-images-test
  *
  * Secrets are managed separately via:
- *   wrangler secret bulk <file.json> --name line-harness-test
+ *   wrangler secret bulk <file.json> --name line-connect-test
  */
 import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
@@ -27,16 +27,16 @@ const generated = resolve(workerDir, 'dist/line_harness/wrangler.json');
 const patched = resolve(workerDir, 'dist/line_harness/wrangler.test.json');
 
 const TEST_CONFIG = {
-  name: 'line-harness-test',
-  topLevelName: 'line-harness-test',
+  name: 'line-connect-test',
+  topLevelName: 'line-connect-test',
   d1_databases: [{
     binding: 'DB',
-    database_name: 'line-harness-test',
-    database_id: '9160ddee-2272-4cd0-81b4-35e60a3ee675',
+    database_name: 'line-connect-test',
+    database_id: '37bf4b77-536b-418a-ab48-45c8950524c1',
   }],
   r2_buckets: [{
     binding: 'IMAGES',
-    bucket_name: 'line-harness-images-test',
+    bucket_name: 'line-connect-images-test',
   }],
 };
 

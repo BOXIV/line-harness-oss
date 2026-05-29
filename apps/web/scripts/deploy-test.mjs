@@ -2,9 +2,9 @@
 /**
  * Deploy the admin web app to the "test" Cloudflare Pages project.
  *
- * Architecture mirror of production:
- *   - Worker (API)        : line-harness-test.toshiki-o.workers.dev
- *   - Pages (Admin UI)    : line-harness-admin-test.pages.dev
+ * Architecture mirror of production (BOXIV):
+ *   - Worker (API)        : line-connect-test.boxiv.workers.dev
+ *   - Pages (Admin UI)    : line-connect-admin-test.pages.dev
  *
  * What this does:
  *   1. Builds Next.js with NEXT_PUBLIC_API_URL pointed at the test Worker
@@ -24,8 +24,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webDir = resolve(__dirname, '..');
 
-const TEST_API_URL = 'https://line-harness-test.toshiki-o.workers.dev';
-const PAGES_PROJECT = 'line-harness-admin-test';
+const TEST_API_URL = 'https://line-connect-test.boxiv.workers.dev';
+const PAGES_PROJECT = 'line-connect-admin-test';
 
 console.log('▶ next build (NEXT_PUBLIC_API_URL=' + TEST_API_URL + ')');
 execSync('pnpm exec next build', {
@@ -53,7 +53,9 @@ if (createRes.status !== 0) {
 }
 
 console.log('▶ wrangler pages deploy');
+// --commit-message を明示しないと、wrangler が git の直近コミットメッセージを推定して読み、
+// 非 ASCII（日本語/絵文字）混在時に Cloudflare API が "Invalid commit message ... UTF-8" を返すことがある。
 execSync(
-  `pnpm exec wrangler pages deploy out --project-name ${PAGES_PROJECT} --branch main --commit-dirty=true`,
+  `pnpm exec wrangler pages deploy out --project-name ${PAGES_PROJECT} --branch main --commit-dirty=true --commit-message "boxiv test deploy"`,
   { cwd: webDir, stdio: 'inherit' }
 );
