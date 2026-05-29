@@ -217,6 +217,13 @@ function matchConditions(
     if (!text || !text.includes(conditions.keyword as string)) return false;
   }
 
+  // BOXIV patch: postback_data チェック (postback_received イベント用)
+  // Rich menu / Flex button のタップで送られる data ペイロードと一致させる
+  if (conditions.postback_data !== undefined && payload.eventData) {
+    const data = payload.eventData.data as string | undefined;
+    if (data !== (conditions.postback_data as string)) return false;
+  }
+
   return true;
 }
 
@@ -262,9 +269,11 @@ async function executeAction(
         msg = { type: 'text', text: action.params.content };
       }
       // Prefer replyMessage (free) when replyToken is available
+      let deliveryType: 'reply' | 'push' = 'push';
       if (payload.replyToken) {
         try {
           await lineClient.replyMessage(payload.replyToken, [msg]);
+          deliveryType = 'reply';
           // replyToken is single-use, clear it so subsequent actions fall back to push
           payload.replyToken = undefined;
         } catch (err: unknown) {
@@ -274,12 +283,27 @@ async function executeAction(
           const isTokenError = errMsg.includes('400') || errMsg.includes('Invalid reply token');
           if (isTokenError) {
             await lineClient.pushMessage(friend.line_user_id, [msg]);
+            deliveryType = 'push';
           } else {
             throw err;
           }
         }
       } else {
         await lineClient.pushMessage(friend.line_user_id, [msg]);
+        deliveryType = 'push';
+      }
+      // BOXIV: automation 送信を messages_log にも残し、個別チャット画面に反映する
+      try {
+        const logId = crypto.randomUUID();
+        await db
+          .prepare(
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+             VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?)`,
+          )
+          .bind(logId, friendId, msgType, action.params.content, deliveryType, jstNow())
+          .run();
+      } catch (logErr) {
+        console.error('event-bus send_message: failed to log to messages_log', logErr);
       }
       break;
     }
