@@ -189,6 +189,30 @@ async function handleEvent(
     return;
   }
 
+  // BOXIV patch: postback event handling (rich menu tap / template button tap)
+  // Fires `postback_received` event on the bus so automations can match on
+  // `postback_data` (added in matchConditions in event-bus.ts).
+  if (event.type === 'postback') {
+    const userId =
+      event.source.type === 'user' ? event.source.userId : undefined;
+    if (!userId) return;
+    const friend = await getFriendByLineUserId(db, userId);
+    if (!friend) return;
+    const data = event.postback?.data ?? '';
+    await fireEvent(
+      db,
+      'postback_received',
+      {
+        friendId: friend.id,
+        eventData: { data, params: event.postback?.params ?? null },
+        replyToken: event.replyToken,
+      },
+      lineAccessToken,
+      lineAccountId,
+    );
+    return;
+  }
+
   if (event.type === 'message' && event.message.type === 'text') {
     const textMessage = event.message as TextEventMessage;
     const userId =
