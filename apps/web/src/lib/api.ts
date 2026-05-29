@@ -26,6 +26,7 @@ import type {
 } from '@line-crm/shared'
 
 import type { Broadcast } from '@line-crm/shared'
+import type { RichMenu, CreateRichMenuInput } from './rich-menu-types'
 
 /** Broadcast type from API (now camelCase after worker serialization) */
 export type ApiBroadcast = Broadcast
@@ -702,6 +703,34 @@ export const api = {
       }),
     cancel: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/scheduled-messages/${id}`, { method: 'DELETE' }),
+  },
+  // リッチメニュー (LINE Platform 管理 — D1 永続化なし)
+  richMenus: {
+    list: () =>
+      fetchApi<ApiResponse<RichMenu[]>>('/api/rich-menus'),
+    create: (data: CreateRichMenuInput) =>
+      fetchApi<ApiResponse<{ richMenuId: string }>>('/api/rich-menus', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/rich-menus/${id}`, { method: 'DELETE' }),
+    setDefault: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/rich-menus/${id}/default`, { method: 'POST' }),
+    uploadImage: (id: string, image: string, contentType: 'image/png' | 'image/jpeg' = 'image/png') =>
+      fetchApi<ApiResponse<null>>(`/api/rich-menus/${id}/image`, {
+        method: 'POST',
+        body: JSON.stringify({ image, contentType }),
+      }),
+    assignToFriend: (friendId: string, richMenuId: string) =>
+      fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/rich-menu`, {
+        method: 'POST',
+        body: JSON.stringify({ richMenuId }),
+      }),
+    unassignFromFriend: (friendId: string) =>
+      fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/rich-menu`, {
+        method: 'DELETE',
+      }),
   },
   // 顧客ステータス (BOXIV — Notion 出品者DB / 購入者DB の Status 同期)
   friendStatus: {
