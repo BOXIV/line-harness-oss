@@ -26,7 +26,7 @@ import type {
 } from '@line-crm/shared'
 
 import type { Broadcast } from '@line-crm/shared'
-import type { RichMenu, CreateRichMenuInput } from './rich-menu-types'
+import type { RichMenu, CreateRichMenuInput } from '@line-crm/shared'
 
 /** Broadcast type from API (now camelCase after worker serialization) */
 export type ApiBroadcast = Broadcast

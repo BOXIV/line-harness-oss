@@ -1,6 +1,6 @@
 'use client'
 
-import type { RichMenu, RichMenuAction } from '@/lib/rich-menu-types'
+import type { RichMenu, RichMenuAction } from '@line-crm/shared'
 
 interface Props {
   menu: Pick<RichMenu, 'size' | 'areas' | 'name'>

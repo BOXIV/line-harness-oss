@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/api'
-import type { RichMenu } from '@/lib/rich-menu-types'
+import type { RichMenu } from '@line-crm/shared'
 
 interface Props {
   friendId: string

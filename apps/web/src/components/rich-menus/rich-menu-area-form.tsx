@@ -1,6 +1,6 @@
 'use client'
 
-import type { RichMenuArea, RichMenuAction } from '@/lib/rich-menu-types'
+import type { RichMenuArea, RichMenuAction } from '@line-crm/shared'
 import { defaultActionFor } from '@/lib/rich-menu-validate'
 
 interface Props {

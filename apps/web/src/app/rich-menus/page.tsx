@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/api'
-import type { RichMenu } from '@/lib/rich-menu-types'
+import type { RichMenu } from '@line-crm/shared'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import RichMenuPreview from '@/components/rich-menus/rich-menu-preview'

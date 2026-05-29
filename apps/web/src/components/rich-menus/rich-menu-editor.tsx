@@ -1,7 +1,14 @@
 'use client'
 
+// リッチメニュー編集オーケストレータ.
+//
+// メタ情報フォーム / サイズ選択 / テンプレート挿入 / 画像アップロード /
+// キャンバス / エリア タブ / アクション編集パネル / バリデーション結果 を
+// 1 つに組み合わせる. リッチメニュー本体の persistence は親側 (/rich-menus/new
+// or /rich-menus/detail) が責任を持つ — このエディタは controlled component.
+
 import { useMemo, useState } from 'react'
-import type { RichMenuArea, RichMenuSize } from '@/lib/rich-menu-types'
+import type { RichMenuArea, RichMenuSize } from '@line-crm/shared'
 import type { RichMenuPreset } from '@/lib/rich-menu-presets'
 import { buildHighlightSet, type RichMenuDraft, type ValidationResult } from '@/lib/rich-menu-validate'
 import RichMenuCanvas from './rich-menu-canvas'

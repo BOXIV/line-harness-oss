@@ -4,7 +4,7 @@ import { useEffect, useState, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { api } from '@/lib/api'
-import type { RichMenu } from '@/lib/rich-menu-types'
+import type { RichMenu } from '@line-crm/shared'
 import Header from '@/components/layout/header'
 import RichMenuPreview from '@/components/rich-menus/rich-menu-preview'
 
