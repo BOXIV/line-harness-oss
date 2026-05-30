@@ -178,7 +178,9 @@ listingFormLine.get('/listing-form/start', async (c) => {
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
   loginUrl.searchParams.set('scope', 'profile'); // profile のみ（id_token 未使用なので openid は付けない）
-  loginUrl.searchParams.set('bot_prompt', 'normal');
+  // aggressive: ログインのたびに「友だち追加」画面を必ず表示。未追加/ブロック中の人にも再追加（=ブロック解除）を促す。
+  // ※ LINE 仕様上、自動追加・自動ブロック解除は不可。ユーザーが「追加」をタップして初めて成立する。
+  loginUrl.searchParams.set('bot_prompt', 'aggressive');
   loginUrl.searchParams.set('state', state);
 
   return c.redirect(loginUrl.toString());
@@ -296,13 +298,16 @@ async function postSlackLinkNotification(
     console.warn('listing-form callback: SELLENTRY_SLACK_BOT_TOKEN / SLACK_LISTING_LINK_CHANNEL_ID not configured — skipping');
     return;
   }
-  const text = '出品フォーム LINE 連携完了';
-  const fields: string[] = [
-    `• Form ID: \`${codeField(ctx.form_id)}\``,
-    `• LINE userId: \`${codeField(profile.userId)}\``,
-    `• 表示名: ${slackEscape(profile.displayName)}`,
+  // 注: ここは「LINEログイン完了」だけ（出品フォームとの突合は後段の突合ボットが実施）。
+  const title = 'LINEログイン完了';
+  // 各値はコードボックス（`…`）で囲って視認性を上げる。表示名も同様に囲う。
+  const lines = [
+    `:white_check_mark: *${title}*`,
+    `Form ID: \`${codeField(ctx.form_id)}\``,
+    `LINE userId: \`${codeField(profile.userId)}\``,
+    `表示名: \`${codeField(profile.displayName)}\``,
   ];
-  if (ctx.display_name) fields.push(`• フォーム入力名: ${slackEscape(ctx.display_name)}`);
+  if (ctx.display_name) lines.push(`フォーム入力名: \`${codeField(ctx.display_name)}\``);
 
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
@@ -310,12 +315,17 @@ async function postSlackLinkNotification(
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
     },
+    // 小さく見やすく: トップレベル text は付けない（「LINEログイン完了」の二重表示を防ぐ）。
+    // 中身はカラーサイドバー付きアタッチメント1本。text/fallback を突合ボットが Form ID / LINE userId でパースする。
     body: JSON.stringify({
       channel: env.SLACK_LISTING_LINK_CHANNEL_ID,
-      text,
-      blocks: [
-        { type: 'header', text: { type: 'plain_text', text: `:link: ${text}` } },
-        { type: 'section', text: { type: 'mrkdwn', text: fields.join('\n') } },
+      attachments: [
+        {
+          color: '#06C755',
+          fallback: `${title} Form ID: \`${codeField(ctx.form_id)}\` LINE userId: \`${codeField(profile.userId)}\``,
+          text: lines.join('\n'),
+          mrkdwn_in: ['text'],
+        },
       ],
     }),
   });
