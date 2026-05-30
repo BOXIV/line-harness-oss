@@ -62,12 +62,19 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
 }
 
 function b64urlEncode(s: string): string {
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  // UTF-8 safe: btoa() only accepts Latin1 and throws on non-Latin1 (e.g. 日本語 の display_name).
+  // Encode to bytes first so a Japanese name in the signed state doesn't 500 /listing-form/start.
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function b64urlDecode(s: string): string {
-  let pad = s + '==='.slice((s.length + 3) % 4);
-  return atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
+  const pad = s + '==='.slice((s.length + 3) % 4);
+  const bin = atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 async function packState(payloadObj: object, secret: string): Promise<string> {
