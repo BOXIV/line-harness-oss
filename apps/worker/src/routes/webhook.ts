@@ -16,6 +16,7 @@ import {
 } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
+import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -66,7 +67,7 @@ webhook.post('/webhook', async (c) => {
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL);
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES);
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -86,6 +87,7 @@ async function handleEvent(
   lineAccountId: string | null = null,
   workerUrl?: string,
   liffUrl?: string,
+  mediaBucket?: R2Bucket,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -184,6 +186,30 @@ async function handleEvent(
     if (!userId) return;
 
     await updateFriendFollowStatus(db, userId, false);
+    return;
+  }
+
+  // BOXIV patch: postback event handling (rich menu tap / template button tap)
+  // Fires `postback_received` on the event bus so automations can match on
+  // `postback_data` (e.g. リッチメニュー「車を出品する」→ menu=premium-listing)。
+  if (event.type === 'postback') {
+    const userId =
+      event.source.type === 'user' ? event.source.userId : undefined;
+    if (!userId) return;
+    const friend = await getFriendByLineUserId(db, userId);
+    if (!friend) return;
+    const data = event.postback?.data ?? '';
+    await fireEvent(
+      db,
+      'postback_received',
+      {
+        friendId: friend.id,
+        eventData: { data, params: event.postback?.params ?? null },
+        replyToken: event.replyToken,
+      },
+      lineAccessToken,
+      lineAccountId,
+    );
     return;
   }
 
@@ -367,6 +393,63 @@ async function handleEvent(
       replyToken: replyTokenConsumed ? undefined : event.replyToken,
     }, lineAccessToken, lineAccountId);
 
+    return;
+  }
+
+  // BOXIV: handle incoming media (image / video / audio / file).
+  // Download binary from LINE Data API, persist to R2, log to messages_log.
+  if (
+    event.type === 'message' &&
+    (event.message.type === 'image' || event.message.type === 'video' ||
+     event.message.type === 'audio' || event.message.type === 'file')
+  ) {
+    const userId = event.source.type === 'user' ? event.source.userId : undefined;
+    if (!userId) return;
+    const friend = await getFriendByLineUserId(db, userId);
+    if (!friend) return;
+
+    const kind = event.message.type;
+    const messageId = event.message.id;
+    if (!mediaBucket) {
+      console.error(`webhook: media bucket not configured — skipping ${kind}`);
+      return;
+    }
+    let info;
+    try {
+      info = await ingestLineMedia(
+        mediaBucket,
+        lineAccessToken,
+        workerUrl ?? '',
+        messageId,
+        kind,
+        kind === 'file'
+          ? { fileName: event.message.fileName }
+          : kind === 'video' || kind === 'audio'
+            ? { duration: event.message.duration }
+            : undefined,
+      );
+    } catch (err) {
+      console.error(`webhook: failed to ingest ${kind} ${messageId}:`, err);
+      // Still log a stub so the chat doesn't show a hole
+      await db
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
+           VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, kind, JSON.stringify({ error: 'ingest failed', messageId }), jstNow())
+        .run();
+      await upsertChatOnMessage(db, friend.id);
+      return;
+    }
+
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
+         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, kind, JSON.stringify(info), jstNow())
+      .run();
+    await upsertChatOnMessage(db, friend.id);
     return;
   }
 }

@@ -220,7 +220,13 @@ staff.delete('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
     // (booking_requests / staff_availability are BOXIV-only tables added in
     // migration 014_booking_system.sql). Without this, deleting a staff member
     // who has any availability slot or booking association fails with FK constraint error.
+    //
+    // Order matters: booking_requests.slot_id → staff_availability(id) is itself
+    // a FK without ON DELETE. So we must NULL slot_id BEFORE deleting the slots.
     await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE booking_requests SET slot_id = NULL WHERE slot_id IN (SELECT id FROM staff_availability WHERE staff_id = ?)',
+      ).bind(id),
       c.env.DB.prepare('DELETE FROM staff_availability WHERE staff_id = ?').bind(id),
       c.env.DB.prepare('UPDATE booking_requests SET staff_id = NULL WHERE staff_id = ?').bind(id),
       c.env.DB.prepare('UPDATE booking_requests SET approved_by = NULL WHERE approved_by = ?').bind(id),

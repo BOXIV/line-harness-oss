@@ -5,6 +5,7 @@ import { getLineAccounts } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
+import { processScheduledMessages } from './services/scheduled-message-delivery.boxiv.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -44,6 +45,16 @@ import { bookingRequests } from './routes/booking-requests.js';
 import { staffAvailability } from './routes/staff-availability.js';
 // 出品フォーム LINE 連携 (BOXIV)
 import { listingFormLine } from './routes/listing-form-line.js';
+// 顧客ステータス (Notion 同期, BOXIV)
+import { friendStatus } from './routes/friend-status.boxiv.js';
+// 個別チャット送信予約 (BOXIV)
+import { scheduledMessages } from './routes/scheduled-messages.boxiv.js';
+// チャット用メディア (画像 / 動画 / PDF, BOXIV)
+import { media } from './routes/media.boxiv.js';
+// 友だち↔Notion 連携 (BOXIV)
+import { friendNotion } from './routes/friend-notion.boxiv.js';
+// リッチメニュー × 顧客ステータス マッピング (BOXIV)
+import { richMenuStatus } from './routes/rich-menu-status.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -69,9 +80,15 @@ export type Env = {
     NOTION_PROP_VEHICLE?: string;
     NOTION_PROP_PHONE?: string;
     NOTION_PROP_ADDRESS?: string;
-    // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用
-    SLACK_BOT_TOKEN?: string;
+    // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用 (claude-sellentry bot)
+    SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;
+    // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
+    NOTION_SELLER_DB_ID?: string;
+    NOTION_BUYER_DB_ID?: string;
+    NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
+    NOTION_BUYER_STATUS_PROP?: string;
+    NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
@@ -128,6 +145,21 @@ app.route('/', staffAvailability);
 
 // 出品フォーム LINE 連携 (BOXIV)
 app.route('/', listingFormLine);
+
+// 顧客ステータス (BOXIV)
+app.route('/', friendStatus);
+
+// 個別チャット送信予約 (BOXIV)
+app.route('/', scheduledMessages);
+
+// チャット用メディア (BOXIV)
+app.route('/', media);
+
+// 友だち↔Notion 連携 (BOXIV)
+app.route('/', friendNotion);
+
+// リッチメニュー × 顧客ステータス マッピング (BOXIV)
+app.route('/', richMenuStatus);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
@@ -210,6 +242,8 @@ async function scheduled(
   }
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
+  // BOXIV: 個別チャット送信予約 (友だちに紐づく line_account を内部で解決)
+  jobs.push(processScheduledMessages(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, LineClient));
 
   await Promise.allSettled(jobs);
 }

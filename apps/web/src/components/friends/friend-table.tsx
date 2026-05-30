@@ -5,6 +5,31 @@ import type { Tag } from '@line-crm/shared'
 import type { FriendWithTags } from '@/lib/api'
 import { api } from '@/lib/api'
 import TagBadge from './tag-badge'
+import StatusPicker from './status-picker'
+import { detectFriendSource } from '@/lib/friend-source'
+
+/** BOXIV: friend-name format matches Chats page (formatChatLabel):
+ *  "{notion.label} {notion.realName} ({displayName})" if Notion-linked, else just displayName. */
+function formatFriendLabel(f: { displayName?: string | null; metadata?: unknown }): string {
+  const nick = f.displayName || '名前なし'
+  let notion: { label?: string | null; realName?: string | null } | null = null
+  const meta = f.metadata
+  if (meta && typeof meta === 'object') {
+    const n = (meta as { notion?: unknown }).notion
+    if (n && typeof n === 'object') notion = n as { label?: string | null; realName?: string | null }
+  } else if (typeof meta === 'string') {
+    try {
+      const parsed = JSON.parse(meta) as { notion?: { label?: string | null; realName?: string | null } }
+      if (parsed.notion) notion = parsed.notion
+    } catch { /* ignore */ }
+  }
+  if (!notion) return nick
+  const parts: string[] = []
+  if (notion.label) parts.push(notion.label)
+  if (notion.realName) parts.push(notion.realName)
+  if (parts.length === 0) return nick
+  return `${parts.join(' ')} (${nick})`
+}
 
 interface FriendTableProps {
   friends: FriendWithTags[]
@@ -115,7 +140,10 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
               アイコン / 表示名
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              ステータス
+              フォロー
+            </th>
+            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              顧客ステータス
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               タグ / 流入
@@ -156,7 +184,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                         </div>
                       )}
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{friend.displayName}</p>
+                        <p className="text-sm font-medium text-gray-900">{formatFriendLabel(friend)}</p>
                         {friend.statusMessage && (
                           <p className="text-xs text-gray-400 truncate max-w-[160px]">{friend.statusMessage}</p>
                         )}
@@ -175,6 +203,15 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                         ブロック/退会
                       </span>
                     )}
+                  </td>
+
+                  {/* Customer status (Notion-synced) */}
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <StatusPicker
+                      friendId={friend.id}
+                      preferredSource={detectFriendSource(friend.tags)}
+                      compact
+                    />
                   </td>
 
                   {/* Tags + Ref */}
@@ -212,7 +249,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                 {/* Expanded detail row */}
                 {isExpanded && (
                   <tr key={`${friend.id}-detail`} className="bg-gray-50">
-                    <td colSpan={5} className="px-6 py-4">
+                    <td colSpan={6} className="px-6 py-4">
                       <div className="space-y-3">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1 min-w-0">
@@ -326,7 +363,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-gray-900 text-sm">{messageFriend.displayName}</div>
+                  <div className="font-bold text-gray-900 text-sm">{formatFriendLabel(messageFriend)}</div>
                   <div className="text-[11px] text-gray-500 font-mono break-all">{messageFriend.lineUserId}</div>
                 </div>
               </div>

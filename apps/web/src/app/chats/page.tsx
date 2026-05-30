@@ -5,13 +5,36 @@ import { api, fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
-import FlexPreviewComponent from '@/components/flex-preview'
+import MessageBubble from '@/components/chats/message-bubble'
+import TemplatePickerModal from '@/components/chats/template-picker-modal'
+import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
+import StatusPicker from '@/components/friends/status-picker'
+import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
+import { detectFriendSource } from '@/lib/friend-source'
+import { notionPillClass } from '@/lib/notion-color'
+
+interface NotionFriendLink {
+  source: 'seller' | 'buyer'
+  pageId: string
+  label: string | null
+  realName: string | null
+  linkedAt?: string
+}
+
+interface CustomerStatus {
+  id: string
+  name: string
+  color: string | null
+  source: 'seller' | 'buyer'
+}
 
 interface Chat {
   id: string
   friendId: string
   friendName: string
   friendPictureUrl: string | null
+  notion: NotionFriendLink | null
+  customerStatus: CustomerStatus | null
   operatorId: string | null
   status: 'unread' | 'in_progress' | 'resolved'
   notes: string | null
@@ -34,20 +57,16 @@ interface ChatDetail extends Chat {
   messages?: ChatMessage[]
 }
 
-type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
-
-const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
-  unread: { label: '未読', className: 'bg-red-100 text-red-700' },
-  in_progress: { label: '対応中', className: 'bg-yellow-100 text-yellow-700' },
-  resolved: { label: '解決済', className: 'bg-green-100 text-green-700' },
+/** Format chat list display name: "{label} {realName} ({nickname})" or fallback to nickname. */
+function formatChatLabel(chat: { friendName: string; notion: NotionFriendLink | null }): string {
+  const nickname = chat.friendName || '名前なし'
+  if (!chat.notion) return nickname
+  const parts: string[] = []
+  if (chat.notion.label) parts.push(chat.notion.label)
+  if (chat.notion.realName) parts.push(chat.notion.realName)
+  if (parts.length === 0) return nickname
+  return `${parts.join(' ')} (${nickname})`
 }
-
-const statusFilters: { key: StatusFilter; label: string }[] = [
-  { key: 'all', label: '全て' },
-  { key: 'unread', label: '未読' },
-  { key: 'in_progress', label: '対応中' },
-  { key: 'resolved', label: '解決済' },
-]
 
 const SHOW_LOADING_PREF_KEY = 'lh_chat_show_loading_indicator'
 const LOADING_SECONDS_PREF_KEY = 'lh_chat_loading_seconds'
@@ -88,6 +107,7 @@ interface FriendItem {
   displayName: string
   pictureUrl: string | null
   isFollowing: boolean
+  tags?: { id: string; name: string }[]
 }
 
 interface MessageLog {
@@ -143,33 +163,6 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
     setSending(false)
   }
 
-  function renderContent(msg: MessageLog) {
-    if (msg.messageType === 'text') return msg.content
-    if (msg.messageType === 'flex') {
-      try {
-        const parsed = JSON.parse(msg.content)
-        // Extract ALL text from flex (up to 200 chars)
-        const texts: string[] = []
-        const collectText = (obj: Record<string, unknown>) => {
-          if (texts.join(' ').length > 200) return
-          if (obj.type === 'text' && typeof obj.text === 'string') {
-            const t = (obj.text as string).trim()
-            if (t && !t.startsWith('{{')) texts.push(t)
-          }
-          for (const key of ['header', 'body', 'footer']) {
-            if (obj[key]) collectText(obj[key] as Record<string, unknown>)
-          }
-          if (Array.isArray(obj.contents)) {
-            for (const c of obj.contents) collectText(c as Record<string, unknown>)
-          }
-        }
-        collectText(parsed)
-        return texts.slice(0, 4).join('\n') || '[Flex Message]'
-      } catch { return '[Flex Message]' }
-    }
-    return `[${msg.messageType}]`
-  }
-
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-4 border-b border-gray-200 flex items-center gap-3">
@@ -196,36 +189,28 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         ) : messages.length === 0 ? (
           <p className="text-center text-gray-400 text-sm">メッセージ履歴がありません</p>
         ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[75%] rounded-2xl px-4 py-2 ${
-                msg.direction === 'outgoing'
-                  ? 'bg-green-500 text-white'
-                  : 'bg-gray-100 text-gray-900'
-              }`}>
-                <p className="text-sm whitespace-pre-wrap break-words">{renderContent(msg)}</p>
-                <p className={`text-xs mt-1 ${msg.direction === 'outgoing' ? 'text-green-200' : 'text-gray-400'}`}>
-                  {new Date(msg.createdAt).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              </div>
-            </div>
-          ))
+          messages.map((msg) => <MessageBubble key={msg.id} message={msg} variant="compact" />)
         )}
       </div>
       <div className="px-4 py-3 border-t border-gray-200">
-        <div className="flex gap-2">
-          <input
-            type="text"
+        <div className="flex items-stretch gap-2">
+          <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-            placeholder="メッセージを入力..."
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.shiftKey) {
+                e.preventDefault()
+                handleSend()
+              }
+            }}
+            placeholder="メッセージを入力... (Shift+Enter で送信)"
+            rows={2}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent resize-none"
           />
           <button
             onClick={handleSend}
             disabled={!message.trim() || sending}
-            className="px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50"
+            className="px-4 rounded-lg text-white text-sm font-medium disabled:opacity-50"
             style={{ backgroundColor: '#0f172a' }}
           >
             {sending ? '...' : '送信'}
@@ -243,7 +228,10 @@ export default function ChatsPage() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null)
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [customerStatusFilter, setCustomerStatusFilter] = useState<string>('all')
+  const [statusOptions, setStatusOptions] = useState<Array<{ id: string; name: string; color: string | null; source: 'seller' | 'buyer' }>>([])
+  const [linkingNotion, setLinkingNotion] = useState(false)
+  const [notionMessage, setNotionMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
@@ -255,6 +243,12 @@ export default function ChatsPage() {
   const [loadingSeconds, setLoadingSeconds] = useState(5)
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  const [showSchedulePanel, setShowSchedulePanel] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
 
   useEffect(() => {
     try {
@@ -283,8 +277,8 @@ export default function ChatsPage() {
     setLoading(true)
     setError('')
     try {
-      const params: { status?: string; accountId?: string } = {}
-      if (statusFilter !== 'all') params.status = statusFilter
+      const params: { statusOptionId?: string; accountId?: string } = {}
+      if (customerStatusFilter !== 'all') params.statusOptionId = customerStatusFilter
       if (selectedAccountId) params.accountId = selectedAccountId
       const [chatRes, friendRes] = await Promise.allSettled([
         api.chats.list(params),
@@ -296,12 +290,20 @@ export default function ChatsPage() {
       if (friendRes.status === 'fulfilled' && friendRes.value.success) {
         setAllFriends((friendRes.value.data as unknown as { items: FriendItem[] }).items)
       }
+      setLastRefreshedAt(new Date())
     } catch {
       setError('チャットの読み込みに失敗しました。もう一度お試しください。')
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, selectedAccountId])
+  }, [customerStatusFilter, selectedAccountId])
+
+  // Load all Notion-synced status options (both seller + buyer) for the filter dropdown.
+  useEffect(() => {
+    api.friendStatus.listOptions().then((res) => {
+      if (res.success) setStatusOptions(res.data.map((o) => ({ id: o.id, name: o.name, color: o.color, source: o.source })))
+    }).catch(() => { /* non-blocking */ })
+  }, [])
 
   const loadChatDetail = useCallback(async (chatId: string) => {
     setDetailLoading(true)
@@ -329,6 +331,17 @@ export default function ChatsPage() {
       setChatDetail(null)
     }
   }, [selectedChatId, loadChatDetail])
+
+  // Auto-scroll the messages container to the latest (bottom) whenever a new
+  // chat is opened or new messages arrive.
+  useEffect(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    // Defer to next paint so layout is settled.
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight
+    })
+  }, [chatDetail?.id, chatDetail?.messages?.length])
 
   const handleSelectChat = (chatId: string) => {
     setSelectedChatId(chatId)
@@ -371,14 +384,59 @@ export default function ChatsPage() {
     }
   }
 
-  const handleStatusUpdate = async (newStatus: Chat['status']) => {
+  const handleAttachFile = async (file: File) => {
     if (!selectedChatId) return
+    setUploading(true)
+    setError('')
     try {
-      await api.chats.update(selectedChatId, { status: newStatus })
+      const upload = await api.media.upload(file)
+      if (!upload.success) {
+        setError(`アップロード失敗: ${upload.error}`)
+        return
+      }
+      const { url, kind, filename, size, mimeType } = upload.data
+      let messageType: 'image' | 'video' | 'file'
+      let content: string
+      if (kind === 'image') {
+        messageType = 'image'
+        content = JSON.stringify({ originalContentUrl: url, previewImageUrl: url })
+      } else if (kind === 'video') {
+        messageType = 'video'
+        // LINE requires both. Use the same URL as preview (LINE will frame-extract).
+        content = JSON.stringify({ originalContentUrl: url, previewImageUrl: url })
+      } else {
+        // file (PDF) — sent as Flex bubble with download button (worker side)
+        messageType = 'file'
+        content = JSON.stringify({ url, filename, size, mimeType })
+      }
+      await api.chats.send(selectedChatId, { content, messageType })
+      loadChatDetail(selectedChatId)
+      loadChats()
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : 'unknown'
+      setError(`添付の送信に失敗: ${detail}`)
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  const handleSendTemplate = async (payload: { content: string; messageType: string }) => {
+    if (!selectedChatId) return
+    const trimmed = payload.content.trim()
+    if (!trimmed) return
+    setSending(true)
+    try {
+      await api.chats.send(selectedChatId, {
+        content: trimmed,
+        messageType: payload.messageType,
+      })
       loadChatDetail(selectedChatId)
       loadChats()
     } catch {
-      setError('ステータスの更新に失敗しました。')
+      setError('テンプレートの送信に失敗しました。')
+    } finally {
+      setSending(false)
     }
   }
 
@@ -395,8 +453,8 @@ export default function ChatsPage() {
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
     }
@@ -404,7 +462,31 @@ export default function ChatsPage() {
 
   return (
     <div>
-      <Header title="オペレーターチャット" />
+      <Header
+        title="オペレーターチャット"
+        action={
+          <div className="flex items-center gap-2">
+            {lastRefreshedAt && (
+              <span className="text-[11px] text-gray-400 leading-tight">
+                最終更新<br />
+                {lastRefreshedAt.toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+            <button
+              onClick={() => {
+                loadChats()
+                if (selectedChatId) loadChatDetail(selectedChatId)
+              }}
+              disabled={loading}
+              className="px-3 py-2 min-h-[44px] text-sm font-medium text-gray-700 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              aria-label="チャットを更新"
+              title="チャットを更新"
+            >
+              {loading ? '⏳' : '🔄'} 更新
+            </button>
+          </div>
+        }
+      />
 
       {/* Error */}
       {error && (
@@ -416,22 +498,25 @@ export default function ChatsPage() {
       <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
         {/* Left Panel: Chat List */}
         <div className={`w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
-          {/* Status Filter Tabs */}
-          <div className="flex border-b border-gray-200">
-            {statusFilters.map((filter) => (
-              <button
-                key={filter.key}
-                onClick={() => { setStatusFilter(filter.key); setSelectedChatId(null) }}
-                className={`flex-1 px-3 py-2.5 min-h-[44px] text-xs font-medium transition-colors ${
-                  statusFilter === filter.key
-                    ? 'text-white'
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-                style={statusFilter === filter.key ? { backgroundColor: '#0f172a' } : undefined}
-              >
-                {filter.label}
-              </button>
-            ))}
+          {/* Customer status filter (Notion-synced) */}
+          <div className="px-3 py-2 border-b border-gray-200">
+            <select
+              value={customerStatusFilter}
+              onChange={(e) => { setCustomerStatusFilter(e.target.value); setSelectedChatId(null) }}
+              className="w-full text-xs border border-gray-300 rounded-lg px-2 py-2 min-h-[36px] bg-white focus:outline-none focus:border-slate-900"
+            >
+              <option value="all">すべての顧客ステータス</option>
+              <optgroup label="出品者">
+                {statusOptions.filter((o) => o.source === 'seller').map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label="購入者">
+                {statusOptions.filter((o) => o.source === 'buyer').map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </optgroup>
+            </select>
           </div>
 
           {/* Chat List */}
@@ -453,8 +538,8 @@ export default function ChatsPage() {
             ) : (
               <>
                 {chats.map((chat) => {
-                  const statusInfo = statusConfig[chat.status]
                   const isSelected = selectedChatId === chat.id
+                  const label = formatChatLabel(chat)
                   return (
                     <button
                       key={chat.id}
@@ -468,16 +553,18 @@ export default function ChatsPage() {
                           <img src={chat.friendPictureUrl} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
                         ) : (
                           <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                            <span className="text-gray-500 text-sm">{chat.friendName.charAt(0)}</span>
+                            <span className="text-gray-500 text-sm">{(chat.friendName || '?').charAt(0)}</span>
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-gray-900 truncate">{chat.friendName}</p>
+                          <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
                           <p className="text-xs text-gray-400 mt-0.5">{formatDatetime(chat.lastMessageAt)}</p>
                         </div>
-                        <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${statusInfo.className}`}>
-                          {statusInfo.label}
-                        </span>
+                        {chat.customerStatus && (
+                          <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${notionPillClass(chat.customerStatus.color)}`}>
+                            {chat.customerStatus.name}
+                          </span>
+                        )}
                       </div>
                     </button>
                   )
@@ -524,108 +611,81 @@ export default function ChatsPage() {
                   )}
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">
-                      {chatDetail.friendName}
+                      {formatChatLabel(chatDetail)}
                     </p>
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${statusConfig[chatDetail.status].className}`}
-                    >
-                      {statusConfig[chatDetail.status].label}
-                    </span>
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                      <StatusPicker
+                        friendId={chatDetail.friendId}
+                        preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
+                        compact
+                      />
+                      <RichMenuPicker friendId={chatDetail.friendId} />
+                      {chatDetail.notion?.label && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+                          {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {chatDetail.status !== 'unread' && (
-                    <button
-                      onClick={() => handleStatusUpdate('unread')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                    >
-                      未読に戻す
-                    </button>
-                  )}
-                  {chatDetail.status !== 'in_progress' && (
-                    <button
-                      onClick={() => handleStatusUpdate('in_progress')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 rounded-md transition-colors"
-                    >
-                      対応中にする
-                    </button>
-                  )}
-                  {chatDetail.status !== 'resolved' && (
-                    <button
-                      onClick={() => handleStatusUpdate('resolved')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-md transition-colors"
-                    >
-                      解決済にする
-                    </button>
-                  )}
+                  <button
+                    onClick={async () => {
+                      if (!chatDetail) return
+                      setLinkingNotion(true)
+                      setNotionMessage('')
+                      try {
+                        const res = await api.chats.notionLink(chatDetail.friendId)
+                        if (res.success) {
+                          if (res.data.linked) {
+                            setNotionMessage(`✓ 連携完了: ${res.data.link?.realName ?? ''}`)
+                            loadChatDetail(chatDetail.id)
+                            loadChats()
+                          } else {
+                            setNotionMessage(res.data.message ?? '該当レコードが見つかりませんでした')
+                          }
+                        } else {
+                          setNotionMessage(`連携失敗: ${res.error}`)
+                        }
+                      } catch (e) {
+                        setNotionMessage(`連携失敗: ${e instanceof Error ? e.message : 'unknown'}`)
+                      } finally {
+                        setLinkingNotion(false)
+                        setTimeout(() => setNotionMessage(''), 5000)
+                      }
+                    }}
+                    disabled={linkingNotion}
+                    className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-md transition-colors"
+                    title="Notion 出品者DB と連携"
+                  >
+                    {linkingNotion ? '⏳' : '🔗'} Notion連携
+                  </button>
+                  <button
+                    onClick={() => setShowSchedulePanel(true)}
+                    className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors"
+                  >
+                    📅 送信予約
+                  </button>
                 </div>
               </div>
+              {notionMessage && (
+                <div className="px-4 py-1 text-xs text-slate-600 bg-slate-50 border-b border-slate-200">{notionMessage}</div>
+              )}
 
               {/* Messages — LINE-style chat bubbles */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
+              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
                 {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
                   <div className="text-center py-8">
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>
                   </div>
                 ) : (
-                  (chatDetail.messages ?? []).map((msg) => {
-                    const isOutgoing = msg.direction === 'outgoing'
-
-                    // メッセージ表示の分岐
-                    let bubbleContent: React.ReactNode
-                    if (msg.messageType === 'flex') {
-                      bubbleContent = (
-                        <div className="max-w-[300px]">
-                          <FlexPreviewComponent content={msg.content} maxWidth={280} />
-                        </div>
-                      )
-                    } else if (msg.messageType === 'image') {
-                      try {
-                        const parsed = JSON.parse(msg.content)
-                        bubbleContent = (
-                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-[200px] rounded" />
-                        )
-                      } catch {
-                        bubbleContent = <span>🖼️ [画像]</span>
-                      }
-                    } else {
-                      bubbleContent = <span>{msg.content}</span>
-                    }
-
-                    return (
-                      <div
-                        key={msg.id}
-                        className={`flex items-end gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'}`}
-                      >
-                        {/* 相手のアイコン（incoming のみ） */}
-                        {!isOutgoing && (
-                          chatDetail.friendPictureUrl ? (
-                            <img src={chatDetail.friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0 mb-1" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-gray-300 flex-shrink-0 mb-1" />
-                          )
-                        )}
-
-                        <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
-                          {/* メッセージバブル */}
-                          <div
-                            className={`max-w-[320px] px-3 py-2 text-sm break-words whitespace-pre-wrap ${
-                              isOutgoing
-                                ? 'rounded-tl-2xl rounded-tr-md rounded-bl-2xl rounded-br-2xl text-white'
-                                : 'rounded-tl-md rounded-tr-2xl rounded-bl-2xl rounded-br-2xl bg-white text-gray-900'
-                            }`}
-                            style={isOutgoing ? { backgroundColor: '#0f172a' } : undefined}
-                          >
-                            {bubbleContent}
-                          </div>
-                          {/* 時刻 */}
-                          <span className="text-xs text-white/50 mt-0.5 px-1">
-                            {new Date(msg.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                      </div>
-                    )
-                  })
+                  (chatDetail.messages ?? []).map((msg) => (
+                    <MessageBubble
+                      key={msg.id}
+                      message={msg}
+                      friendPictureUrl={chatDetail.friendPictureUrl}
+                    />
+                  ))
                 )}
               </div>
 
@@ -672,9 +732,38 @@ export default function ChatsPage() {
                     ))}
                   </select>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-stretch gap-2">
                   <input
-                    type="text"
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) void handleAttachFile(file)
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || uploading}
+                    className="px-3 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    aria-label="ファイルを添付"
+                    title="画像・動画・PDF を添付"
+                  >
+                    {uploading ? '⏳' : '📎'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowTemplatePicker(true)}
+                    disabled={sending}
+                    className="px-3 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    aria-label="テンプレートから挿入"
+                    title="テンプレートから挿入"
+                  >
+                    📋
+                  </button>
+                  <textarea
                     value={messageContent}
                     onChange={(e) => {
                       const value = e.target.value
@@ -691,13 +780,14 @@ export default function ChatsPage() {
                     }}
                     onBlur={() => setIsMessageInputFocused(false)}
                     onKeyDown={handleKeyDown}
-                    placeholder="メッセージを入力..."
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                    placeholder="メッセージを入力... (Shift+Enter で送信)"
+                    rows={2}
+                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
                   />
                   <button
                     onClick={handleSendMessage}
                     disabled={sending || !messageContent.trim()}
-                    className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="px-4 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ backgroundColor: '#0f172a' }}
                   >
                     {sending ? '送信中...' : '送信'}
@@ -709,6 +799,21 @@ export default function ChatsPage() {
         </div>
       </div>
       <CcPromptButton prompts={ccPrompts} />
+
+      <TemplatePickerModal
+        isOpen={showTemplatePicker}
+        onClose={() => setShowTemplatePicker(false)}
+        onSubmit={handleSendTemplate}
+      />
+
+      {chatDetail && (
+        <ScheduledMessagePanel
+          isOpen={showSchedulePanel}
+          onClose={() => setShowSchedulePanel(false)}
+          friendId={chatDetail.friendId}
+          friendName={chatDetail.friendName}
+        />
+      )}
     </div>
   )
 }

@@ -26,6 +26,7 @@ import type {
 } from '@line-crm/shared'
 
 import type { Broadcast } from '@line-crm/shared'
+import type { RichMenu, CreateRichMenuInput } from '@line-crm/shared'
 
 /** Broadcast type from API (now camelCase after worker serialization) */
 export type ApiBroadcast = Broadcast
@@ -338,11 +339,12 @@ export const api = {
       ),
   },
   chats: {
-    list: (params?: { status?: string; operatorId?: string; accountId?: string }) => {
+    list: (params?: { status?: string; operatorId?: string; accountId?: string; statusOptionId?: string }) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status
       if (params?.operatorId) query.operatorId = params.operatorId
       if (params?.accountId) query.lineAccountId = params.accountId
+      if (params?.statusOptionId) query.statusOptionId = params.statusOptionId
       return fetchApi<ApiResponse<Chat[]>>(
         '/api/chats?' + new URLSearchParams(query),
       )
@@ -366,6 +368,18 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+    notionLink: (friendId: string) =>
+      fetchApi<ApiResponse<{
+        linked: boolean
+        message?: string
+        link?: {
+          source: 'seller'
+          pageId: string
+          label: string | null
+          realName: string | null
+          linkedAt: string
+        }
+      }>>(`/api/friends/${friendId}/notion-link`, { method: 'POST' }),
   },
   reminders: {
     list: (params?: { accountId?: string }) => {
@@ -395,6 +409,36 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/reminders/${reminderId}/steps/${stepId}`, {
         method: 'DELETE',
       }),
+    enrollFriend: (reminderId: string, friendId: string, data: { targetDate: string }) =>
+      fetchApi<ApiResponse<{ id: string; friendId: string; reminderId: string; targetDate: string; status: string }>>(
+        `/api/reminders/${reminderId}/enroll/${friendId}`,
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    listFriendReminders: (friendId: string) =>
+      fetchApi<ApiResponse<Array<{
+        friendReminderId: string
+        reminderId: string
+        reminderName: string
+        reminderIsActive: boolean
+        targetDate: string
+        status: string
+        totalSteps: number
+        deliveredSteps: number
+      }>>>(`/api/friends/${friendId}/reminders?expand=steps`),
+    cancelFriendReminder: (friendReminderId: string) =>
+      fetchApi<ApiResponse<null>>(`/api/friend-reminders/${friendReminderId}`, { method: 'DELETE' }),
+    listReminderFriends: (reminderId: string, status?: 'active' | 'completed' | 'cancelled') => {
+      const q = status ? `?status=${status}` : ''
+      return fetchApi<ApiResponse<Array<{
+        friendReminderId: string
+        friendId: string
+        friendDisplayName: string | null
+        targetDate: string
+        status: string
+        totalSteps: number
+        deliveredSteps: number
+      }>>>(`/api/reminders/${reminderId}/friends${q}`)
+    },
   },
   scoring: {
     rules: () =>
@@ -603,6 +647,202 @@ export const api = {
       fetchApi<ApiResponse<{ id: string; token: string; url: string; area: string; customerName: string | null; prefecture: string; friendId: string }>>(
         '/api/booking-invites',
         { method: 'POST', body: JSON.stringify(data) },
+      ),
+  },
+  // チャット用メディアアップロード (BOXIV — image / video / PDF)
+  media: {
+    async upload(file: File): Promise<ApiResponse<{
+      id: string
+      key: string
+      url: string
+      kind: 'image' | 'video' | 'file'
+      mimeType: string
+      filename: string | null
+      size: number
+    }>> {
+      const apiKey = getApiKey()
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`${API_URL}/api/media`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      })
+      return res.json()
+    },
+  },
+  // 個別チャット送信予約 (BOXIV)
+  scheduledMessages: {
+    list: (friendId: string, status?: 'scheduled' | 'sent' | 'cancelled' | 'failed') => {
+      const q = status ? `?status=${status}` : ''
+      return fetchApi<ApiResponse<Array<{
+        id: string
+        friendId: string
+        scheduledAt: string
+        messageType: 'text' | 'image' | 'flex'
+        content: string
+        status: 'scheduled' | 'sent' | 'cancelled' | 'failed'
+        sentAt: string | null
+        error: string | null
+        createdBy: string | null
+        createdAt: string
+        updatedAt: string
+      }>>>(`/api/friends/${friendId}/scheduled-messages${q}`)
+    },
+    create: (friendId: string, data: { scheduledAt: string; messageType: 'text' | 'image' | 'flex'; content: string }) =>
+      fetchApi<ApiResponse<{
+        id: string
+        friendId: string
+        scheduledAt: string
+        messageType: string
+        content: string
+        status: string
+      }>>(`/api/friends/${friendId}/scheduled-messages`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    cancel: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/scheduled-messages/${id}`, { method: 'DELETE' }),
+  },
+  // リッチメニュー (LINE Platform 管理 — D1 永続化なし)
+  richMenus: {
+    list: () =>
+      fetchApi<ApiResponse<RichMenu[]>>('/api/rich-menus'),
+    create: (data: CreateRichMenuInput) =>
+      fetchApi<ApiResponse<{ richMenuId: string }>>('/api/rich-menus', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/rich-menus/${id}`, { method: 'DELETE' }),
+    setDefault: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/rich-menus/${id}/default`, { method: 'POST' }),
+    uploadImage: (id: string, image: string, contentType: 'image/png' | 'image/jpeg' = 'image/png') =>
+      fetchApi<ApiResponse<null>>(`/api/rich-menus/${id}/image`, {
+        method: 'POST',
+        body: JSON.stringify({ image, contentType }),
+      }),
+    // BOXIV: LINE がホストしている画像本体を Blob で取得（プレビュー / 編集キャンバス背景用）。
+    // 画像未登録なら 404 → null。Bearer 認証が必要なので fetchApi ではなく素の fetch を使う。
+    fetchImage: async (id: string): Promise<Blob | null> => {
+      const res = await fetch(`${API_URL}/api/rich-menus/${id}/image-content`, {
+        headers: { Authorization: `Bearer ${getApiKey()}` },
+      })
+      if (res.status === 404) return null
+      if (!res.ok) throw new Error(`fetchImage failed: ${res.status}`)
+      return res.blob()
+    },
+    // BOXIV: LINE Platform 上で現在アカウント既定になっている richMenuId（無ければ null）。
+    getDefault: () =>
+      fetchApi<ApiResponse<{ richMenuId: string | null }>>('/api/rich-menus/default'),
+    getAssignedTo: (friendId: string) =>
+      fetchApi<ApiResponse<{ richMenuId: string } | null>>(`/api/friends/${friendId}/rich-menu`),
+    assignToFriend: (friendId: string, richMenuId: string) =>
+      fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/rich-menu`, {
+        method: 'POST',
+        body: JSON.stringify({ richMenuId }),
+      }),
+    unassignFromFriend: (friendId: string) =>
+      fetchApi<ApiResponse<null>>(`/api/friends/${friendId}/rich-menu`, {
+        method: 'DELETE',
+      }),
+    // ステータス連動マッピング (BOXIV カスタム)
+    autoSwitch: {
+      list: () =>
+        fetchApi<ApiResponse<Array<{
+          id: string
+          statusOptionId: string
+          statusOptionName?: string
+          statusOptionSource?: 'seller' | 'buyer'
+          richMenuId: string
+          richMenuName: string | null
+          lineAccountId: string | null
+          isActive: boolean
+          createdAt: string
+          updatedAt: string
+        }>>>('/api/rich-menus/auto-switch'),
+      upsert: (
+        statusOptionId: string,
+        data: { richMenuId: string; richMenuName?: string | null; lineAccountId?: string | null; isActive?: boolean },
+      ) =>
+        fetchApi<ApiResponse<unknown>>(`/api/rich-menus/auto-switch/${encodeURIComponent(statusOptionId)}`, {
+          method: 'PUT',
+          body: JSON.stringify(data),
+        }),
+      delete: (statusOptionId: string, lineAccountId?: string | null) => {
+        const q = lineAccountId ? `?lineAccountId=${encodeURIComponent(lineAccountId)}` : ''
+        return fetchApi<ApiResponse<null>>(`/api/rich-menus/auto-switch/${encodeURIComponent(statusOptionId)}${q}`, {
+          method: 'DELETE',
+        })
+      },
+      // BOXIV: リッチメニュー差し替え時に、旧 ID を指す全マッピングを新 ID へ付け替える。
+      // fetchApi は非2xxで本文を捨てて throw するため、Worker のエラー文言を拾えるよう生 fetch で本文を読む。
+      rebind: async (data: {
+        fromRichMenuId: string
+        toRichMenuId: string
+        toRichMenuName?: string | null
+      }): Promise<ApiResponse<{ rebound: number }>> => {
+        const res = await fetch(`${API_URL}/api/rich-menus/auto-switch/rebind`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getApiKey()}` },
+          body: JSON.stringify(data),
+        })
+        return res
+          .json()
+          .catch(() => ({ success: false, error: `API error: ${res.status}` })) as Promise<
+          ApiResponse<{ rebound: number }>
+        >
+      },
+    },
+  },
+  // 顧客ステータス (BOXIV — Notion 出品者DB / 購入者DB の Status 同期)
+  friendStatus: {
+    listOptions: (params?: { source?: 'seller' | 'buyer'; includeArchived?: boolean }) => {
+      const q = new URLSearchParams()
+      if (params?.source) q.set('source', params.source)
+      if (params?.includeArchived) q.set('includeArchived', '1')
+      const qs = q.toString()
+      return fetchApi<ApiResponse<Array<{
+        id: string
+        source: 'seller' | 'buyer'
+        notionId: string
+        name: string
+        color: string | null
+        sortOrder: number
+        isArchived: boolean
+        syncedAt: string
+      }>>>('/api/status-options' + (qs ? '?' + qs : ''))
+    },
+    sync: (sources?: Array<'seller' | 'buyer'>) =>
+      fetchApi<ApiResponse<Array<{
+        source: 'seller' | 'buyer'
+        success: boolean
+        inserted?: number
+        updated?: number
+        archived?: number
+        total?: number
+        error?: string
+      }>>>('/api/status-options/sync', {
+        method: 'POST',
+        body: JSON.stringify(sources ? { sources } : {}),
+      }),
+    getFriend: (friendId: string) =>
+      fetchApi<ApiResponse<{
+        friendId: string
+        option: {
+          id: string
+          source: 'seller' | 'buyer'
+          notionId: string
+          name: string
+          color: string | null
+        }
+        assignedAt: string
+        assignedBy: string | null
+      } | null>>(`/api/friends/${friendId}/status`),
+    setFriend: (friendId: string, statusOptionId: string | null) =>
+      fetchApi<ApiResponse<{ friendId: string; statusOptionId: string } | null>>(
+        `/api/friends/${friendId}/status`,
+        { method: 'PUT', body: JSON.stringify({ statusOptionId }) },
       ),
   },
 }

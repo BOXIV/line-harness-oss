@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
+import FlexPreviewPane from '@/components/templates/flex-preview-pane'
+import TemplateEditModal from '@/components/templates/template-edit-modal'
+import type { EditingTemplate } from '@/components/templates/template-edit-modal'
 
 interface Template {
   id: string
@@ -71,6 +74,7 @@ export default function TemplatesPage() {
   })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
+  const [editing, setEditing] = useState<EditingTemplate | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -202,68 +206,81 @@ export default function TemplatesPage() {
       {showCreate && (
         <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <h2 className="text-sm font-semibold text-gray-800 mb-4">新規テンプレートを作成</h2>
-          <div className="space-y-4 max-w-lg">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">テンプレート名 <span className="text-red-500">*</span></label>
-              <input
-                type="text"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                placeholder="例: ウェルカムメッセージ"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">カテゴリ <span className="text-red-500">*</span></label>
-              <input
-                type="text"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                placeholder="例: 挨拶、キャンペーン、通知"
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">メッセージタイプ</label>
-              <select
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
-                value={form.messageType}
-                onChange={(e) => setForm({ ...form, messageType: e.target.value })}
-              >
-                <option value="text">テキスト</option>
-                <option value="image">画像</option>
-                <option value="flex">Flex</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">メッセージ内容 <span className="text-red-500">*</span></label>
-              <textarea
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
-                rows={4}
-                placeholder="メッセージ内容を入力してください"
-                value={form.messageContent}
-                onChange={(e) => setForm({ ...form, messageContent: e.target.value })}
-              />
+          <div className={`grid gap-6 ${form.messageType === 'flex' ? 'lg:grid-cols-[1fr_auto]' : 'max-w-lg'}`}>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">テンプレート名 <span className="text-red-500">*</span></label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  placeholder="例: ウェルカムメッセージ"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">カテゴリ <span className="text-red-500">*</span></label>
+                <input
+                  type="text"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                  placeholder="例: 挨拶、キャンペーン、通知"
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">メッセージタイプ</label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                  value={form.messageType}
+                  onChange={(e) => setForm({ ...form, messageType: e.target.value })}
+                >
+                  <option value="text">テキスト</option>
+                  <option value="image">画像</option>
+                  <option value="flex">Flex</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">メッセージ内容 <span className="text-red-500">*</span></label>
+                <textarea
+                  className={`w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y ${form.messageType === 'flex' ? 'font-mono' : ''}`}
+                  rows={form.messageType === 'flex' ? 12 : 4}
+                  placeholder={
+                    form.messageType === 'flex'
+                      ? '{ "type": "bubble", "body": { ... } }'
+                      : 'メッセージ内容を入力してください'
+                  }
+                  value={form.messageContent}
+                  onChange={(e) => setForm({ ...form, messageContent: e.target.value })}
+                />
+              </div>
+
+              {formError && <p className="text-xs text-red-600">{formError}</p>}
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCreate}
+                  disabled={saving}
+                  className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
+                  style={{ backgroundColor: '#0f172a' }}
+                >
+                  {saving ? '作成中...' : '作成'}
+                </button>
+                <button
+                  onClick={() => { setShowCreate(false); setFormError('') }}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  キャンセル
+                </button>
+              </div>
             </div>
 
-            {formError && <p className="text-xs text-red-600">{formError}</p>}
-
-            <div className="flex gap-2">
-              <button
-                onClick={handleCreate}
-                disabled={saving}
-                className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                style={{ backgroundColor: '#0f172a' }}
-              >
-                {saving ? '作成中...' : '作成'}
-              </button>
-              <button
-                onClick={() => { setShowCreate(false); setFormError('') }}
-                className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                キャンセル
-              </button>
-            </div>
+            {form.messageType === 'flex' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">プレビュー</label>
+                <FlexPreviewPane json={form.messageContent} maxWidth={480} />
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -339,7 +356,14 @@ export default function TemplatesPage() {
                   </td>
 
                   {/* Actions */}
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => setEditing(template)}
+                      className="mr-2 px-3 py-1 text-xs font-medium text-white rounded-md transition-opacity hover:opacity-90"
+                      style={{ backgroundColor: '#0f172a' }}
+                    >
+                      編集
+                    </button>
                     <button
                       onClick={() => handleDelete(template.id)}
                       className="px-3 py-1 text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
@@ -355,6 +379,13 @@ export default function TemplatesPage() {
         </div>
       )}
       <CcPromptButton prompts={ccPrompts} />
+
+      <TemplateEditModal
+        isOpen={editing !== null}
+        template={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => load()}
+      />
     </div>
   )
 }

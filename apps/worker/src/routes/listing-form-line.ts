@@ -16,12 +16,12 @@
 // Required env (Worker secrets):
 //   LINE_LOGIN_CHANNEL_ID, LINE_LOGIN_CHANNEL_SECRET   — existing
 //   SESSION_SECRET                                      — existing (used for state HMAC)
-//   SLACK_BOT_TOKEN                                     — new (xoxb-...)
-//   SLACK_LISTING_LINK_CHANNEL_ID                       — new (e.g. C08PSA6A7PW)
+//   SELLENTRY_SLACK_BOT_TOKEN                           — claude-sellentry bot (xoxb-..., groups:history+chat:write・チャンネル member)
+//   SLACK_LISTING_LINK_CHANNEL_ID                       — #pj-lightning-sell (e.g. C08PSA6A7PW)
 //
 // Set new secrets via wrangler:
 //   cd line/line-harness-oss/apps/worker
-//   pnpm exec wrangler secret put SLACK_BOT_TOKEN --config wrangler.boxiv.toml
+//   pnpm exec wrangler secret put SELLENTRY_SLACK_BOT_TOKEN --config wrangler.boxiv.toml
 //   pnpm exec wrangler secret put SLACK_LISTING_LINK_CHANNEL_ID --config wrangler.boxiv.toml
 
 import { Hono } from 'hono';
@@ -281,8 +281,8 @@ async function postSlackLinkNotification(
   ctx: ListingStateV1,
   profile: { userId: string; displayName: string; pictureUrl?: string },
 ) {
-  if (!env.SLACK_BOT_TOKEN || !env.SLACK_LISTING_LINK_CHANNEL_ID) {
-    console.warn('listing-form callback: SLACK_BOT_TOKEN / SLACK_LISTING_LINK_CHANNEL_ID not configured — skipping');
+  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !env.SLACK_LISTING_LINK_CHANNEL_ID) {
+    console.warn('listing-form callback: SELLENTRY_SLACK_BOT_TOKEN / SLACK_LISTING_LINK_CHANNEL_ID not configured — skipping');
     return;
   }
   const text = '出品フォーム LINE 連携完了';
@@ -297,7 +297,7 @@ async function postSlackLinkNotification(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
+      Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
     },
     body: JSON.stringify({
       channel: env.SLACK_LISTING_LINK_CHANNEL_ID,

@@ -11,6 +11,8 @@ import {
   enrollFriendInReminder,
   getFriendReminders,
   cancelFriendReminder,
+  getActiveFriendRemindersByFriend,
+  getFriendsByReminderId,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
 
@@ -174,6 +176,11 @@ reminders.post('/api/reminders/:id/enroll/:friendId', async (c) => {
 reminders.get('/api/friends/:friendId/reminders', async (c) => {
   try {
     const friendId = c.req.param('friendId');
+    const expand = c.req.query('expand');
+    if (expand === 'steps') {
+      const items = await getActiveFriendRemindersByFriend(c.env.DB, friendId);
+      return c.json({ success: true, data: items });
+    }
     const items = await getFriendReminders(c.env.DB, friendId);
     return c.json({
       success: true,
@@ -188,6 +195,20 @@ reminders.get('/api/friends/:friendId/reminders', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/friends/:friendId/reminders error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// 指定 reminder に登録中の友だち一覧 (BOXIV 拡張)
+reminders.get('/api/reminders/:id/friends', async (c) => {
+  try {
+    const reminderId = c.req.param('id');
+    const status = c.req.query('status');
+    const validStatus = status === 'active' || status === 'completed' || status === 'cancelled' ? status : undefined;
+    const items = await getFriendsByReminderId(c.env.DB, reminderId, validStatus);
+    return c.json({ success: true, data: items });
+  } catch (err) {
+    console.error('GET /api/reminders/:id/friends error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });
