@@ -25,6 +25,7 @@
 //   pnpm exec wrangler secret put SLACK_LISTING_LINK_CHANNEL_ID --config wrangler.boxiv.toml
 
 import { Hono } from 'hono';
+import { upsertFriend } from '@line-crm/db';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
@@ -254,6 +255,16 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     displayName: string;
     pictureUrl?: string;
   };
+
+  // 友だちを D1 に upsert: 既に友だちで follow webhook が発火しないケースでも friend を確実に登録する。
+  // これで突合ボットの friend↔Notion 連携が lineUserId で friend を見つけられる。非致命。
+  await upsertFriend(c.env.DB, {
+    lineUserId: profile.userId,
+    displayName: profile.displayName,
+    pictureUrl: profile.pictureUrl ?? null,
+  }).catch((err) => {
+    console.error(`listing-form callback: upsertFriend failed (form_id=${ctx.form_id})`, err);
+  });
 
   // Post to Slack — non-fatal: log on failure but still complete the flow
   await postSlackLinkNotification(c.env, ctx, profile).catch((err) => {
