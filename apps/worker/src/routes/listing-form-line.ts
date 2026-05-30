@@ -2,14 +2,14 @@
 //
 // Flow:
 //   1. User submits STUDIO form on lightning.boxiv.co.jp
-//   2. STUDIO posts form fields to Slack #aaa (existing — handled by STUDIO)
+//   2. STUDIO posts form fields to Slack #pj-lightning-sell (existing — handled by STUDIO)
 //   3. Page shows "LINEで連携" button that redirects to:
 //        GET /listing-form/start?form_id=XXX&return_to=YYY[&display_name=ZZZ]
 //   4. We redirect to LINE Login OAuth with bot_prompt=normal (asks user to add the OA as friend)
 //   5. LINE redirects back to /listing-form/callback?code=&state=
 //   6. We exchange code → access_token → profile (LINE userId, displayName)
-//   7. We post a notification to Slack #aaa (configurable channel)
-//   8. A separate reconciliation bot (existing) batches Slack #aaa to match form
+//   7. We post a notification to Slack #pj-lightning-sell (configurable channel)
+//   8. A separate reconciliation bot (existing) batches Slack #pj-lightning-sell to match form
 //      submissions with LINE link events, then writes to Notion.
 //   9. We redirect user to return_to (with ?linked=1) or show success page.
 //
@@ -17,7 +17,7 @@
 //   LINE_LOGIN_CHANNEL_ID, LINE_LOGIN_CHANNEL_SECRET   — existing
 //   SESSION_SECRET                                      — existing (used for state HMAC)
 //   SLACK_BOT_TOKEN                                     — new (xoxb-...)
-//   SLACK_LISTING_LINK_CHANNEL_ID                       — new (e.g. C0AGSBMPPL1)
+//   SLACK_LISTING_LINK_CHANNEL_ID                       — new (e.g. C08PSA6A7PW)
 //
 // Set new secrets via wrangler:
 //   cd line/line-harness-oss/apps/worker
@@ -29,14 +29,18 @@ import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
 
-// Allowed return_to hosts (open-redirect protection)
+// Allowed return_to hosts (open-redirect protection).
+// Dev hosts (localhost) are only honored when the Worker itself runs on a dev/test origin.
 const RETURN_TO_ALLOWED_HOSTS = [
   'lightning.boxiv.co.jp',
   'line-connect.boxiv.workers.dev',
   'line-connect-test.boxiv.workers.dev',
-  'localhost',
-  '127.0.0.1',
 ];
+const RETURN_TO_DEV_HOSTS = ['localhost', '127.0.0.1'];
+
+function isDevOrigin(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host.endsWith('-test.boxiv.workers.dev');
+}
 
 const STATE_TTL_MS = 30 * 60 * 1000; // 30 min
 
@@ -89,10 +93,16 @@ async function unpackState<T = unknown>(token: string, secret: string): Promise<
   }
 }
 
-function isAllowedReturnTo(url: string): boolean {
+// reqHost = hostname the Worker is currently serving on (gates localhost return_to to dev/test).
+function isAllowedReturnTo(url: string, reqHost: string): boolean {
   try {
     const u = new URL(url);
-    return RETURN_TO_ALLOWED_HOSTS.includes(u.hostname);
+    const isDevHost = RETURN_TO_DEV_HOSTS.includes(u.hostname);
+    // Scheme must be https (blocks javascript:/data:/protocol-relative); http only for dev hosts.
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isDevHost)) return false;
+    if (RETURN_TO_ALLOWED_HOSTS.includes(u.hostname)) return true;
+    if (isDevHost) return isDevOrigin(reqHost); // localhost honored only on a dev/test Worker origin
+    return false;
   } catch {
     return false;
   }
@@ -126,10 +136,20 @@ listingFormLine.get('/listing-form/start', async (c) => {
   const returnTo = c.req.query('return_to') ?? '';
   const displayName = c.req.query('display_name') ?? '';
 
+  const reqUrl = new URL(c.req.url);
+  // Canonical Worker base (per-env) so redirect_uri always matches a registered LINE Callback URL.
+  const workerBase = (c.env.WORKER_URL || reqUrl.origin).replace(/\/+$/, '');
+
   if (!formId) {
     return c.json({ success: false, error: 'form_id is required' }, 400);
   }
-  if (returnTo && !isAllowedReturnTo(returnTo)) {
+  // form_id (= match_key) is a client-generated UUID / short token. Constrain its shape so a crafted
+  // value cannot smuggle newlines/backticks/control chars into the signed state or the Slack
+  // reconciliation post (which the matching bot parses line-by-line).
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(formId)) {
+    return c.json({ success: false, error: 'invalid form_id' }, 400);
+  }
+  if (returnTo && !isAllowedReturnTo(returnTo, reqUrl.hostname)) {
     return c.json({ success: false, error: 'return_to host not allowed' }, 400);
   }
   if (!c.env.SESSION_SECRET) {
@@ -144,12 +164,12 @@ listingFormLine.get('/listing-form/start', async (c) => {
     c.env.SESSION_SECRET,
   );
 
-  const callbackUrl = `${new URL(c.req.url).origin}/listing-form/callback`;
+  const callbackUrl = `${workerBase}/listing-form/callback`;
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
-  loginUrl.searchParams.set('scope', 'profile openid');
+  loginUrl.searchParams.set('scope', 'profile'); // profile のみ（id_token 未使用なので openid は付けない）
   loginUrl.searchParams.set('bot_prompt', 'normal');
   loginUrl.searchParams.set('state', state);
 
@@ -173,22 +193,29 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     return c.html(renderErrorPage(`LINE 連携がキャンセルされました（${errorParam}）`, errorDesc), 400);
   }
   if (!code || !stateParam) {
-    return c.json({ success: false, error: 'code and state required' }, 400);
+    return c.html(renderErrorPage('リクエストが不正です', 'パラメータが不足しています。完了ページから連携をやり直してください。'), 400);
   }
   if (!c.env.SESSION_SECRET) {
     return c.json({ success: false, error: 'SESSION_SECRET not configured' }, 500);
   }
+  if (!c.env.LINE_LOGIN_CHANNEL_ID || !c.env.LINE_LOGIN_CHANNEL_SECRET) {
+    console.error('listing-form callback: LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET not configured');
+    return c.json({ success: false, error: 'LINE login not configured' }, 500);
+  }
 
   const ctx = await unpackState<ListingStateV1>(stateParam, c.env.SESSION_SECRET);
   if (!ctx || ctx.v !== 1) {
-    return c.json({ success: false, error: 'invalid state' }, 400);
+    return c.html(renderErrorPage('リンクが無効です', 'お手数ですが、完了ページから連携をやり直してください。'), 400);
   }
   if (Date.now() - ctx.ts > STATE_TTL_MS) {
-    return c.json({ success: false, error: 'state expired' }, 400);
+    return c.html(renderErrorPage('時間切れです', '連携の有効期限（30分）が切れました。完了ページから再度お試しください。'), 400);
   }
 
-  // Exchange code → tokens
-  const callbackUrl = `${new URL(c.req.url).origin}/listing-form/callback`;
+  const reqUrl = new URL(c.req.url);
+  const workerBase = (c.env.WORKER_URL || reqUrl.origin).replace(/\/+$/, '');
+
+  // Exchange code → tokens (redirect_uri must match the one sent in /start)
+  const callbackUrl = `${workerBase}/listing-form/callback`;
   const tokenRes = await fetch('https://api.line.me/oauth2/v2.1/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -201,9 +228,9 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     }),
   });
   if (!tokenRes.ok) {
-    const errBody = await tokenRes.text();
-    console.error('listing-form callback: token exchange failed', tokenRes.status, errBody);
-    return c.json({ success: false, error: 'LINE token exchange failed' }, 500);
+    // redact upstream body; keep status + form_id for correlation
+    console.error(`listing-form callback: token exchange failed (status=${tokenRes.status}, form_id=${ctx.form_id})`);
+    return c.html(renderErrorPage('連携に失敗しました', 'お手数ですが、しばらくしてから完了ページより再度お試しください。'), 502);
   }
   const tokens = (await tokenRes.json()) as { access_token: string };
 
@@ -212,9 +239,8 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     headers: { Authorization: `Bearer ${tokens.access_token}` },
   });
   if (!profileRes.ok) {
-    const errBody = await profileRes.text();
-    console.error('listing-form callback: profile fetch failed', profileRes.status, errBody);
-    return c.json({ success: false, error: 'LINE profile fetch failed' }, 500);
+    console.error(`listing-form callback: profile fetch failed (status=${profileRes.status}, form_id=${ctx.form_id})`);
+    return c.html(renderErrorPage('連携に失敗しました', 'プロフィールの取得に失敗しました。お手数ですが再度お試しください。'), 502);
   }
   const profile = (await profileRes.json()) as {
     userId: string;
@@ -224,11 +250,12 @@ listingFormLine.get('/listing-form/callback', async (c) => {
 
   // Post to Slack — non-fatal: log on failure but still complete the flow
   await postSlackLinkNotification(c.env, ctx, profile).catch((err) => {
-    console.error('listing-form callback: slack post threw', err);
+    console.error(`listing-form callback: slack post threw (form_id=${ctx.form_id})`, err);
   });
 
-  // Redirect to return_to (with ?linked=1) or render success page
-  if (ctx.return_to) {
+  // Redirect to return_to (with ?linked=1) or render success page.
+  // Re-validate against the allowlist at the redirect site (defense-in-depth).
+  if (ctx.return_to && isAllowedReturnTo(ctx.return_to, reqUrl.hostname)) {
     try {
       const url = new URL(ctx.return_to);
       url.searchParams.set('linked', '1');
@@ -253,11 +280,11 @@ async function postSlackLinkNotification(
   }
   const text = '出品フォーム LINE 連携完了';
   const fields: string[] = [
-    `• Form ID: \`${ctx.form_id}\``,
-    `• LINE userId: \`${profile.userId}\``,
-    `• 表示名: ${profile.displayName}`,
+    `• Form ID: \`${codeField(ctx.form_id)}\``,
+    `• LINE userId: \`${codeField(profile.userId)}\``,
+    `• 表示名: ${slackEscape(profile.displayName)}`,
   ];
-  if (ctx.display_name) fields.push(`• フォーム入力名: ${ctx.display_name}`);
+  if (ctx.display_name) fields.push(`• フォーム入力名: ${slackEscape(ctx.display_name)}`);
 
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
@@ -337,6 +364,18 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// Neutralize Slack mrkdwn in user-supplied text: collapse newlines (blocks forged-line injection into
+// the reconciliation post) and escape <,>,& (blocks <@mention> / <url|text>).
+function slackEscape(s: string): string {
+  return s.replace(/[\r\n]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// For values rendered inside a `code span`: drop backticks and newlines so they cannot break out of
+// the span or inject a forged field line that the reconciliation parser would read.
+function codeField(s: string): string {
+  return s.replace(/[`\r\n]+/g, ' ');
 }
 
 export { listingFormLine };

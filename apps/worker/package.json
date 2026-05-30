@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
     "deploy:test": "node scripts/deploy-test.mjs",
+    "deploy:boxiv": "node scripts/deploy-boxiv.mjs",
+    "deploy:boxiv:test": "node scripts/deploy-boxiv-test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
