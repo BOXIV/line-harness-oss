@@ -7,29 +7,7 @@ import { api } from '@/lib/api'
 import TagBadge from './tag-badge'
 import StatusPicker from './status-picker'
 import { detectFriendSource } from '@/lib/friend-source'
-
-/** BOXIV: friend-name format matches Chats page (formatChatLabel):
- *  "{notion.label} {notion.realName} ({displayName})" if Notion-linked, else just displayName. */
-function formatFriendLabel(f: { displayName?: string | null; metadata?: unknown }): string {
-  const nick = f.displayName || '名前なし'
-  let notion: { label?: string | null; realName?: string | null } | null = null
-  const meta = f.metadata
-  if (meta && typeof meta === 'object') {
-    const n = (meta as { notion?: unknown }).notion
-    if (n && typeof n === 'object') notion = n as { label?: string | null; realName?: string | null }
-  } else if (typeof meta === 'string') {
-    try {
-      const parsed = JSON.parse(meta) as { notion?: { label?: string | null; realName?: string | null } }
-      if (parsed.notion) notion = parsed.notion
-    } catch { /* ignore */ }
-  }
-  if (!notion) return nick
-  const parts: string[] = []
-  if (notion.label) parts.push(notion.label)
-  if (notion.realName) parts.push(notion.realName)
-  if (parts.length === 0) return nick
-  return `${parts.join(' ')} (${nick})`
-}
+import { formatFriendLabel } from '@/lib/friend-name'
 
 interface FriendTableProps {
   friends: FriendWithTags[]
