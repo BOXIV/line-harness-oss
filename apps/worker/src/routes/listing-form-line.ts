@@ -25,9 +25,16 @@
 //   pnpm exec wrangler secret put SLACK_LISTING_LINK_CHANNEL_ID --config wrangler.boxiv.toml
 
 import { Hono } from 'hono';
+import { LineClient } from '@line-crm/line-sdk';
+import { getTemplates, getTemplateById, getFriendByLineUserId, jstNow } from '@line-crm/db';
+import { buildMessage } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
+
+// 出品フォーム LINE 連携 完了時に本人へ自動送信するテンプレの既定名。
+// 環境ごとに template id が異なるため、id 直書きではなく name で解決する（env で上書き可）。
+const DEFAULT_LISTING_LINK_TEMPLATE_NAME = 's03-売却価格の提案';
 
 // Allowed return_to hosts (open-redirect protection)
 const RETURN_TO_ALLOWED_HOSTS = [
@@ -227,6 +234,12 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     console.error('listing-form callback: slack post threw', err);
   });
 
+  // BOXIV: 自動連携 完了時に「S-03 / 売却価格の提案」を連携した本人だけへ push。
+  // 非致命 — 送信に失敗しても連携フロー（リダイレクト）は完了させる。
+  await sendListingLinkTemplate(c.env, profile.userId).catch((err) => {
+    console.error('listing-form callback: S-03 push threw', err);
+  });
+
   // Redirect to return_to (with ?linked=1) or render success page
   if (ctx.return_to) {
     try {
@@ -241,6 +254,54 @@ listingFormLine.get('/listing-form/callback', async (c) => {
 });
 
 // ─── helpers ─────────────────────────────────────────────────
+
+/**
+ * 連携完了テンプレ（S-03 / 売却価格の提案）を解決する。
+ * 解決順: env.LISTING_LINK_TEMPLATE_ID → env / 既定の name 一致 → null。
+ * id は環境ごとに異なるため、name 解決を基本とする（test と prod で同じ name を使う前提）。
+ */
+async function resolveListingLinkTemplate(env: Env['Bindings']) {
+  if (env.LISTING_LINK_TEMPLATE_ID) {
+    const byId = await getTemplateById(env.DB, env.LISTING_LINK_TEMPLATE_ID);
+    if (byId) return byId;
+    console.warn(`listing-form callback: LISTING_LINK_TEMPLATE_ID="${env.LISTING_LINK_TEMPLATE_ID}" not found — name 解決にフォールバック`);
+  }
+  const wantName = env.LISTING_LINK_TEMPLATE_NAME || DEFAULT_LISTING_LINK_TEMPLATE_NAME;
+  const all = await getTemplates(env.DB);
+  return all.find((t) => t.name === wantName) ?? null;
+}
+
+/**
+ * 自動連携した本人（LINE userId）へ S-03 を push し、可能なら messages_log に記録する。
+ * 連携は Messaging API（LINE_CHANNEL_ACCESS_TOKEN）の OA と同一なので push は userId で成立する。
+ * 友だち行は follow webhook 到着前で未作成のことがあるため、ログは存在時のみのベストエフォート。
+ */
+async function sendListingLinkTemplate(env: Env['Bindings'], lineUserId: string) {
+  const tpl = await resolveListingLinkTemplate(env);
+  if (!tpl) {
+    console.warn(`listing-form callback: 連携完了テンプレ（name="${env.LISTING_LINK_TEMPLATE_NAME || DEFAULT_LISTING_LINK_TEMPLATE_NAME}"）が見つからず push をスキップ`);
+    return;
+  }
+  const lineClient = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
+  const message = buildMessage(tpl.message_type, tpl.message_content);
+  await lineClient.pushMessage(lineUserId, [message]);
+
+  // チャット履歴に出すためのログ（友だち行が無ければスキップ）
+  try {
+    const friend = await getFriendByLineUserId(env.DB, lineUserId);
+    if (friend) {
+      await env.DB
+        .prepare(
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+           VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'push', ?)`,
+        )
+        .bind(crypto.randomUUID(), friend.id, tpl.message_type, tpl.message_content, jstNow())
+        .run();
+    }
+  } catch (err) {
+    console.error('listing-form callback: messages_log insert failed', err);
+  }
+}
 
 async function postSlackLinkNotification(
   env: Env['Bindings'],

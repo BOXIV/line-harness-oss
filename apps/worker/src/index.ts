@@ -83,6 +83,10 @@ export type Env = {
     // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用 (claude-sellentry bot)
     SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;
+    // 出品フォーム LINE 連携 完了時に本人へ自動送信するテンプレ (BOXIV)
+    // 既定: name="s03-売却価格の提案" を DB から解決。env で上書き可（環境ごとに id が異なるため）。
+    LISTING_LINK_TEMPLATE_ID?: string;
+    LISTING_LINK_TEMPLATE_NAME?: string;
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;
     NOTION_BUYER_DB_ID?: string;
