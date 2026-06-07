@@ -53,6 +53,8 @@ import { scheduledMessages } from './routes/scheduled-messages.boxiv.js';
 import { media } from './routes/media.boxiv.js';
 // 友だち↔Notion 連携 (BOXIV)
 import { friendNotion } from './routes/friend-notion.boxiv.js';
+// リッチメニュー × 顧客ステータス マッピング (BOXIV)
+import { richMenuStatus } from './routes/rich-menu-status.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -155,6 +157,9 @@ app.route('/', media);
 
 // 友だち↔Notion 連携 (BOXIV)
 app.route('/', friendNotion);
+
+// リッチメニュー × 顧客ステータス マッピング (BOXIV)
+app.route('/', richMenuStatus);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {

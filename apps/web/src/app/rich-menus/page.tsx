@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { api } from '@/lib/api'
-import type { RichMenu } from '@/lib/rich-menu-types'
+import type { RichMenu } from '@line-crm/shared'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import RichMenuPreview from '@/components/rich-menus/rich-menu-preview'
@@ -93,16 +94,23 @@ export default function RichMenusPage() {
     <div>
       <Header
         title="リッチメニュー"
-        description="LINE 公式アカウントのリッチメニューを管理します。デフォルト設定・削除が可能です。"
+        description="LINE 公式アカウントのリッチメニューを管理します。デフォルト設定・編集・削除が可能です。"
         action={
-          <button
-            disabled
-            title="新規作成は次バージョンで対応予定（エディタ実装中）"
-            className="px-4 py-2 text-sm font-medium text-white rounded-lg opacity-50 cursor-not-allowed"
-            style={{ backgroundColor: '#0f172a' }}
-          >
-            + 新規作成（準備中）
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/rich-menus/auto-switch"
+              className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              自動切替設定
+            </Link>
+            <Link
+              href="/rich-menus/new"
+              className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+              style={{ backgroundColor: '#0f172a' }}
+            >
+              + 新規作成
+            </Link>
+          </div>
         }
       />
 
@@ -127,10 +135,14 @@ export default function RichMenusPage() {
         </div>
       ) : menus.length === 0 ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-          <p className="text-gray-500 mb-2">リッチメニューが登録されていません。</p>
-          <p className="text-xs text-gray-400">
-            現状は curl / MCP / LINE Developer Console で作成してください。GUI 作成は次バージョンで対応予定です。
-          </p>
+          <p className="text-gray-500 mb-3">リッチメニューが登録されていません。</p>
+          <Link
+            href="/rich-menus/new"
+            className="inline-block px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+            style={{ backgroundColor: '#0f172a' }}
+          >
+            + 最初のリッチメニューを作成
+          </Link>
         </div>
       ) : (
         <div className="space-y-4">
@@ -148,14 +160,19 @@ export default function RichMenusPage() {
                     className="shrink-0 w-full sm:w-40 cursor-pointer hover:opacity-90 transition-opacity"
                     aria-label="プレビューを拡大"
                   >
-                    <RichMenuPreview menu={menu} maxWidth={160} />
+                    <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={160} />
                   </button>
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <h3 className="text-sm font-semibold text-gray-900 truncate">{menu.name}</h3>
+                          <Link
+                            href={`/rich-menus/detail?id=${encodeURIComponent(menu.richMenuId)}`}
+                            className="text-sm font-semibold text-gray-900 hover:text-slate-700 truncate"
+                          >
+                            {menu.name}
+                          </Link>
                           {menu.selected && (
                             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">
                               デフォルト
@@ -184,6 +201,12 @@ export default function RichMenusPage() {
                             {isBusy ? '設定中...' : 'デフォルトに設定'}
                           </button>
                         )}
+                        <Link
+                          href={`/rich-menus/new?edit=${encodeURIComponent(menu.richMenuId)}`}
+                          className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                        >
+                          編集
+                        </Link>
                         <button
                           onClick={() => handleDelete(menu)}
                           disabled={isBusy}
@@ -198,7 +221,7 @@ export default function RichMenusPage() {
 
                 {isExpanded && (
                   <div className="bg-gray-50 border-t border-gray-200 p-4 flex justify-center">
-                    <RichMenuPreview menu={menu} maxWidth={640} />
+                    <RichMenuPreview menu={menu} richMenuId={menu.richMenuId} maxWidth={640} />
                   </div>
                 )}
               </div>

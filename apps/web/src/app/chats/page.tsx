@@ -9,8 +9,10 @@ import MessageBubble from '@/components/chats/message-bubble'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
+import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import { detectFriendSource } from '@/lib/friend-source'
 import { notionPillClass } from '@/lib/notion-color'
+import { formatFriendLabel } from '@/lib/friend-name'
 
 interface NotionFriendLink {
   source: 'seller' | 'buyer'
@@ -56,16 +58,9 @@ interface ChatDetail extends Chat {
   messages?: ChatMessage[]
 }
 
-/** Format chat list display name: "{label} {realName} ({nickname})" or fallback to nickname. */
-function formatChatLabel(chat: { friendName: string; notion: NotionFriendLink | null }): string {
-  const nickname = chat.friendName || '名前なし'
-  if (!chat.notion) return nickname
-  const parts: string[] = []
-  if (chat.notion.label) parts.push(chat.notion.label)
-  if (chat.notion.realName) parts.push(chat.notion.realName)
-  if (parts.length === 0) return nickname
-  return `${parts.join(' ')} (${nickname})`
-}
+// BOXIV: shared formatter — friend管理 と 個別チャット を同じ表示に統一
+// (formatChatLabel は旧 API のため alias として残す)
+const formatChatLabel = formatFriendLabel
 
 const SHOW_LOADING_PREF_KEY = 'lh_chat_show_loading_indicator'
 const LOADING_SECONDS_PREF_KEY = 'lh_chat_loading_seconds'
@@ -331,15 +326,37 @@ export default function ChatsPage() {
     }
   }, [selectedChatId, loadChatDetail])
 
+  // BOXIV: 5s polling — auto-refresh the open chat detail so automation /
+  // booking / auto-reply sends and incoming messages appear without manual reload.
+  // Polling pauses when the tab is hidden to avoid background quota burn.
+  useEffect(() => {
+    if (!selectedChatId) return
+    let cancelled = false
+    const tick = () => {
+      if (cancelled || document.hidden) return
+      loadChatDetail(selectedChatId)
+    }
+    const interval = window.setInterval(tick, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [selectedChatId, loadChatDetail])
+
   // Auto-scroll the messages container to the latest (bottom) whenever a new
-  // chat is opened or new messages arrive.
+  // chat is opened or new messages arrive. Multiple attempts catch late layout
+  // changes from async-loading images/Flex bubbles so the initial-open case
+  // doesn't get stuck at the oldest message.
   useEffect(() => {
     const el = messagesContainerRef.current
     if (!el) return
-    // Defer to next paint so layout is settled.
-    requestAnimationFrame(() => {
-      el.scrollTop = el.scrollHeight
-    })
+    const scroll = () => { el.scrollTop = el.scrollHeight }
+    scroll()
+    requestAnimationFrame(scroll)
+    const t1 = window.setTimeout(scroll, 100)
+    const t2 = window.setTimeout(scroll, 400)
+    const t3 = window.setTimeout(scroll, 1000)
+    return () => { window.clearTimeout(t1); window.clearTimeout(t2); window.clearTimeout(t3) }
   }, [chatDetail?.id, chatDetail?.messages?.length])
 
   const handleSelectChat = (chatId: string) => {
@@ -618,6 +635,7 @@ export default function ChatsPage() {
                         preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
                         compact
                       />
+                      <RichMenuPicker friendId={chatDetail.friendId} />
                       {chatDetail.notion?.label && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
                           {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}

@@ -1014,6 +1014,8 @@ async function sendBookingReceivedNotification(
       contents: flex,
     },
   ]);
+  // BOXIV: messages_log に記録して個別チャット画面に表示
+  await logOutgoingBookingMessage(env.DB, friend.id, flex);
 }
 
 // 「その他の県」申請受付通知
@@ -1099,6 +1101,29 @@ async function sendOtherReceivedNotification(
       contents: flex,
     },
   ]);
+  // BOXIV: messages_log に記録して個別チャット画面に表示
+  await logOutgoingBookingMessage(env.DB, friend.id, flex);
+}
+
+// BOXIV: shared helper — log a booking-related outgoing flex message to messages_log
+// so the individual chat view shows it alongside user-sent messages.
+async function logOutgoingBookingMessage(
+  db: D1Database,
+  friendId: string,
+  flex: unknown,
+): Promise<void> {
+  try {
+    const { jstNow } = await import('@line-crm/db');
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'push', ?)`,
+      )
+      .bind(crypto.randomUUID(), friendId, JSON.stringify(flex), jstNow())
+      .run();
+  } catch (err) {
+    console.error('logOutgoingBookingMessage failed (non-blocking):', err);
+  }
 }
 
 export { booking };
