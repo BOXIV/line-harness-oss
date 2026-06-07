@@ -25,6 +25,8 @@
 //   pnpm exec wrangler secret put SLACK_LISTING_LINK_CHANNEL_ID --config wrangler.boxiv.toml
 
 import { Hono } from 'hono';
+import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
+import { fireEvent } from '../services/event-bus.js';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
@@ -227,6 +229,13 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     console.error('listing-form callback: slack post threw', err);
   });
 
+  // BOXIV: 自動連携 完了を `listing_link_completed` イベントとして発火する。
+  // 何を送るか（S-03 売却価格の提案 等）は管理UIの automation（=データ）側で決める。
+  // テンプレ/トリガをコードに直書きしない設計。非致命 — 失敗してもリダイレクトは完了。
+  await fireListingLinkCompleted(c.env, profile, ctx).catch((err) => {
+    console.error('listing-form callback: listing_link_completed fire threw', err);
+  });
+
   // Redirect to return_to (with ?linked=1) or render success page
   if (ctx.return_to) {
     try {
@@ -241,6 +250,53 @@ listingFormLine.get('/listing-form/callback', async (c) => {
 });
 
 // ─── helpers ─────────────────────────────────────────────────
+
+/**
+ * 自動連携 完了時に `listing_link_completed` イベントを発火する。
+ *
+ * event-bus の send_message アクションは friends 行（line_user_id）を要求するため、
+ * 先に friend を upsert して存在を保証する。follow webhook（bot_prompt=normal で
+ * 友だち追加されると非同期で届く）より callback が先行することがあるため、
+ * ここで作っておく。同時実行の競合に備え、INSERT 失敗時は再取得でフォールバックする。
+ *
+ * 何を送るかは管理UIの automation（eventType=listing_link_completed）が決める。
+ * lineAccountId は単一OA前提で undefined（automation 側の account 絞り込みは全件マッチ）。
+ */
+async function fireListingLinkCompleted(
+  env: Env['Bindings'],
+  profile: { userId: string; displayName: string; pictureUrl?: string },
+  ctx: ListingStateV1,
+) {
+  let friend;
+  try {
+    friend = await upsertFriend(env.DB, {
+      lineUserId: profile.userId,
+      displayName: profile.displayName ?? null,
+      pictureUrl: profile.pictureUrl ?? null,
+    });
+  } catch {
+    // 競合（follow webhook と同時 INSERT）等 → 既存を取り直す
+    friend = await getFriendByLineUserId(env.DB, profile.userId);
+  }
+  if (!friend) {
+    console.warn('listing-form callback: friend upsert/fetch failed — listing_link_completed をスキップ');
+    return;
+  }
+
+  await fireEvent(
+    env.DB,
+    'listing_link_completed',
+    {
+      friendId: friend.id,
+      eventData: {
+        formId: ctx.form_id,
+        displayName: profile.displayName,
+        formInputName: ctx.display_name || null,
+      },
+    },
+    env.LINE_CHANNEL_ACCESS_TOKEN,
+  );
+}
 
 async function postSlackLinkNotification(
   env: Env['Bindings'],
