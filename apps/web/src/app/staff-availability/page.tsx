@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import AreaTabs from '@/components/staff-availability/area-tabs'
-import { AREA_LABELS, AREA_IDS, type AreaId } from '@/lib/area-meta'
+import { AREA_LABELS, type AreaId } from '@/lib/area-meta'
 
 const SLOT_OPTIONS = [
   { startTime: '10:00', endTime: '12:00' },
@@ -428,11 +428,7 @@ export default function StaffAvailabilityPage() {
             )}
             <div className="flex items-start gap-2 w-full">
               <label className="text-xs text-gray-500 mt-2 shrink-0">エリア</label>
-              <AreaTabs
-                value={listAreaFilter}
-                onChange={(v) => setListAreaFilter(v)}
-                includeAll
-              />
+              <AreaTabs value={listAreaFilter} onChange={(v) => setListAreaFilter(v)} includeAll />
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-500">状態</label>

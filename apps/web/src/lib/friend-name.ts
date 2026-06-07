@@ -1,0 +1,52 @@
+// BOXIV: canonical friend display name format.
+// Used by both Friends 管理画面 (friend-table.tsx) and Chats 個別チャット (chats/page.tsx)
+// so the same person shows with the same label in both places.
+
+export interface NotionFriendLink {
+  source?: 'seller' | 'buyer' | string
+  pageId?: string
+  label?: string | null
+  realName?: string | null
+}
+
+/** Pull the Notion link out of either:
+ *  - a Friend object with metadata: { notion: ... } (parsed JSON object, friends API)
+ *  - a Chat object with notion: { ... } (already extracted, chats API)
+ *  - a string metadata field (legacy / raw) — parsed lazily
+ */
+function pickNotion(input: unknown): NotionFriendLink | null {
+  if (!input || typeof input !== 'object') return null
+  const obj = input as Record<string, unknown>
+  // Chat shape: { notion: {...} }
+  if (obj.notion && typeof obj.notion === 'object') {
+    return obj.notion as NotionFriendLink
+  }
+  // Friend shape: { metadata: {...} } (object after JSON.parse)
+  if (obj.metadata && typeof obj.metadata === 'object') {
+    const meta = obj.metadata as { notion?: NotionFriendLink }
+    if (meta.notion) return meta.notion
+  }
+  // Legacy: metadata is a JSON string
+  if (typeof obj.metadata === 'string') {
+    try {
+      const parsed = JSON.parse(obj.metadata) as { notion?: NotionFriendLink }
+      if (parsed.notion) return parsed.notion
+    } catch { /* ignore */ }
+  }
+  return null
+}
+
+/** Returns "{label} {realName} ({nickname})" if Notion data is linked, else just nickname. */
+export function formatFriendLabel(
+  input: { displayName?: string | null; friendName?: string | null; metadata?: unknown; notion?: NotionFriendLink | null } | null | undefined,
+): string {
+  if (!input) return '名前なし'
+  const nickname = (input.displayName ?? input.friendName ?? '') || '名前なし'
+  const notion = input.notion ?? pickNotion(input)
+  if (!notion) return nickname
+  const parts: string[] = []
+  if (notion.label) parts.push(notion.label)
+  if (notion.realName) parts.push(notion.realName)
+  if (parts.length === 0) return nickname
+  return `${parts.join(' ')} (${nickname})`
+}

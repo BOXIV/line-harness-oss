@@ -7,6 +7,7 @@ import { api } from '@/lib/api'
 import TagBadge from './tag-badge'
 import StatusPicker from './status-picker'
 import { detectFriendSource } from '@/lib/friend-source'
+import { formatFriendLabel } from '@/lib/friend-name'
 
 interface FriendTableProps {
   friends: FriendWithTags[]
@@ -161,7 +162,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                         </div>
                       )}
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{friend.displayName}</p>
+                        <p className="text-sm font-medium text-gray-900">{formatFriendLabel(friend)}</p>
                         {friend.statusMessage && (
                           <p className="text-xs text-gray-400 truncate max-w-[160px]">{friend.statusMessage}</p>
                         )}
@@ -340,7 +341,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   </div>
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-gray-900 text-sm">{messageFriend.displayName}</div>
+                  <div className="font-bold text-gray-900 text-sm">{formatFriendLabel(messageFriend)}</div>
                   <div className="text-[11px] text-gray-500 font-mono break-all">{messageFriend.lineUserId}</div>
                 </div>
               </div>

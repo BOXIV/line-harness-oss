@@ -17,6 +17,7 @@ import {
   getFriendById,
   createBookingInvite as dbCreateBookingInvite,
   getBookingRequestByToken,
+  jstNow,
 } from '@line-crm/db';
 import { prefectureToArea, generateInviteToken } from '../utils/area.js';
 import { queryCustomerByLineUserId, getCustomerByPageId } from '../services/notion.js';
@@ -146,6 +147,14 @@ bookingInvites.post('/api/booking-invites', async (c) => {
             contents: flex,
           },
         ]);
+        // BOXIV: Log to messages_log so individual chat view shows this notification
+        await c.env.DB
+          .prepare(
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
+             VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'push', ?)`,
+          )
+          .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), jstNow())
+          .run();
       } catch (err) {
         console.error('booking-invites: LINE push failed (non-blocking):', err);
       }
