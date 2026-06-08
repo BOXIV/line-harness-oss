@@ -299,18 +299,25 @@ export default function ChatsPage() {
     }).catch(() => { /* non-blocking */ })
   }, [])
 
-  const loadChatDetail = useCallback(async (chatId: string) => {
-    setDetailLoading(true)
+  const loadChatDetail = useCallback(async (chatId: string, opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setDetailLoading(true)
     try {
       const res = await api.chats.get(chatId)
       if (res.success) {
-        setChatDetail(res.data as unknown as ChatDetail)
-        setNotes((res.data as unknown as ChatDetail).notes || '')
+        const next = res.data as unknown as ChatDetail
+        // ポーリング(silent)時は内容に変化が無ければ同一参照を返して再描画を抑止する。
+        // → ちらつき防止 + スクロール位置（最新=最下部）を維持。新着があれば更新され、
+        //   length 変化で下部スクロール effect が発火する。
+        setChatDetail((prev) =>
+          opts?.silent && prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+        )
+        // notes は明示リフレッシュ時のみ反映（5秒ポーリングで編集中の入力を上書きしない）
+        if (!opts?.silent) setNotes(next.notes || '')
       }
     } catch {
-      setError('チャット詳細の読み込みに失敗しました。')
+      if (!opts?.silent) setError('チャット詳細の読み込みに失敗しました。')
     } finally {
-      setDetailLoading(false)
+      if (!opts?.silent) setDetailLoading(false)
     }
   }, [])
 
@@ -334,7 +341,7 @@ export default function ChatsPage() {
     let cancelled = false
     const tick = () => {
       if (cancelled || document.hidden) return
-      loadChatDetail(selectedChatId)
+      loadChatDetail(selectedChatId, { silent: true })
     }
     const interval = window.setInterval(tick, 5000)
     return () => {
