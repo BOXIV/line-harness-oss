@@ -6,8 +6,10 @@ import { usePathname } from 'next/navigation'
 import { useAccount } from '@/contexts/account-context'
 import type { AccountWithStats } from '@/contexts/account-context'
 
-// dev/test ビルド判定（NEXT_PUBLIC_API_URL が test worker を指す）。タイトルに（Dev）を出す。
-const IS_DEV = (process.env.NEXT_PUBLIC_API_URL || '').includes('line-connect-test')
+// ビルド環境判定（NEXT_PUBLIC_API_URL のホストで test / 本番 を見分け、タイトルにバッジを出す）。
+const _API_URL = process.env.NEXT_PUBLIC_API_URL || ''
+const IS_DEV = _API_URL.includes('line-connect-test')
+const IS_PROD = _API_URL.includes('line-connect.boxiv.workers.dev')
 
 // ─── メニュー定義（ユーザー目線のカテゴリ） ───
 
@@ -204,7 +206,7 @@ export default function Sidebar() {
           <img src="/logo.png" alt="BOXIV" className="w-8 h-8" />
           <div>
             <p className="text-sm font-bold text-gray-900 leading-tight">BOXIV LINE Connect</p>
-            <p className="text-xs text-gray-400">管理画面{IS_DEV && <span className="text-orange-500 font-bold">（Dev）</span>}</p>
+            <p className="text-xs text-gray-400">管理画面{IS_DEV ? <span className="text-orange-500 font-bold">（Dev）</span> : IS_PROD ? <span className="text-green-600 font-bold">（本番）</span> : null}</p>
           </div>
         </div>
       </div>
@@ -311,7 +313,7 @@ export default function Sidebar() {
         </button>
         <div className="flex items-center gap-2">
           <img src="/logo.png" alt="BOXIV" className="w-7 h-7" />
-          <p className="text-sm font-bold text-gray-900">BOXIV LINE Connect{IS_DEV && <span className="text-orange-500 ml-1">（Dev）</span>}</p>
+          <p className="text-sm font-bold text-gray-900">BOXIV LINE Connect{IS_DEV ? <span className="text-orange-500 ml-1">（Dev）</span> : IS_PROD ? <span className="text-green-600 ml-1">（本番）</span> : null}</p>
         </div>
       </div>
 

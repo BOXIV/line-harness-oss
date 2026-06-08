@@ -21,8 +21,8 @@ interface MessageBubbleProps {
 function MediaContent({ messageType, content }: { messageType: string; content: string }) {
   if (messageType === 'flex') {
     return (
-      <div className="max-w-[300px]">
-        <FlexPreview content={content} maxWidth={280} />
+      <div className="overflow-x-auto" style={{ maxWidth: 'min(640px, 80vw)' }}>
+        <FlexPreview content={content} maxWidth={300} />
       </div>
     )
   }
@@ -131,7 +131,8 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
         {isRich ? (
           // Rich content renders its own frame (LINE-style card / video player / file card).
           // No outer bubble — keeps the chat background visible around it.
-          <div className="max-w-[320px]">
+          // flex（カルーセル等）は MediaContent 側で幅と横スクロールを持つので外側 cap を外す。
+          <div className={message.messageType === 'flex' ? '' : 'max-w-[320px]'}>
             <MediaContent messageType={message.messageType} content={message.content} />
           </div>
         ) : (

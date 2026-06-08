@@ -188,6 +188,7 @@ function FlexBubble({ bubble, maxWidth }: { bubble: FlexNode; maxWidth?: number 
   return (
     <div style={{
       width: w,
+      flexShrink: 0,
       backgroundColor: '#fff',
       borderRadius: '12px',
       overflow: 'hidden',
@@ -236,7 +237,7 @@ export default function FlexPreview({ content, maxWidth }: { content: string; ma
 
     if (parsed.type === 'carousel' && Array.isArray(parsed.contents)) {
       return (
-        <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', padding: '4px 0' }}>
+        <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', flexWrap: 'nowrap', maxWidth: '100%', padding: '4px 0' }}>
           {parsed.contents.map((bubble: FlexNode, i: number) => (
             <FlexBubble key={i} bubble={bubble} maxWidth={maxWidth} />
           ))}
