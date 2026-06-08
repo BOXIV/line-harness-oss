@@ -57,6 +57,8 @@ import { friendNotion } from './routes/friend-notion.boxiv.js';
 import { richMenuStatus } from './routes/rich-menu-status.boxiv.js';
 // 既存フォロワーの一括インポート (BOXIV, Lステップ移行)
 import { friendImport } from './routes/friend-import.boxiv.js';
+// prod スキーマ整合 (BOXIV, bootstrap 取りこぼし列の補填)
+import { schemaReconcile } from './routes/schema-reconcile.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -164,6 +166,8 @@ app.route('/', friendNotion);
 app.route('/', richMenuStatus);
 // 既存フォロワーの一括インポート (BOXIV, Lステップ移行)
 app.route('/', friendImport);
+// prod スキーマ整合 (BOXIV)
+app.route('/', schemaReconcile);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
