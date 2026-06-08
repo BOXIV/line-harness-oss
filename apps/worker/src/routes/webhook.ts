@@ -576,9 +576,9 @@ async function scheduleBurstNotify(
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({
         channel,
-        text: 'LINEでのメッセージ受信がありました。',
+        text: 'メッセージ受信がありました。',
         blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: `<!channel>\n*LINEでのメッセージ受信がありました。*\nユーザー名: ${userName}　/　掲載ID: ${listingId}` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `<!channel>\n*メッセージ受信がありました。*\nユーザー名: ${userName}　/　掲載ID: ${listingId}` } },
           { type: 'context', elements: [{ type: 'mrkdwn', text: lines || '(本文なし)' }] },
         ],
       }),
