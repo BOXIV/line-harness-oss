@@ -511,6 +511,18 @@ function parseNotionMeta(metadataJson: string | null | undefined): { label?: str
   }
 }
 
+// LINE Connect の管理ユーザー名。Notion 連携時は "掲載ID 実名 (LINE名)"、未連携は LINE名。
+// apps/web/src/lib/friend-name.ts の formatFriendLabel と同一ロジック（dashboard と表記を揃える）。
+function formatFriendLabel(displayName: string | null | undefined, notion: { label?: string | null; realName?: string | null } | null): string {
+  const nickname = displayName || '名前なし';
+  if (!notion) return nickname;
+  const parts: string[] = [];
+  if (notion.label) parts.push(notion.label);
+  if (notion.realName) parts.push(notion.realName);
+  if (!parts.length) return nickname;
+  return `${parts.join(' ')} (${nickname})`;
+}
+
 // BOXIV: 受信メッセージを運用 Slack に通知する。8秒 debounce で同時間帯に送られた
 // メッセージの塊を1通にまとめ、概要（受信通知・管理名・掲載ID）＋本文を小さく
 // （context block）表示する。CHAT_ALERT_SLACK_* 未設定なら何もしない（非致命）。
@@ -546,7 +558,7 @@ async function scheduleBurstNotify(
       .bind(friendId)
       .first<{ display_name: string | null; metadata: string | null }>();
     const notion = parseNotionMeta(fr?.metadata);
-    const name = notion?.realName || fr?.display_name || '(名前未取得)';
+    const userName = formatFriendLabel(fr?.display_name, notion); // LINE Connect 上の管理ユーザー名
     const listingId = notion?.label || '—';
 
     const lines = burst
@@ -566,7 +578,7 @@ async function scheduleBurstNotify(
         channel,
         text: 'LINEでのメッセージ受信がありました。',
         blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: `*LINEでのメッセージ受信がありました。*\n管理名: ${name}　/　掲載ID: ${listingId}` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `<!channel>\n*LINEでのメッセージ受信がありました。*\nユーザー名: ${userName}　/　掲載ID: ${listingId}` } },
           { type: 'context', elements: [{ type: 'mrkdwn', text: lines || '(本文なし)' }] },
         ],
       }),
