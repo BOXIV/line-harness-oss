@@ -61,4 +61,49 @@ friendImport.post('/api/friends/import-followers', async (c) => {
   });
 });
 
+// POST /api/friends/backfill-profiles — display_name 未設定の友だちに getProfile で
+// 表示名/画像/ステータスを埋める。id カーソルで前進（失敗者は NULL のまま次回再試行可）。
+//   body: { cursor?: string (last id), limit?: number(<=100) }
+//   returns: { processed, updated, failed, nextCursor, done }
+friendImport.post('/api/friends/backfill-profiles', async (c) => {
+  const token = c.env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (!token) return c.json({ success: false, error: 'LINE_CHANNEL_ACCESS_TOKEN not configured' }, 500);
+
+  const body = (await c.req.json().catch(() => ({}))) as { cursor?: string; limit?: number };
+  const limit = Math.min(Math.max(body.limit ?? 40, 1), 100);
+  const cursor = body.cursor ?? '';
+
+  const rows = await c.env.DB
+    .prepare(`SELECT id, line_user_id FROM friends WHERE display_name IS NULL AND id > ? ORDER BY id LIMIT ?`)
+    .bind(cursor, limit)
+    .all<{ id: string; line_user_id: string }>();
+  const batch = rows.results ?? [];
+
+  let updated = 0;
+  let failed = 0;
+  const now = new Date().toISOString();
+  for (const f of batch) {
+    try {
+      const r = await fetch(`https://api.line.me/v2/bot/profile/${encodeURIComponent(f.line_user_id)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) { failed++; continue; }
+      const p = (await r.json()) as { displayName?: string; pictureUrl?: string; statusMessage?: string };
+      await c.env.DB
+        .prepare(`UPDATE friends SET display_name = ?, picture_url = ?, status_message = ?, updated_at = ? WHERE id = ?`)
+        .bind(p.displayName ?? null, p.pictureUrl ?? null, p.statusMessage ?? null, now, f.id)
+        .run();
+      if (p.displayName) updated++; else failed++;
+    } catch {
+      failed++;
+    }
+  }
+
+  const nextCursor = batch.length ? batch[batch.length - 1].id : null;
+  return c.json({
+    success: true,
+    data: { processed: batch.length, updated, failed, nextCursor, done: batch.length < limit },
+  });
+});
+
 export { friendImport };
