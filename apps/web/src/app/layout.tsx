@@ -2,8 +2,11 @@ import type { Metadata } from 'next'
 import './globals.css'
 import AppShell from '@/components/app-shell'
 
+// dev/test ビルド判定（NEXT_PUBLIC_API_URL が test worker を指す）
+const IS_DEV = (process.env.NEXT_PUBLIC_API_URL || '').includes('line-connect-test')
+
 export const metadata: Metadata = {
-  title: 'BOXIV LINE Connect 管理画面',
+  title: IS_DEV ? 'BOXIV LINE Connect 管理画面（Dev）' : 'BOXIV LINE Connect 管理画面',
   description: 'BOXIV LINE Connect 管理画面',
   icons: {
     icon: { url: '/favicon.svg', type: 'image/svg+xml' },
