@@ -27,7 +27,7 @@ import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
+import { loadDotenv, requireEnv, parseEnvFile, REPO_ROOT } from '../../../../../scripts/dotenv.mjs';
 
 loadDotenv();
 requireEnv('VITE_LIFF_ID', 'LINE_CONNECT_TEST_D1_ID');
@@ -57,7 +57,11 @@ const TEST_CONFIG = {
   }],
 };
 
-const VITE_LIFF_ID = process.env.VITE_LIFF_ID;
+// テスト用 LIFF は .env.dev を優先して読む。.env の VITE_LIFF_ID は本番 LIFF
+// （prod デプロイ用）なので、これを test ビルドに焼くと test が壊れる。
+// .env.dev に無ければ process.env / .env へフォールバック。
+const devEnv = parseEnvFile(resolve(REPO_ROOT, '.env.dev'));
+const VITE_LIFF_ID = devEnv.VITE_LIFF_ID || process.env.VITE_LIFF_ID;
 
 if (!existsSync(wranglerBoxiv)) {
   console.error('✗ wrangler.boxiv.toml not found at ' + wranglerBoxiv);

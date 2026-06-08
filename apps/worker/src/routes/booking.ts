@@ -157,7 +157,8 @@ function renderAuthRequired(token: string, c: { env: Env['Bindings']; req: { url
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
-  loginUrl.searchParams.set('scope', 'profile openid email');
+  // BOXIV: prod Login channel 2010320277 に email スコープが無いため除外
+  loginUrl.searchParams.set('scope', 'profile openid');
   loginUrl.searchParams.set('bot_prompt', 'normal');
   loginUrl.searchParams.set('state', state);
 

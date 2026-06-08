@@ -88,7 +88,9 @@ liffRoutes.get('/auth/line', async (c) => {
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', channelId);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
-  loginUrl.searchParams.set('scope', 'profile openid email');
+  // BOXIV: prod Login channel 2010320277 に email スコープが無いため除外
+  // （email は liff.ts:295 の getUserByEmail フォールバックでのみ使用・ガード済）。
+  loginUrl.searchParams.set('scope', 'profile openid');
   loginUrl.searchParams.set('bot_prompt', 'normal');
   loginUrl.searchParams.set('state', encodedState);
 
