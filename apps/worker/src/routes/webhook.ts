@@ -79,6 +79,39 @@ webhook.post('/webhook', async (c) => {
   return c.json({ status: 'ok' }, 200);
 });
 
+// BOXIV: Lstep からの移行で、既存の OA 友だちが Connect の D1 に未登録のことがある。
+// follow イベントは新規追加時にしか来ないため、既存友だちが postback / message で
+// 初めて接触した時にプロフィールを取得して登録する（lazy backfill）。これが無いと
+// 既存友だちのリッチメニュータップ等が friend 不在で黙って無視される。
+async function resolveOrCreateFriend(
+  db: D1Database,
+  lineClient: LineClient,
+  userId: string,
+  lineAccountId: string | null = null,
+) {
+  const existing = await getFriendByLineUserId(db, userId);
+  if (existing) return existing;
+  let profile;
+  try {
+    profile = await lineClient.getProfile(userId);
+  } catch (err) {
+    console.error('resolveOrCreateFriend: getProfile failed for', userId, err);
+  }
+  const friend = await upsertFriend(db, {
+    lineUserId: userId,
+    displayName: profile?.displayName ?? null,
+    pictureUrl: profile?.pictureUrl ?? null,
+    statusMessage: profile?.statusMessage ?? null,
+  });
+  if (lineAccountId) {
+    await db
+      .prepare('UPDATE friends SET line_account_id = ? WHERE id = ? AND line_account_id IS NULL')
+      .bind(lineAccountId, friend.id)
+      .run();
+  }
+  return friend;
+}
+
 async function handleEvent(
   db: D1Database,
   lineClient: LineClient,
@@ -196,7 +229,7 @@ async function handleEvent(
     const userId =
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await resolveOrCreateFriend(db, lineClient, userId, lineAccountId);
     if (!friend) return;
     const data = event.postback?.data ?? '';
     await fireEvent(
@@ -219,7 +252,7 @@ async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await resolveOrCreateFriend(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
     const incomingText = textMessage.text;
@@ -405,7 +438,7 @@ async function handleEvent(
   ) {
     const userId = event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await resolveOrCreateFriend(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
     const kind = event.message.type;
