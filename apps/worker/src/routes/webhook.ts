@@ -67,7 +67,7 @@ webhook.post('/webhook', async (c) => {
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES);
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES, c.env.CHAT_ALERT_SLACK_BOT_TOKEN, c.env.CHAT_ALERT_SLACK_CHANNEL_ID);
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -121,6 +121,8 @@ async function handleEvent(
   workerUrl?: string,
   liffUrl?: string,
   mediaBucket?: R2Bucket,
+  chatAlertToken?: string,
+  chatAlertChannel?: string,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -267,6 +269,9 @@ async function handleEvent(
       )
       .bind(logId, friend.id, incomingText, now)
       .run();
+
+    // BOXIV: 受信メッセージを Slack に通知（運用 Bot。未設定なら no-op・非致命）
+    await notifyNewMessageSlack(chatAlertToken, chatAlertChannel, friend, 'text', incomingText);
 
     // チャットを作成/更新（ユーザーの自発的メッセージのみ unread にする）
     // ボタンタップ等の自動応答キーワードは除外
@@ -483,7 +488,32 @@ async function handleEvent(
       .bind(crypto.randomUUID(), friend.id, kind, JSON.stringify(info), jstNow())
       .run();
     await upsertChatOnMessage(db, friend.id);
+    await notifyNewMessageSlack(chatAlertToken, chatAlertChannel, friend, kind, '');
     return;
+  }
+}
+
+// BOXIV: 受信メッセージを運用 Slack に通知する。CHAT_ALERT_SLACK_* 未設定なら何もしない（非致命）。
+async function notifyNewMessageSlack(
+  token: string | undefined,
+  channel: string | undefined,
+  friend: { display_name?: string | null; line_user_id: string },
+  kind: string,
+  preview: string,
+): Promise<void> {
+  if (!token || !channel) return;
+  const name = friend.display_name || friend.line_user_id;
+  const body = kind === 'text'
+    ? (preview.length > 200 ? preview.slice(0, 200) + '…' : preview)
+    : `[${kind}]`;
+  try {
+    await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ channel, text: `💬 *${name}* さんから新着メッセージ\n${body}` }),
+    });
+  } catch (err) {
+    console.error('notifyNewMessageSlack failed', err);
   }
 }
 
