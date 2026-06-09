@@ -111,7 +111,7 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
     }
   }
 
-  const pillCls = `inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${notionPillClass(current?.color)}`
+  const pillCls = `inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-md text-xs font-medium ${notionPillClass(current?.color)}`
 
   return (
     <div className="inline-block">
@@ -163,7 +163,7 @@ export default function StatusPicker({ friendId, preferredSource, compact, onCha
                 disabled={saving || o.id === current?.id}
                 className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
               >
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full ${notionPillClass(o.color)}`}>
+                <span className={`inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-md ${notionPillClass(o.color)}`}>
                   {o.name}
                 </span>
                 {o.id === current?.id && <span className="text-gray-400">現在</span>}

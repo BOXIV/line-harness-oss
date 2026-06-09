@@ -200,8 +200,8 @@ export default function Sidebar() {
 
   const sidebarContent = (
     <>
-      {/* ロゴ */}
-      <div className="px-6 py-5 border-b border-gray-200">
+      {/* ロゴ（デスクトップのみ。モバイルはヘッダーに表示済みなので drawer では非表示） */}
+      <div className="hidden lg:block px-6 py-5 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <img src="/logo.png" alt="BOXIV" className="w-8 h-8" />
           <div>
@@ -312,8 +312,8 @@ export default function Sidebar() {
           </svg>
         </button>
         <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="BOXIV" className="w-7 h-7" />
-          <p className="text-sm font-bold text-gray-900">BOXIV LINE Connect{IS_DEV ? <span className="text-orange-500 ml-1">（Dev）</span> : IS_PROD ? <span className="text-green-600 ml-1">（本番）</span> : null}</p>
+          <img src="/logo.png" alt="BOXIV" className="w-5 h-5" />
+          <p className="text-sm font-bold text-gray-900 leading-none">BOXIV LINE Connect{IS_DEV ? <span className="text-orange-500 ml-1">（Dev）</span> : IS_PROD ? <span className="text-green-600 ml-1">（本番）</span> : null}</p>
         </div>
       </div>
 
@@ -329,6 +329,8 @@ export default function Sidebar() {
             </svg>
           </button>
         </div>
+        {/* モバイル drawer はブランドロゴを出さないので、閉じるボタン分の余白だけ確保 */}
+        <div className="h-14 shrink-0" />
         {sidebarContent}
       </aside>
 
