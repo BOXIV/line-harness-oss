@@ -38,9 +38,12 @@ function pickNotion(input: unknown): NotionFriendLink | null {
 
 /** Returns "{label} {realName} ({nickname})" if Notion data is linked, else just nickname. */
 export function formatFriendLabel(
-  input: { displayName?: string | null; friendName?: string | null; metadata?: unknown; notion?: NotionFriendLink | null } | null | undefined,
+  input: { managedName?: string | null; displayName?: string | null; friendName?: string | null; metadata?: unknown; notion?: NotionFriendLink | null } | null | undefined,
 ): string {
   if (!input) return '名前なし'
+  // 管理名（管理画面で編集する表示名）が設定されていれば最優先で表示する
+  const managed = (input.managedName ?? '').trim()
+  if (managed) return managed
   const nickname = (input.displayName ?? input.friendName ?? '') || '名前なし'
   const notion = input.notion ?? pickNotion(input)
   if (!notion) return nickname

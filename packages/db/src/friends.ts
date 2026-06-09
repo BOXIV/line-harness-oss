@@ -3,6 +3,7 @@ export interface Friend {
   id: string;
   line_user_id: string;
   display_name: string | null;
+  managed_name: string | null;
   picture_url: string | null;
   status_message: string | null;
   is_following: number;
@@ -69,6 +70,24 @@ export async function getFriendById(
     .prepare(`SELECT * FROM friends WHERE id = ?`)
     .bind(id)
     .first<Friend>();
+}
+
+/**
+ * 管理画面で編集する friend の可変フィールドを更新する。
+ * managed_name は LINE 再同期に上書きされない管理者編集の表示名（display_name は別管理）。
+ */
+export async function updateFriend(
+  db: D1Database,
+  id: string,
+  fields: { managedName?: string | null },
+): Promise<Friend | null> {
+  if ('managedName' in fields) {
+    await db
+      .prepare(`UPDATE friends SET managed_name = ?, updated_at = ? WHERE id = ?`)
+      .bind(fields.managedName ?? null, jstNow(), id)
+      .run();
+  }
+  return getFriendById(db, id);
 }
 
 export interface UpsertFriendInput {

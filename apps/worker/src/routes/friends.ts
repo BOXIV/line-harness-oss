@@ -3,6 +3,7 @@ import {
   getFriends,
   getFriendById,
   getFriendCount,
+  updateFriend,
   addTagToFriend,
   removeTagFromFriend,
   getFriendTags,
@@ -43,6 +44,7 @@ function serializeFriend(row: DbFriend) {
     id: row.id,
     lineUserId: row.line_user_id,
     displayName: row.display_name,
+    managedName: row.managed_name,
     pictureUrl: row.picture_url,
     statusMessage: row.status_message,
     isFollowing: Boolean(row.is_following),
@@ -71,6 +73,7 @@ friends.get('/api/friends', async (c) => {
     const offset = Number(c.req.query('offset') ?? '0');
     const tagId = c.req.query('tagId');
     const lineAccountId = c.req.query('lineAccountId');
+    const statusOptionId = c.req.query('statusOptionId');
     const search = c.req.query('search');
 
     const db = c.env.DB;
@@ -86,9 +89,15 @@ friends.get('/api/friends', async (c) => {
       conditions.push('f.line_account_id = ?');
       binds.push(lineAccountId);
     }
+    if (statusOptionId) {
+      conditions.push(
+        'EXISTS (SELECT 1 FROM friend_status_assignments fsa WHERE fsa.friend_id = f.id AND fsa.status_option_id = ?)',
+      );
+      binds.push(statusOptionId);
+    }
     if (search) {
-      conditions.push('(f.display_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?)');
-      binds.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      conditions.push('(f.display_name LIKE ? OR f.managed_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?)');
+      binds.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
     }
     // Metadata filters: ?metadata.key=value (e.g. ?metadata.monthly_cost=〜100万円)
     const url = new URL(c.req.url);
@@ -205,6 +214,26 @@ friends.get('/api/friends/:id', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/friends/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PUT /api/friends/:id - 管理画面で編集する可変フィールド（管理名）を更新
+friends.put('/api/friends/:id', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const db = c.env.DB;
+    const friend = await getFriendById(db, friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+    const body = await c.req.json<{ managedName?: string | null }>();
+    const managedName =
+      typeof body.managedName === 'string' ? body.managedName.trim() || null : null;
+    const updated = await updateFriend(db, friendId, { managedName });
+    return c.json({ success: true, data: updated ? serializeFriend(updated) : null });
+  } catch (err) {
+    console.error('PUT /api/friends/:id error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

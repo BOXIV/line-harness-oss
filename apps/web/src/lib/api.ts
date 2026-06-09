@@ -68,6 +68,7 @@ export type FriendListParams = {
   limit?: string
   tagId?: string
   accountId?: string
+  statusOptionId?: string
   search?: string
 }
 
@@ -81,6 +82,7 @@ export const api = {
       if (params?.limit) query.limit = params.limit
       if (params?.tagId) query.tagId = params.tagId
       if (params?.accountId) query.lineAccountId = params.accountId
+      if (params?.statusOptionId) query.statusOptionId = params.statusOptionId
       if (params?.search) query.search = params.search
       return fetchApi<ApiResponse<PaginatedResponse<FriendWithTags>>>(
         '/api/friends?' + new URLSearchParams(query)
@@ -91,6 +93,11 @@ export const api = {
     sendMessage: (id: string, data: { content: string; messageType?: string; altText?: string }) =>
       fetchApi<ApiResponse<{ messageId: string }>>(`/api/friends/${id}/messages`, {
         method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: { managedName?: string | null }) =>
+      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}`, {
+        method: 'PUT',
         body: JSON.stringify(data),
       }),
     count: (params?: { accountId?: string }) => {

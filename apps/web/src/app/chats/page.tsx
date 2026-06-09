@@ -279,6 +279,20 @@ export default function ChatsPage() {
     }).catch(() => { /* non-blocking */ })
   }, [])
 
+  // 友だち一覧「個別チャットを開く」からの deep-link: /chats?friendId=... を
+  // friendId → chatId(find-or-create) で解決して選択する。useSearchParams は Suspense 境界が
+  // 必要になるため、mount 時に一度だけ window.location から読む。
+  const deepLinkResolvedRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkResolvedRef.current) return
+    deepLinkResolvedRef.current = true
+    const friendId = new URLSearchParams(window.location.search).get('friendId')
+    if (!friendId) return
+    api.chats.create({ friendId }).then((res) => {
+      if (res.success && res.data?.id) setSelectedChatId(res.data.id)
+    }).catch(() => { /* non-blocking */ })
+  }, [])
+
   const loadChatDetail = useCallback(async (chatId: string, opts?: { silent?: boolean }) => {
     if (!opts?.silent) setDetailLoading(true)
     try {

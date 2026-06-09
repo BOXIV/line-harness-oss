@@ -20,6 +20,8 @@ export default function FriendsPage() {
   const [selectedTagId, setSelectedTagId] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedStatusId, setSelectedStatusId] = useState('')
+  const [statusOptions, setStatusOptions] = useState<Array<{ id: string; name: string; color: string | null; source: 'seller' | 'buyer' }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -42,6 +44,7 @@ export default function FriendsPage() {
       }
       if (selectedTagId) params.tagId = selectedTagId
       if (selectedAccountId) params.accountId = selectedAccountId
+      if (selectedStatusId) params.statusOptionId = selectedStatusId
       if (searchQuery) params.search = searchQuery
 
       const res = await api.friends.list(params)
@@ -57,15 +60,21 @@ export default function FriendsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, selectedTagId, selectedAccountId, searchQuery])
+  }, [page, selectedTagId, selectedAccountId, selectedStatusId, searchQuery])
 
   useEffect(() => {
     loadTags()
   }, [loadTags])
 
   useEffect(() => {
+    api.friendStatus.listOptions().then((res) => {
+      if (res.success) setStatusOptions(res.data.map((o) => ({ id: o.id, name: o.name, color: o.color, source: o.source })))
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
     setPage(1)
-  }, [selectedTagId, selectedAccountId, searchQuery])
+  }, [selectedTagId, selectedAccountId, selectedStatusId, searchQuery])
 
   // 検索 debounce（300ms）
   useEffect(() => {
@@ -115,6 +124,30 @@ export default function FriendsPage() {
             {allTags.map((tag) => (
               <option key={tag.id} value={tag.id}>{tag.name}</option>
             ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-600 font-medium whitespace-nowrap">ステータス:</label>
+          <select
+            className="text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:border-slate-900 flex-1 sm:flex-none"
+            value={selectedStatusId}
+            onChange={(e) => setSelectedStatusId(e.target.value)}
+          >
+            <option value="">すべて</option>
+            {statusOptions.some((o) => o.source === 'seller') && (
+              <optgroup label="出品者">
+                {statusOptions.filter((o) => o.source === 'seller').map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </optgroup>
+            )}
+            {statusOptions.some((o) => o.source === 'buyer') && (
+              <optgroup label="購入者">
+                {statusOptions.filter((o) => o.source === 'buyer').map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
         <span className="text-sm text-gray-500">

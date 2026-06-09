@@ -15,8 +15,10 @@ export interface Friend {
   id: string;
   /** LINE ユーザーID */
   lineUserId: string;
-  /** 表示名 */
+  /** 表示名（LINE プロフィール由来。再同期で上書きされる） */
   displayName: string;
+  /** 管理名（管理画面で編集する表示名。未設定なら displayName / Notion ラベルを表示） */
+  managedName?: string | null;
   /** プロフィール画像URL */
   pictureUrl: string | null;
   /** ステータスメッセージ */
