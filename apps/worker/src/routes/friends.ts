@@ -273,6 +273,7 @@ friends.post('/api/friends/:id/tags', async (c) => {
       { friendId, eventData: { tagId: body.tagId, action: 'add' } },
       accessToken,
       lineAccountId,
+      c.env,
     );
 
     return c.json({ success: true, data: null }, 201);
@@ -299,6 +300,7 @@ friends.delete('/api/friends/:id/tags/:tagId', async (c) => {
       { friendId, eventData: { tagId, action: 'remove' } },
       accessToken,
       lineAccountId,
+      c.env,
     );
 
     return c.json({ success: true, data: null });
