@@ -257,9 +257,28 @@ async function linkAndAddFlow() {
 
 // ─── Entry Point ────────────────────────────────────────
 
+// liff.init() は LINE サーバーへの通信を伴い、一時的に失敗して「LINEサーバーと通信できません」を
+// 招くことがある。数回リトライして一過性の揺らぎを吸収する。
+async function initLiffWithRetry(attempts = 3): Promise<void> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await liff.init({ liffId: LIFF_ID });
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function main() {
+  // 連携フロー（?redirect= 付き）は、LIFF が使えなくてもワーカーの OAuth start へ直接遷移すれば継続できる。
+  // init 失敗時のフォールバック先として先に取得しておく。
+  const redirectUrl = getRedirectUrl();
   try {
-    await liff.init({ liffId: LIFF_ID });
+    await initLiffWithRetry();
 
     if (!liff.isLoggedIn()) {
       liff.login({ redirectUri: window.location.href });
@@ -277,7 +296,13 @@ async function main() {
       await linkAndAddFlow();
     }
   } catch (err) {
-    showError(err instanceof Error ? err.message : 'LIFF初期化エラー');
+    // LIFF 初期化に失敗（LINEサーバーとの一時的な通信失敗等）。
+    // 連携フローなら LIFF を介さずワーカーの OAuth へ直接遷移して継続（エラー表示・手動リトライを回避）。
+    if (redirectUrl) {
+      window.location.href = redirectUrl;
+    } else {
+      showError(err instanceof Error ? err.message : 'LIFF初期化エラー');
+    }
   }
 }
 

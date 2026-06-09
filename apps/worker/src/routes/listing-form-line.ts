@@ -2,21 +2,21 @@
 //
 // Flow:
 //   1. User submits STUDIO form on lightning.boxiv.co.jp
-//   2. STUDIO posts form fields to Slack #aaa (existing — handled by STUDIO)
+//   2. STUDIO posts form fields to Slack #pj-lightning-sell (existing — handled by STUDIO)
 //   3. Page shows "LINEで連携" button that redirects to:
 //        GET /listing-form/start?form_id=XXX&return_to=YYY[&display_name=ZZZ]
 //   4. We redirect to LINE Login OAuth with bot_prompt=normal (asks user to add the OA as friend)
 //   5. LINE redirects back to /listing-form/callback?code=&state=
 //   6. We exchange code → access_token → profile (LINE userId, displayName)
-//   7. We post a notification to Slack #aaa (configurable channel)
-//   8. A separate reconciliation bot (existing) batches Slack #aaa to match form
+//   7. We post a notification to Slack #pj-lightning-sell (configurable channel)
+//   8. A separate reconciliation bot (existing) batches Slack #pj-lightning-sell to match form
 //      submissions with LINE link events, then writes to Notion.
 //   9. We redirect user to return_to (with ?linked=1) or show success page.
 //
 // Required env (Worker secrets):
 //   LINE_LOGIN_CHANNEL_ID, LINE_LOGIN_CHANNEL_SECRET   — existing
 //   SESSION_SECRET                                      — existing (used for state HMAC)
-//   SELLENTRY_SLACK_BOT_TOKEN                           — claude-sellentry bot (xoxb-...)
+//   SELLENTRY_SLACK_BOT_TOKEN                           — claude-sellentry bot (xoxb-..., groups:history+chat:write・チャンネル member)
 //   SLACK_LISTING_LINK_CHANNEL_ID                       — #pj-lightning-sell (e.g. C08PSA6A7PW)
 //
 // Set new secrets via wrangler:
@@ -31,14 +31,18 @@ import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
 
-// Allowed return_to hosts (open-redirect protection)
+// Allowed return_to hosts (open-redirect protection).
+// Dev hosts (localhost) are only honored when the Worker itself runs on a dev/test origin.
 const RETURN_TO_ALLOWED_HOSTS = [
   'lightning.boxiv.co.jp',
   'line-connect.boxiv.workers.dev',
   'line-connect-test.boxiv.workers.dev',
-  'localhost',
-  '127.0.0.1',
 ];
+const RETURN_TO_DEV_HOSTS = ['localhost', '127.0.0.1'];
+
+function isDevOrigin(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host.endsWith('-test.boxiv.workers.dev');
+}
 
 const STATE_TTL_MS = 30 * 60 * 1000; // 30 min
 
@@ -60,12 +64,19 @@ async function hmacSign(payload: string, secret: string): Promise<string> {
 }
 
 function b64urlEncode(s: string): string {
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  // UTF-8 safe: btoa() only accepts Latin1 and throws on non-Latin1 (e.g. 日本語 の display_name).
+  // Encode to bytes first so a Japanese name in the signed state doesn't 500 /listing-form/start.
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function b64urlDecode(s: string): string {
-  let pad = s + '==='.slice((s.length + 3) % 4);
-  return atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
+  const pad = s + '==='.slice((s.length + 3) % 4);
+  const bin = atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 async function packState(payloadObj: object, secret: string): Promise<string> {
@@ -91,10 +102,16 @@ async function unpackState<T = unknown>(token: string, secret: string): Promise<
   }
 }
 
-function isAllowedReturnTo(url: string): boolean {
+// reqHost = hostname the Worker is currently serving on (gates localhost return_to to dev/test).
+function isAllowedReturnTo(url: string, reqHost: string): boolean {
   try {
     const u = new URL(url);
-    return RETURN_TO_ALLOWED_HOSTS.includes(u.hostname);
+    const isDevHost = RETURN_TO_DEV_HOSTS.includes(u.hostname);
+    // Scheme must be https (blocks javascript:/data:/protocol-relative); http only for dev hosts.
+    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isDevHost)) return false;
+    if (RETURN_TO_ALLOWED_HOSTS.includes(u.hostname)) return true;
+    if (isDevHost) return isDevOrigin(reqHost); // localhost honored only on a dev/test Worker origin
+    return false;
   } catch {
     return false;
   }
@@ -128,10 +145,20 @@ listingFormLine.get('/listing-form/start', async (c) => {
   const returnTo = c.req.query('return_to') ?? '';
   const displayName = c.req.query('display_name') ?? '';
 
+  const reqUrl = new URL(c.req.url);
+  // Canonical Worker base (per-env) so redirect_uri always matches a registered LINE Callback URL.
+  const workerBase = (c.env.WORKER_URL || reqUrl.origin).replace(/\/+$/, '');
+
   if (!formId) {
     return c.json({ success: false, error: 'form_id is required' }, 400);
   }
-  if (returnTo && !isAllowedReturnTo(returnTo)) {
+  // form_id (= match_key) is a client-generated UUID / short token. Constrain its shape so a crafted
+  // value cannot smuggle newlines/backticks/control chars into the signed state or the Slack
+  // reconciliation post (which the matching bot parses line-by-line).
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(formId)) {
+    return c.json({ success: false, error: 'invalid form_id' }, 400);
+  }
+  if (returnTo && !isAllowedReturnTo(returnTo, reqUrl.hostname)) {
     return c.json({ success: false, error: 'return_to host not allowed' }, 400);
   }
   if (!c.env.SESSION_SECRET) {
@@ -146,13 +173,15 @@ listingFormLine.get('/listing-form/start', async (c) => {
     c.env.SESSION_SECRET,
   );
 
-  const callbackUrl = `${new URL(c.req.url).origin}/listing-form/callback`;
+  const callbackUrl = `${workerBase}/listing-form/callback`;
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
   loginUrl.searchParams.set('redirect_uri', callbackUrl);
-  loginUrl.searchParams.set('scope', 'profile openid');
-  loginUrl.searchParams.set('bot_prompt', 'normal');
+  loginUrl.searchParams.set('scope', 'profile'); // profile のみ（id_token 未使用なので openid は付けない）
+  // aggressive: ログインのたびに「友だち追加」画面を必ず表示。未追加/ブロック中の人にも再追加（=ブロック解除）を促す。
+  // ※ LINE 仕様上、自動追加・自動ブロック解除は不可。ユーザーが「追加」をタップして初めて成立する。
+  loginUrl.searchParams.set('bot_prompt', 'aggressive');
   loginUrl.searchParams.set('state', state);
 
   return c.redirect(loginUrl.toString());
@@ -175,22 +204,29 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     return c.html(renderErrorPage(`LINE 連携がキャンセルされました（${errorParam}）`, errorDesc), 400);
   }
   if (!code || !stateParam) {
-    return c.json({ success: false, error: 'code and state required' }, 400);
+    return c.html(renderErrorPage('リクエストが不正です', 'パラメータが不足しています。完了ページから連携をやり直してください。'), 400);
   }
   if (!c.env.SESSION_SECRET) {
     return c.json({ success: false, error: 'SESSION_SECRET not configured' }, 500);
   }
+  if (!c.env.LINE_LOGIN_CHANNEL_ID || !c.env.LINE_LOGIN_CHANNEL_SECRET) {
+    console.error('listing-form callback: LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET not configured');
+    return c.json({ success: false, error: 'LINE login not configured' }, 500);
+  }
 
   const ctx = await unpackState<ListingStateV1>(stateParam, c.env.SESSION_SECRET);
   if (!ctx || ctx.v !== 1) {
-    return c.json({ success: false, error: 'invalid state' }, 400);
+    return c.html(renderErrorPage('リンクが無効です', 'お手数ですが、完了ページから連携をやり直してください。'), 400);
   }
   if (Date.now() - ctx.ts > STATE_TTL_MS) {
-    return c.json({ success: false, error: 'state expired' }, 400);
+    return c.html(renderErrorPage('時間切れです', '連携の有効期限（30分）が切れました。完了ページから再度お試しください。'), 400);
   }
 
-  // Exchange code → tokens
-  const callbackUrl = `${new URL(c.req.url).origin}/listing-form/callback`;
+  const reqUrl = new URL(c.req.url);
+  const workerBase = (c.env.WORKER_URL || reqUrl.origin).replace(/\/+$/, '');
+
+  // Exchange code → tokens (redirect_uri must match the one sent in /start)
+  const callbackUrl = `${workerBase}/listing-form/callback`;
   const tokenRes = await fetch('https://api.line.me/oauth2/v2.1/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -203,9 +239,9 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     }),
   });
   if (!tokenRes.ok) {
-    const errBody = await tokenRes.text();
-    console.error('listing-form callback: token exchange failed', tokenRes.status, errBody);
-    return c.json({ success: false, error: 'LINE token exchange failed' }, 500);
+    // redact upstream body; keep status + form_id for correlation
+    console.error(`listing-form callback: token exchange failed (status=${tokenRes.status}, form_id=${ctx.form_id})`);
+    return c.html(renderErrorPage('連携に失敗しました', 'お手数ですが、しばらくしてから完了ページより再度お試しください。'), 502);
   }
   const tokens = (await tokenRes.json()) as { access_token: string };
 
@@ -214,9 +250,8 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     headers: { Authorization: `Bearer ${tokens.access_token}` },
   });
   if (!profileRes.ok) {
-    const errBody = await profileRes.text();
-    console.error('listing-form callback: profile fetch failed', profileRes.status, errBody);
-    return c.json({ success: false, error: 'LINE profile fetch failed' }, 500);
+    console.error(`listing-form callback: profile fetch failed (status=${profileRes.status}, form_id=${ctx.form_id})`);
+    return c.html(renderErrorPage('連携に失敗しました', 'プロフィールの取得に失敗しました。お手数ですが再度お試しください。'), 502);
   }
   const profile = (await profileRes.json()) as {
     userId: string;
@@ -224,20 +259,30 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     pictureUrl?: string;
   };
 
-  // Post to Slack — non-fatal: log on failure but still complete the flow
-  await postSlackLinkNotification(c.env, ctx, profile).catch((err) => {
-    console.error('listing-form callback: slack post threw', err);
+  // 友だちを D1 に upsert: 既に友だちで follow webhook が発火しないケースでも friend を確実に登録する。
+  // これで突合ボットの friend↔Notion 連携が lineUserId で friend を見つけられる。非致命。
+  await upsertFriend(c.env.DB, {
+    lineUserId: profile.userId,
+    displayName: profile.displayName,
+    pictureUrl: profile.pictureUrl ?? null,
+  }).catch((err) => {
+    console.error(`listing-form callback: upsertFriend failed (form_id=${ctx.form_id})`, err);
   });
 
-  // BOXIV: 自動連携 完了を `listing_link_completed` イベントとして発火する。
-  // 何を送るか（S-03 売却価格の提案 等）は管理UIの automation（=データ）側で決める。
-  // テンプレ/トリガをコードに直書きしない設計。非致命 — 失敗してもリダイレクトは完了。
+  // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
+  // 何を送るかは管理UIの automation 側で決める。非致命 — 失敗してもリダイレクトは完了。
   await fireListingLinkCompleted(c.env, profile, ctx).catch((err) => {
     console.error('listing-form callback: listing_link_completed fire threw', err);
   });
 
-  // Redirect to return_to (with ?linked=1) or render success page
-  if (ctx.return_to) {
+  // Post to Slack — non-fatal: 突合ボット用（#pj-lightning-sell）。失敗してもフロー継続。
+  await postSlackLinkNotification(c.env, ctx, profile).catch((err) => {
+    console.error(`listing-form callback: slack post threw (form_id=${ctx.form_id})`, err);
+  });
+
+  // Redirect to return_to (with ?linked=1) or render success page.
+  // Re-validate against the allowlist at the redirect site (defense-in-depth).
+  if (ctx.return_to && isAllowedReturnTo(ctx.return_to, reqUrl.hostname)) {
     try {
       const url = new URL(ctx.return_to);
       url.searchParams.set('linked', '1');
@@ -307,13 +352,16 @@ async function postSlackLinkNotification(
     console.warn('listing-form callback: SELLENTRY_SLACK_BOT_TOKEN / SLACK_LISTING_LINK_CHANNEL_ID not configured — skipping');
     return;
   }
-  const text = '出品フォーム LINE 連携完了';
-  const fields: string[] = [
-    `• Form ID: \`${ctx.form_id}\``,
-    `• LINE userId: \`${profile.userId}\``,
-    `• 表示名: ${profile.displayName}`,
+  // 注: ここは「LINEログイン完了」だけ（出品フォームとの突合は後段の突合ボットが実施）。
+  const title = 'LINEログイン完了';
+  // 各値はコードボックス（`…`）で囲って視認性を上げる。表示名も同様に囲う。
+  const lines = [
+    `:white_check_mark: *${title}*`,
+    `Form ID: \`${codeField(ctx.form_id)}\``,
+    `LINE userId: \`${codeField(profile.userId)}\``,
+    `表示名: \`${codeField(profile.displayName)}\``,
   ];
-  if (ctx.display_name) fields.push(`• フォーム入力名: ${ctx.display_name}`);
+  if (ctx.display_name) lines.push(`フォーム入力名: \`${codeField(ctx.display_name)}\``);
 
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
@@ -321,12 +369,17 @@ async function postSlackLinkNotification(
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
     },
+    // 小さく見やすく: トップレベル text は付けない（「LINEログイン完了」の二重表示を防ぐ）。
+    // 中身はカラーサイドバー付きアタッチメント1本。text/fallback を突合ボットが Form ID / LINE userId でパースする。
     body: JSON.stringify({
       channel: env.SLACK_LISTING_LINK_CHANNEL_ID,
-      text,
-      blocks: [
-        { type: 'header', text: { type: 'plain_text', text: `:link: ${text}` } },
-        { type: 'section', text: { type: 'mrkdwn', text: fields.join('\n') } },
+      attachments: [
+        {
+          color: '#06C755',
+          fallback: `${title} Form ID: \`${codeField(ctx.form_id)}\` LINE userId: \`${codeField(profile.userId)}\``,
+          text: lines.join('\n'),
+          mrkdwn_in: ['text'],
+        },
       ],
     }),
   });
@@ -393,6 +446,18 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// Neutralize Slack mrkdwn in user-supplied text: collapse newlines (blocks forged-line injection into
+// the reconciliation post) and escape <,>,& (blocks <@mention> / <url|text>).
+function slackEscape(s: string): string {
+  return s.replace(/[\r\n]+/g, ' ').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// For values rendered inside a `code span`: drop backticks and newlines so they cannot break out of
+// the span or inject a forged field line that the reconciliation parser would read.
+function codeField(s: string): string {
+  return s.replace(/[`\r\n]+/g, ' ');
 }
 
 export { listingFormLine };

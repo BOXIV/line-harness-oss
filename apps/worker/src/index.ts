@@ -72,6 +72,8 @@ export type Env = {
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
+    CHAT_ALERT_SLACK_BOT_TOKEN?: string;   // BOXIV: 受信メッセージを Slack 通知する Bot トークン（未設定なら無効）
+    CHAT_ALERT_SLACK_CHANNEL_ID?: string;  // BOXIV: 同上 通知先チャンネル ID
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
     SESSION_SECRET?: string;  // 撮影予約セッションCookie署名用
     BOOKING_BASE_URL?: string;  // 撮影予約リンクのベースURL（未設定時はWORKER_URL or origin）

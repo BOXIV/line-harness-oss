@@ -65,13 +65,18 @@ webhook.post('/webhook', async (c) => {
 
   // 非同期処理 — LINE は ~1s 以内のレスポンスを要求
   const processingPromise = (async () => {
+    const incoming: Array<{ friendId: string; msgId: string }> = [];
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES);
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES, (fid, mid) => incoming.push({ friendId: fid, msgId: mid }));
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
     }
+    // BOXIV: 受信メッセージを Slack に通知（debounce で同時間帯の塊を1通にまとめる）
+    await Promise.all(
+      incoming.map((i) => scheduleBurstNotify(c.env.CHAT_ALERT_SLACK_BOT_TOKEN, c.env.CHAT_ALERT_SLACK_CHANNEL_ID, db, i.friendId, i.msgId)),
+    );
   })();
 
   c.executionCtx.waitUntil(processingPromise);
@@ -121,6 +126,7 @@ async function handleEvent(
   workerUrl?: string,
   liffUrl?: string,
   mediaBucket?: R2Bucket,
+  onIncoming?: (friendId: string, msgId: string) => void,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -267,6 +273,9 @@ async function handleEvent(
       )
       .bind(logId, friend.id, incomingText, now)
       .run();
+
+    // BOXIV: Slack 通知の対象に記録（webhook 側で塊にまとめて1通に）
+    onIncoming?.(friend.id, logId);
 
     // チャットを作成/更新（ユーザーの自発的メッセージのみ unread にする）
     // ボタンタップ等の自動応答キーワードは除外
@@ -475,15 +484,107 @@ async function handleEvent(
       return;
     }
 
+    const mediaLogId = crypto.randomUUID();
     await db
       .prepare(
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
          VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, kind, JSON.stringify(info), jstNow())
+      .bind(mediaLogId, friend.id, kind, JSON.stringify(info), jstNow())
       .run();
     await upsertChatOnMessage(db, friend.id);
+    onIncoming?.(friend.id, mediaLogId);
     return;
+  }
+}
+
+const MEDIA_KIND_LABEL: Record<string, string> = { image: '画像', video: '動画', audio: '音声', file: 'ファイル', sticker: 'スタンプ' };
+
+// friends.metadata の Notion 連携情報 { notion: { label(掲載ID), realName(管理名) } } を取り出す。
+function parseNotionMeta(metadataJson: string | null | undefined): { label?: string | null; realName?: string | null } | null {
+  if (typeof metadataJson !== 'string' || !metadataJson) return null;
+  try {
+    const m = JSON.parse(metadataJson) as { notion?: { label?: string | null; realName?: string | null } };
+    return m.notion ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// LINE Connect の管理ユーザー名。Notion 連携時は "掲載ID 実名 (LINE名)"、未連携は LINE名。
+// apps/web/src/lib/friend-name.ts の formatFriendLabel と同一ロジック（dashboard と表記を揃える）。
+function formatFriendLabel(displayName: string | null | undefined, notion: { label?: string | null; realName?: string | null } | null): string {
+  const nickname = displayName || '名前なし';
+  if (!notion) return nickname;
+  const parts: string[] = [];
+  if (notion.label) parts.push(notion.label);
+  if (notion.realName) parts.push(notion.realName);
+  if (!parts.length) return nickname;
+  return `${parts.join(' ')} (${nickname})`;
+}
+
+// BOXIV: 受信メッセージを運用 Slack に通知する。8秒 debounce で同時間帯に送られた
+// メッセージの塊を1通にまとめ、概要（受信通知・管理名・掲載ID）＋本文を小さく
+// （context block）表示する。CHAT_ALERT_SLACK_* 未設定なら何もしない（非致命）。
+async function scheduleBurstNotify(
+  token: string | undefined,
+  channel: string | undefined,
+  db: D1Database,
+  friendId: string,
+  msgId: string,
+): Promise<void> {
+  if (!token || !channel) return;
+  // 連続メッセージをまとめるための debounce。後続が来たらこの invocation は降りる
+  // （最後のメッセージの invocation だけが塊全体を1通で通知する）。
+  await new Promise((r) => setTimeout(r, 8000));
+  try {
+    const latest = await db
+      .prepare(`SELECT id FROM messages_log WHERE friend_id = ? AND direction = 'incoming' ORDER BY created_at DESC LIMIT 1`)
+      .bind(friendId)
+      .first<{ id: string }>();
+    if (!latest || latest.id !== msgId) return; // 後続メッセージあり → そちらが通知を担当
+
+    const rows = (await db
+      .prepare(`SELECT message_type, content, created_at FROM messages_log WHERE friend_id = ? AND direction = 'incoming' ORDER BY created_at DESC LIMIT 15`)
+      .bind(friendId)
+      .all<{ message_type: string; content: string; created_at: string }>()).results ?? [];
+    if (!rows.length) return;
+    const newest = new Date(rows[0].created_at).getTime();
+    // 5分以内に送られたものを「同時間帯の塊」とみなす
+    const burst = rows.filter((r) => newest - new Date(r.created_at).getTime() <= 5 * 60 * 1000).reverse();
+
+    const fr = await db
+      .prepare(`SELECT display_name, metadata FROM friends WHERE id = ?`)
+      .bind(friendId)
+      .first<{ display_name: string | null; metadata: string | null }>();
+    const notion = parseNotionMeta(fr?.metadata);
+    const userName = formatFriendLabel(fr?.display_name, notion); // LINE Connect 上の管理ユーザー名
+    const listingId = notion?.label || '—';
+
+    const lines = burst
+      .map((r) => {
+        const t = (r.created_at || '').slice(11, 16); // HH:MM
+        let body = r.message_type === 'text' ? r.content : `[${MEDIA_KIND_LABEL[r.message_type] || r.message_type}]`;
+        body = body.replace(/\s+/g, ' ').trim();
+        if (body.length > 140) body = body.slice(0, 140) + '…';
+        return `\`${t}\` ${body}`;
+      })
+      .join('\n');
+
+    await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        channel,
+        text: 'メッセージ受信がありました。',
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: `<!channel>\n*メッセージ受信がありました。*\nユーザー名: ${userName}　/　掲載ID: ${listingId}` } },
+          { type: 'context', elements: [{ type: 'mrkdwn', text: lines || '(本文なし)' }] },
+        ],
+      }),
+    });
+  } catch (err) {
+    console.error('scheduleBurstNotify failed', err);
   }
 }
 

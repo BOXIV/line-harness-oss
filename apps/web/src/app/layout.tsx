@@ -2,8 +2,13 @@ import type { Metadata } from 'next'
 import './globals.css'
 import AppShell from '@/components/app-shell'
 
+// ビルド環境判定（test / 本番）
+const _API_URL = process.env.NEXT_PUBLIC_API_URL || ''
+const IS_DEV = _API_URL.includes('line-connect-test')
+const IS_PROD = _API_URL.includes('line-connect.boxiv.workers.dev')
+
 export const metadata: Metadata = {
-  title: 'BOXIV LINE Connect 管理画面',
+  title: IS_DEV ? 'BOXIV LINE Connect 管理画面（Dev）' : IS_PROD ? 'BOXIV LINE Connect 管理画面（本番）' : 'BOXIV LINE Connect 管理画面',
   description: 'BOXIV LINE Connect 管理画面',
   icons: {
     icon: { url: '/favicon.svg', type: 'image/svg+xml' },
