@@ -636,7 +636,7 @@ export default function StaffAvailabilityPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">時間枠</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {SLOT_OPTIONS.map((slot, i) => {
                       const selected = createForm.selectedSlots.includes(i)
                       return (

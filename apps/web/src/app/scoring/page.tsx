@@ -128,7 +128,7 @@ export default function ScoringPage() {
 
       {/* Summary stats */}
       {!loading && (
-        <div className="grid grid-cols-2 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500">ルール総数</p>
             <p className="text-2xl font-bold text-gray-900">{totalRules}</p>

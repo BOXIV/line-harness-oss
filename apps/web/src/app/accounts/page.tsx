@@ -185,7 +185,7 @@ export default function AccountsPage() {
                   {account.isActive ? '有効' : '無効'}
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-3 mb-4 py-3 border-t border-b border-gray-100">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 py-3 border-t border-b border-gray-100">
                 <div className="text-center">
                   <p className="text-lg font-bold text-gray-900">{account.stats.friendCount}</p>
                   <p className="text-xs text-gray-400">友だち</p>

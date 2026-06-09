@@ -312,7 +312,7 @@ export default function BookingsPage() {
                 </button>
               </div>
               <div className="px-6 py-5 space-y-4">
-                <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                   <div>
                     <div className="text-xs text-gray-500">お客様名</div>
                     <div className="font-medium text-gray-900">{detail.customer_name || detail.friend_name || '-'}</div>
