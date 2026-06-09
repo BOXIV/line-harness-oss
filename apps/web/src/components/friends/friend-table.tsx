@@ -215,11 +215,11 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   {/* Following status */}
                   <td className="px-4 py-3">
                     {friend.isFollowing ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                      <span className="inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-md text-xs font-medium bg-green-100 text-green-700">
                         フォロー中
                       </span>
                     ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                      <span className="inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-500">
                         ブロック/退会
                       </span>
                     )}
