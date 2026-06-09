@@ -17,6 +17,26 @@ import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
 
+/**
+ * Resolve a friend's OA channel access token + account id for event-bus actions.
+ * send_message / switch_rich_menu actions in event-bus.ts no-op without a token,
+ * so tag add/remove must thread the per-OA token (multi-account), falling back to
+ * the env default. Mirrors the resolution in POST /api/friends/:id/messages.
+ */
+async function resolveFriendOA(
+  db: D1Database,
+  envToken: string,
+  friendId: string,
+): Promise<{ accessToken: string; lineAccountId: string | null }> {
+  const friend = await getFriendById(db, friendId);
+  const lineAccountId =
+    ((friend as unknown as Record<string, unknown> | null)?.line_account_id as string | undefined) ?? null;
+  if (!lineAccountId) return { accessToken: envToken, lineAccountId: null };
+  const { getLineAccountById } = await import('@line-crm/db');
+  const account = await getLineAccountById(db, lineAccountId);
+  return { accessToken: account?.channel_access_token ?? envToken, lineAccountId };
+}
+
 /** Convert a D1 snake_case Friend row to the shared camelCase shape */
 function serializeFriend(row: DbFriend) {
   return {
@@ -216,8 +236,15 @@ friends.post('/api/friends/:id/tags', async (c) => {
       }
     }
 
-    // イベントバス発火: tag_change
-    await fireEvent(db, 'tag_change', { friendId, eventData: { tagId: body.tagId, action: 'add' } });
+    // イベントバス発火: tag_change（send_message アクションが動くよう per-OA トークンを渡す）
+    const { accessToken, lineAccountId } = await resolveFriendOA(db, c.env.LINE_CHANNEL_ACCESS_TOKEN, friendId);
+    await fireEvent(
+      db,
+      'tag_change',
+      { friendId, eventData: { tagId: body.tagId, action: 'add' } },
+      accessToken,
+      lineAccountId,
+    );
 
     return c.json({ success: true, data: null }, 201);
   } catch (err) {
@@ -231,11 +258,19 @@ friends.delete('/api/friends/:id/tags/:tagId', async (c) => {
   try {
     const friendId = c.req.param('id');
     const tagId = c.req.param('tagId');
+    const db = c.env.DB;
 
-    await removeTagFromFriend(c.env.DB, friendId, tagId);
+    await removeTagFromFriend(db, friendId, tagId);
 
-    // イベントバス発火: tag_change
-    await fireEvent(c.env.DB, 'tag_change', { friendId, eventData: { tagId, action: 'remove' } });
+    // イベントバス発火: tag_change（send_message アクションが動くよう per-OA トークンを渡す）
+    const { accessToken, lineAccountId } = await resolveFriendOA(db, c.env.LINE_CHANNEL_ACCESS_TOKEN, friendId);
+    await fireEvent(
+      db,
+      'tag_change',
+      { friendId, eventData: { tagId, action: 'remove' } },
+      accessToken,
+      lineAccountId,
+    );
 
     return c.json({ success: true, data: null });
   } catch (err) {
