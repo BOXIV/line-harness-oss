@@ -6,26 +6,6 @@ import { api, type ApiBroadcast } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import BroadcastForm from '@/components/broadcasts/broadcast-form'
-import CcPromptButton from '@/components/cc-prompt-button'
-
-const ccPrompts = [
-  {
-    title: '配信メッセージを作成',
-    prompt: `一斉配信用のメッセージを作成してください。
-1. 配信目的: [目的を指定]
-2. ターゲット: 全員 / タグ指定
-3. メッセージタイプ: テキスト / 画像 / Flex
-効果的なメッセージ文面を提案してください。`,
-  },
-  {
-    title: '配信スケジュール最適化',
-    prompt: `配信スケジュールを最適化してください。
-1. 過去の配信実績から最適な時間帯を分析
-2. 曜日別の開封率を確認
-3. 推奨スケジュールを提案
-データに基づいた根拠も示してください。`,
-  },
-]
 
 const statusConfig: Record<
   ApiBroadcast['status'],
@@ -269,8 +249,6 @@ export default function BroadcastsPage() {
           </div>
         </div>
       )}
-
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

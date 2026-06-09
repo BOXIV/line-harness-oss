@@ -6,27 +6,7 @@ import { api } from '@/lib/api'
 import type { FriendWithTags } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FriendTable from '@/components/friends/friend-table'
-import CcPromptButton from '@/components/cc-prompt-button'
 import { useAccount } from '@/contexts/account-context'
-
-const ccPrompts = [
-  {
-    title: '友だちのセグメント分析',
-    prompt: `友だち一覧のデータを分析してください。
-1. タグ別の友だち数を集計
-2. アクティブ率の高いセグメントを特定
-3. エンゲージメントが低い層への施策を提案
-レポート形式で出力してください。`,
-  },
-  {
-    title: 'タグ一括管理',
-    prompt: `友だちのタグを一括管理してください。
-1. 未タグの友だちを特定
-2. 行動履歴に基づいたタグ付け提案
-3. 不要タグの整理
-作業手順を示してください。`,
-  },
-]
 
 const PAGE_SIZE = 20
 
@@ -198,8 +178,6 @@ export default function FriendsPage() {
           </div>
         </div>
       )}
-
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

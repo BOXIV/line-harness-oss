@@ -5,27 +5,7 @@ import Link from 'next/link'
 import { api } from '@/lib/api'
 import type { RichMenu } from '@line-crm/shared'
 import Header from '@/components/layout/header'
-import CcPromptButton from '@/components/cc-prompt-button'
 import RichMenuPreview from '@/components/rich-menus/rich-menu-preview'
-
-const ccPrompts = [
-  {
-    title: 'リッチメニュー設計',
-    prompt: `LINE のリッチメニュー設計をサポートしてください。
-1. 出品者向け / 購入者向けの目的別レイアウト案（2x3, 1x3, 1+2 等）
-2. 各セルに置くべき導線（出品手順、写真送信、サポート、在庫、商談 等）
-3. デザインガイドライン（タップ可能領域、文字サイズ、画像比率）
-を提案してください。`,
-  },
-  {
-    title: 'メニュー整理',
-    prompt: `既存のリッチメニュー一覧を整理してください。
-1. 用途が重複・古いメニューの特定
-2. デフォルトメニューに何を設定すべきかの提案
-3. 削除候補と保持理由
-を出力してください。`,
-  },
-]
 
 export default function RichMenusPage() {
   const [menus, setMenus] = useState<RichMenu[]>([])
@@ -229,8 +209,6 @@ export default function RichMenusPage() {
           })}
         </div>
       )}
-
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

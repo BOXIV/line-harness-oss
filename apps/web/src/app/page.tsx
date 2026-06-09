@@ -3,27 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/api'
-import CcPromptButton from '@/components/cc-prompt-button'
 import { useAccount } from '@/contexts/account-context'
-
-const ccPrompts = [
-  {
-    title: 'ダッシュボードのKPI分析',
-    prompt: `LINE CRM ダッシュボードのデータを分析してください。
-1. 友だち数の推移を確認
-2. アクティブシナリオの効果を評価
-3. 配信の開封率・クリック率を分析
-改善提案を含めてレポートしてください。`,
-  },
-  {
-    title: '新しいシナリオを提案',
-    prompt: `現在の友だちデータとタグ情報を元に、効果的なシナリオ配信を提案してください。
-1. ターゲットセグメントの特定
-2. メッセージ内容の提案
-3. 配信タイミングの最適化
-具体的なステップ配信の構成を含めてください。`,
-  },
-]
 
 interface DashboardStats {
   friendCount: number | null
@@ -339,8 +319,6 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
-
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }
