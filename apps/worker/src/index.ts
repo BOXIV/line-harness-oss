@@ -6,6 +6,7 @@ import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
 import { processScheduledMessages } from './services/scheduled-message-delivery.boxiv.js';
+import { processListingFormReminders } from './services/listing-reminder.boxiv.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -95,6 +96,32 @@ export type Env = {
     NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
     NOTION_BUYER_STATUS_PROP?: string;
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
+    // 出品フォーム台帳→Notion 即起票 + 催促 (BOXIV)
+    LISTING_FORM_SUBMIT_TOKEN?: string;        // /listing-form/submit の簡易共有トークン（任意）
+    NOTION_SELLER_MATCH_KEY_PROP?: string;     // default: match_key
+    NOTION_SELLER_LINE_USER_ID_PROP?: string;  // default: LINE User ID
+    NOTION_SELLER_TITLE_PROP?: string;         // default: 名前
+    NOTION_SELLER_PHONE_PROP?: string;         // default: [Form]電話番号
+    NOTION_SELLER_EMAIL_PROP?: string;         // default: [Form]メールアドレス
+    NOTION_SELLER_MEMO_PROP?: string;          // default: その他詳細備考
+    NOTION_SELLER_ZIP_PROP?: string;           // default: 郵便番号
+    NOTION_SELLER_STATUS_VALUE?: string;       // default: 0_LINE登録（連携時付与）
+    NOTION_SELLER_LINK_STATUS_PROP?: string;   // default: 連携ステータス
+    NOTION_SELLER_LINK_STATUS_UNLINKED?: string; // default: 1_フォーム入力
+    NOTION_SELLER_LINK_STATUS_LINKED?: string;   // default: 3_連携済
+    NOTION_LISTING_ID_MIN?: string;            // default: 10000
+    NOTION_LISTING_ID_MAX?: string;            // default: 19999
+    GOOGLE_GEOCODING_API_KEY?: string;         // 住所→郵便番号（任意）
+    SENDGRID_API_KEY?: string;                 // 催促メール
+    SENDGRID_FROM_EMAIL?: string;
+    SENDGRID_FROM_NAME?: string;
+    LISTING_REMINDER_AFTER_MINUTES?: string;       // default: 1440 (24h)
+    LISTING_REMINDER_MIN_INTERVAL_MINUTES?: string; // default: 1440
+    LISTING_REMINDER_MAX?: string;                 // default: 3
+    LISTING_REMINDER_MAX_PER_TICK?: string;        // default: 20
+    LISTING_REMINDER_QUIET_START_HOUR_JST?: string; // default: 21
+    LISTING_REMINDER_QUIET_END_HOUR_JST?: string;   // default: 9
+    LISTING_REMINDER_RETURN_TO?: string;           // default: https://lightning.boxiv.co.jp/thanks
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
@@ -254,6 +281,8 @@ async function scheduled(
   jobs.push(refreshLineAccessTokens(env.DB));
   // BOXIV: 個別チャット送信予約 (友だちに紐づく line_account を内部で解決)
   jobs.push(processScheduledMessages(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, LineClient));
+  // BOXIV: 出品フォーム未連携者へのフォローアップメール催促（夜間抑止/上限/間隔/重送ガードは内部で実施）
+  jobs.push(processListingFormReminders(env));
 
   await Promise.allSettled(jobs);
 }

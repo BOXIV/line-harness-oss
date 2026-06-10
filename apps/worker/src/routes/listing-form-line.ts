@@ -27,6 +27,9 @@
 import { Hono } from 'hono';
 import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId } from '../services/listing-entry.boxiv.js';
+import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
+import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
@@ -187,6 +190,89 @@ listingFormLine.get('/listing-form/start', async (c) => {
   return c.redirect(loginUrl.toString());
 });
 
+// ─── CORS（公開フォームページからの直接 POST 用） ────────────────
+function applyCors(c: any): void {
+  const origin = c.req.header('origin') || '';
+  let allow = 'https://lightning.boxiv.co.jp';
+  try {
+    const h = origin ? new URL(origin).hostname : '';
+    if (h && (h === 'lightning.boxiv.co.jp' || h.endsWith('.boxiv.co.jp') || h === 'localhost' || h === '127.0.0.1')) {
+      allow = origin;
+    }
+  } catch { /* keep default */ }
+  c.header('Access-Control-Allow-Origin', allow);
+  c.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Content-Type, X-Listing-Token');
+  c.header('Access-Control-Max-Age', '86400');
+  c.header('Vary', 'Origin');
+}
+
+listingFormLine.options('/listing-form/submit', (c) => {
+  applyCors(c);
+  return c.body(null, 204);
+});
+
+/**
+ * POST /listing-form/submit
+ *
+ * STUDIO フォームページが submit 時に直接叩く。フォーム送信“時点”で
+ *   1) D1 台帳 listing_entries に upsert（正本・status=form_only）
+ *   2) Notion 出品者DB へ即ミラー起票（未連携。match_key キー）
+ * を行う（LINE 連携前から Notion に行ができる）。LINE userId は後続の callback で追記。
+ *
+ * body: { match_key, fields:{label:value}, name?, phone?, email?, return_to? }
+ */
+listingFormLine.post('/listing-form/submit', async (c) => {
+  applyCors(c);
+
+  // 任意の共有トークン（設定時のみ必須）。公開エンドポイントの簡易ガード（堅牢化は Turnstile を検討）。
+  if (c.env.LISTING_FORM_SUBMIT_TOKEN && c.req.header('x-listing-token') !== c.env.LISTING_FORM_SUBMIT_TOKEN) {
+    return c.json({ success: false, error: 'forbidden' }, 403);
+  }
+
+  let body: Record<string, any>;
+  try { body = await c.req.json(); } catch { return c.json({ success: false, error: 'invalid json' }, 400); }
+
+  const matchKey = String(body.match_key ?? body.matchKey ?? '').trim();
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(matchKey)) {
+    return c.json({ success: false, error: 'invalid match_key' }, 400);
+  }
+  const fields: Record<string, unknown> = (body.fields && typeof body.fields === 'object') ? body.fields : {};
+  if (JSON.stringify(fields).length > 20000) {
+    return c.json({ success: false, error: 'payload too large' }, 413);
+  }
+  const pick = (k: string): string | undefined => {
+    const v = fields[k];
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  };
+  const name = (body.name ? String(body.name) : pick('お名前')) || null;
+  const emailRaw = (body.email ? String(body.email) : pick('メールアドレス')) || '';
+  const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailRaw) ? emailRaw : null;
+  const phoneRaw = (body.phone ? String(body.phone) : pick('電話番号')) || '';
+  const phone = phoneRaw.replace(/[^\d+-]/g, '') || null;
+  const reqHost = new URL(c.req.url).hostname;
+  const returnTo = body.return_to && isAllowedReturnTo(String(body.return_to), reqHost) ? String(body.return_to) : null;
+
+  // 1) D1 台帳に upsert（正本）— 非致命
+  await upsertOnSubmit(c.env.DB, { matchKey, formData: fields, name, phone, email, returnTo })
+    .catch((e) => console.error('listing-form submit: D1 upsert failed', e));
+
+  // 2) 郵便番号（住所→API、ベストエフォート）
+  let zip: string | null = null;
+  const addr = pick('ご住所');
+  if (addr) zip = await lookupPostalCode(c.env, addr).catch(() => null);
+
+  // 3) Notion へ即ミラー起票（未連携）— 非致命
+  try {
+    const pageId = await createOrUpdateSellerRow(c.env, { matchKey, formData: fields, name, phone, email, zip });
+    if (pageId) await setNotionPageId(c.env.DB, matchKey, pageId);
+  } catch (e) {
+    console.error('listing-form submit: Notion 起票 failed', e);
+  }
+
+  return c.json({ success: true }, 200);
+});
+
 /**
  * GET /listing-form/callback
  *
@@ -268,6 +354,30 @@ listingFormLine.get('/listing-form/callback', async (c) => {
   }).catch((err) => {
     console.error(`listing-form callback: upsertFriend failed (form_id=${ctx.form_id})`, err);
   });
+
+  // BOXIV: D1 台帳 + Notion を match_key で「連携済み」に更新（旧 reconcile-daemon の Notion 起票を Worker に集約）。
+  // フォーム送信時に submit で起票済みの行へ lineUserId を追記。form_submit が無い直リンクは orphan 行を作る。非致命。
+  let notionPageId: string | null = null;
+  try {
+    const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
+    if (!entry) {
+      await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
+    } else {
+      notionPageId = entry.notion_page_id;
+    }
+  } catch (err) {
+    console.error(`listing-form callback: D1 markLinked failed (form_id=${ctx.form_id})`, err);
+  }
+  try {
+    await linkSellerRow(c.env, {
+      matchKey: ctx.form_id,
+      lineUserId: profile.userId,
+      displayName: profile.displayName,
+      knownPageId: notionPageId,
+    });
+  } catch (err) {
+    console.error(`listing-form callback: Notion linkSellerRow failed (form_id=${ctx.form_id})`, err);
+  }
 
   // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
   // 何を送るかは管理UIの automation 側で決める。非致命 — 失敗してもリダイレクトは完了。
