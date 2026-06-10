@@ -105,6 +105,11 @@ export default function StaffAvailabilityPage() {
 
   const isStaffRole = currentRole === 'staff'
 
+  // シフト登録者として並ぶのは撮影スタッフ(role='staff')のみ。
+  // オーナー/マネージャーは閲覧者として全撮影スタッフのシフトを見られるが、
+  // 自身は撮影に入らないため、シフト行・登録ドロップダウンの対象には含めない。
+  const shiftStaff = staff.filter((s) => s.role === 'staff')
+
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -209,7 +214,7 @@ export default function StaffAvailabilityPage() {
     // 表示は全スタッフ（シフトがなくてもクリックで追加できるように）
     const displayStaff = isStaffRole
       ? staff.filter((s) => s.id === currentStaffId)
-      : staff
+      : shiftStaff
 
     // スロット定義（表示は4枠）
     const slots = SLOT_OPTIONS
@@ -417,7 +422,7 @@ export default function StaffAvailabilityPage() {
                   className="text-sm border border-gray-300 rounded-lg px-3 py-1.5"
                 >
                   <option value="all">すべてのスタッフ</option>
-                  {staff.map((s) => (
+                  {shiftStaff.map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>
@@ -596,7 +601,7 @@ export default function StaffAvailabilityPage() {
                       className="w-full border border-gray-300 rounded-lg px-3 py-2"
                     >
                       <option value="">選択してください</option>
-                      {staff.map((s) => (
+                      {shiftStaff.map((s) => (
                         <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
@@ -631,7 +636,7 @@ export default function StaffAvailabilityPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">時間枠</label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {SLOT_OPTIONS.map((slot, i) => {
                       const selected = createForm.selectedSlots.includes(i)
                       return (

@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
-import CcPromptButton from '@/components/cc-prompt-button'
 
 interface LineAccountListItem {
   id: string
@@ -21,25 +20,6 @@ interface LineAccountListItem {
     messagesThisMonth: number
   }
 }
-
-const ccPrompts = [
-  {
-    title: 'LINEアカウント設定確認',
-    prompt: `現在登録されているLINEアカウントのチャネル設定を確認してください。
-1. 各アカウントのChannel ID・名前・有効/無効ステータスを一覧表示
-2. Channel Access TokenとChannel Secretが正しく設定されているか検証
-3. LINE Developers Consoleとの設定整合性をチェック
-結果をレポートしてください。`,
-  },
-  {
-    title: 'アカウント追加手順',
-    prompt: `新しいLINEアカウントを追加する手順をガイドしてください。
-1. LINE Developers Consoleでのチャネル作成手順を説明
-2. Channel ID、Channel Access Token、Channel Secretの取得方法
-3. CRMへの登録手順と初期設定のベストプラクティス
-手順を示してください。`,
-  },
-]
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<LineAccountListItem[]>([])
@@ -205,7 +185,7 @@ export default function AccountsPage() {
                   {account.isActive ? '有効' : '無効'}
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-3 mb-4 py-3 border-t border-b border-gray-100">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 py-3 border-t border-b border-gray-100">
                 <div className="text-center">
                   <p className="text-lg font-bold text-gray-900">{account.stats.friendCount}</p>
                   <p className="text-xs text-gray-400">友だち</p>
@@ -234,7 +214,6 @@ export default function AccountsPage() {
           ))}
         </div>
       )}
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

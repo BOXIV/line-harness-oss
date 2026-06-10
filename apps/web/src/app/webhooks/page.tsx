@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/header'
 import { api } from '@/lib/api'
-import CcPromptButton from '@/components/cc-prompt-button'
 
 interface IncomingWebhook {
   id: string
@@ -27,25 +26,6 @@ interface OutgoingWebhook {
 }
 
 type Tab = 'incoming' | 'outgoing'
-
-const ccPrompts = [
-  {
-    title: 'Webhook設定ガイド',
-    prompt: `Webhookの設定手順をガイドしてください。
-1. 受信Webhook（Incoming）の作成とエンドポイントURLの設定方法
-2. 送信Webhook（Outgoing）のURL・イベントタイプ・シークレット設定
-3. LINE公式アカウントとのWebhook連携設定手順
-手順を示してください。`,
-  },
-  {
-    title: 'Webhookデバッグ',
-    prompt: `Webhookの動作確認とデバッグをサポートしてください。
-1. 受信・送信Webhookの有効/無効ステータスを確認
-2. Webhookのテスト送信と応答検証の手順
-3. よくあるエラーパターンとトラブルシューティング方法
-手順を示してください。`,
-  },
-]
 
 export default function WebhooksPage() {
   const [tab, setTab] = useState<Tab>('incoming')
@@ -458,7 +438,6 @@ export default function WebhooksPage() {
           </div>
         )
       )}
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

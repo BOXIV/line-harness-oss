@@ -380,7 +380,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               {editingStepId ? 'ステップを編集' : '新しいステップを追加'}
             </h4>
             <div className="space-y-3 max-w-lg">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">ステップ順序</label>
                   <input

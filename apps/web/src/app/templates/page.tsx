@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
-import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
 import TemplateEditModal from '@/components/templates/template-edit-modal'
 import type { EditingTemplate } from '@/components/templates/template-edit-modal'
@@ -40,25 +39,6 @@ function formatDate(iso: string): string {
     minute: '2-digit',
   })
 }
-
-const ccPrompts = [
-  {
-    title: 'テンプレート作成',
-    prompt: `新しいメッセージテンプレートの作成をサポートしてください。
-1. 用途別（挨拶、キャンペーン、通知、フォローアップ）のテンプレート文例を提案
-2. テキスト・画像・Flexメッセージそれぞれの効果的な使い方
-3. カテゴリ分類と命名規則のベストプラクティス
-手順を示してください。`,
-  },
-  {
-    title: 'テンプレート整理',
-    prompt: `既存のテンプレートを整理・最適化してください。
-1. カテゴリ別のテンプレート数と使用頻度を分析
-2. 重複・類似テンプレートの統合提案
-3. 不足しているカテゴリやテンプレートの追加推奨
-結果をレポートしてください。`,
-  },
-]
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([])
@@ -378,7 +358,6 @@ export default function TemplatesPage() {
           </div>
         </div>
       )}
-      <CcPromptButton prompts={ccPrompts} />
 
       <TemplateEditModal
         isOpen={editing !== null}

@@ -45,7 +45,7 @@ export default function RichMenuAreaForm({ index, area, issues, onChange, onDele
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-[11px] text-gray-500">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-gray-500">
         <div>x: <span className="font-mono">{area.bounds.x}</span></div>
         <div>y: <span className="font-mono">{area.bounds.y}</span></div>
         <div>w: <span className="font-mono">{area.bounds.width}</span></div>

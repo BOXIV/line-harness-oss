@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/header'
 import { api } from '@/lib/api'
-import CcPromptButton from '@/components/cc-prompt-button'
 
 interface LineAccount {
   id: string
@@ -47,25 +46,6 @@ const statusConfig: Record<AccountMigration['status'], { label: string; textColo
   completed: { label: '完了', textColor: 'text-green-700', bgColor: 'bg-green-100' },
   failed: { label: '失敗', textColor: 'text-red-700', bgColor: 'bg-red-100' },
 }
-
-const ccPrompts = [
-  {
-    title: 'BAN リスク診断',
-    prompt: `各LINEアカウントのBANリスクを診断してください。
-1. アカウントごとのエラーログとリスクレベルを確認
-2. エラーコード別の発生頻度と傾向を分析
-3. リスク軽減のための具体的なアクションプランを提案
-結果をレポートしてください。`,
-  },
-  {
-    title: 'アカウント移行手順',
-    prompt: `BANリスクの高いアカウントから友だちを移行する手順を説明してください。
-1. 移行元・移行先アカウントの選定基準
-2. 友だちデータの移行プロセスと注意事項
-3. 移行後の動作確認とフォローアップ手順
-手順を示してください。`,
-  },
-]
 
 export default function HealthPage() {
   const [accounts, setAccounts] = useState<LineAccount[]>([])
@@ -412,7 +392,6 @@ export default function HealthPage() {
           </div>
         </>
       )}
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

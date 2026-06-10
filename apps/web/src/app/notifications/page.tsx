@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
-import CcPromptButton from '@/components/cc-prompt-button'
 
 interface NotificationRule {
   id: string
@@ -60,25 +59,6 @@ function formatDatetime(iso: string): string {
     minute: '2-digit',
   })
 }
-
-const ccPrompts = [
-  {
-    title: '通知ルール設定',
-    prompt: `通知ルールの設定をサポートしてください。
-1. 利用可能なイベントタイプと通知条件の説明
-2. 効果的な通知ルールの設計パターンを提案
-3. 通知の優先度と頻度のベストプラクティス
-手順を示してください。`,
-  },
-  {
-    title: '通知チャネル追加',
-    prompt: `新しい通知チャネルの追加手順をガイドしてください。
-1. 利用可能な通知チャネル（email、Slack、Webhook）の設定方法
-2. 各チャネルの接続テストと動作確認手順
-3. チャネル別の通知内容カスタマイズ方法
-手順を示してください。`,
-  },
-]
 
 export default function NotificationsPage() {
   const [rules, setRules] = useState<NotificationRule[]>([])
@@ -459,7 +439,6 @@ export default function NotificationsPage() {
           </div>
         )}
       </div>
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import type { Tag } from '@line-crm/shared'
 import type { FriendWithTags } from '@/lib/api'
 import { api } from '@/lib/api'
@@ -16,6 +17,7 @@ interface FriendTableProps {
 }
 
 export default function FriendTable({ friends, allTags, onRefresh }: FriendTableProps) {
+  const router = useRouter()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [addingTagForFriend, setAddingTagForFriend] = useState<string | null>(null)
   const [selectedTagId, setSelectedTagId] = useState('')
@@ -26,6 +28,29 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
   const [sendSuccess, setSendSuccess] = useState(false)
+  const [editFriend, setEditFriend] = useState<FriendWithTags | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
+
+  async function handleSaveName() {
+    if (!editFriend) return
+    setEditSaving(true)
+    setEditError('')
+    try {
+      const res = await api.friends.update(editFriend.id, { managedName: editName.trim() || null })
+      if (res.success) {
+        setEditFriend(null)
+        onRefresh()
+      } else {
+        setEditError(res.error || '保存に失敗しました')
+      }
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : '保存に失敗しました')
+    } finally {
+      setEditSaving(false)
+    }
+  }
 
   async function handleSendMessage() {
     if (!messageFriend || !messageContent.trim()) return
@@ -162,7 +187,24 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                         </div>
                       )}
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{formatFriendLabel(friend)}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-medium text-gray-900">{formatFriendLabel(friend)}</p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setEditFriend(friend)
+                              setEditName(friend.managedName ?? friend.displayName ?? '')
+                              setEditError('')
+                            }}
+                            className="shrink-0 text-gray-400 hover:text-slate-700 transition-colors"
+                            title="表示名を編集"
+                            aria-label="表示名を編集"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        </div>
                         {friend.statusMessage && (
                           <p className="text-xs text-gray-400 truncate max-w-[160px]">{friend.statusMessage}</p>
                         )}
@@ -173,11 +215,11 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   {/* Following status */}
                   <td className="px-4 py-3">
                     {friend.isFollowing ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                      <span className="inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-md text-xs font-medium bg-green-100 text-green-700">
                         フォロー中
                       </span>
                     ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                      <span className="inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-500">
                         ブロック/退会
                       </span>
                     )}
@@ -234,19 +276,30 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                             <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
                             <p className="text-xs text-gray-600 font-mono break-all">{friend.lineUserId}</p>
                           </div>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setMessageFriend(friend)
-                              setMessageContent('')
-                              setSendError('')
-                              setSendSuccess(false)
-                            }}
-                            className="shrink-0 px-3 py-2 text-xs font-medium text-white rounded-lg hover:opacity-90 transition-opacity"
-                            style={{ backgroundColor: '#0f172a' }}
-                          >
-                            💬 メッセージ送信
-                          </button>
+                          <div className="shrink-0 flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                router.push(`/chats?friendId=${friend.id}`)
+                              }}
+                              className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                            >
+                              💬 個別チャットを開く
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setMessageFriend(friend)
+                                setMessageContent('')
+                                setSendError('')
+                                setSendSuccess(false)
+                              }}
+                              className="px-3 py-2 text-xs font-medium text-white rounded-lg hover:opacity-90 transition-opacity"
+                              style={{ backgroundColor: '#0f172a' }}
+                            >
+                              ✉️ メッセージ送信
+                            </button>
+                          </div>
                         </div>
 
                         {/* Tag management */}
@@ -384,6 +437,67 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   style={{ backgroundColor: '#0f172a' }}
                 >
                   {sending ? '送信中...' : '送信'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 表示名（管理名）編集モーダル */}
+      {editFriend && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => !editSaving && setEditFriend(null)}
+        >
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-base font-bold text-gray-900">✏️ 表示名を編集</h2>
+              <button
+                onClick={() => !editSaving && setEditFriend(null)}
+                className="text-gray-400 hover:text-gray-600"
+                disabled={editSaving}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">管理名（管理画面での表示名）</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder={editFriend.displayName ?? '表示名'}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-slate-900"
+                  disabled={editSaving}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !editSaving) handleSaveName() }}
+                />
+                <div className="text-[11px] text-gray-500 mt-1">
+                  ※ 空にすると LINE プロフィール名（{editFriend.displayName || '未設定'}）に戻ります
+                </div>
+              </div>
+              {editError && (
+                <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800">
+                  ⚠️ {editError}
+                </div>
+              )}
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => !editSaving && setEditFriend(null)}
+                  disabled={editSaving}
+                  className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg disabled:opacity-50"
+                >
+                  キャンセル
+                </button>
+                <button
+                  onClick={handleSaveName}
+                  disabled={editSaving}
+                  className="flex-1 px-4 py-2 text-white text-sm font-medium rounded-lg hover:opacity-90 disabled:opacity-50"
+                  style={{ backgroundColor: '#0f172a' }}
+                >
+                  {editSaving ? '保存中...' : '保存'}
                 </button>
               </div>
             </div>

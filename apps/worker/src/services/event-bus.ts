@@ -26,6 +26,7 @@ import {
 import { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { sendAdConversions } from './ad-conversion.js';
+import type { Env } from '../index.js';
 
 export interface EventPayload {
   friendId?: string;
@@ -50,6 +51,7 @@ export async function fireEvent(
   payload: EventPayload,
   lineAccessToken?: string,
   lineAccountId?: string | null,
+  env?: Env['Bindings'],
 ): Promise<void> {
   // Phase 1: fire webhooks, apply scoring rules, and ad conversion postback concurrently.
   const phase1: Promise<unknown>[] = [
@@ -76,7 +78,7 @@ export async function fireEvent(
 
   // Phase 2: evaluate automations and create notifications concurrently.
   await Promise.allSettled([
-    processAutomations(db, eventType, enrichedPayload, lineAccessToken, lineAccountId),
+    processAutomations(db, eventType, enrichedPayload, lineAccessToken, lineAccountId, env),
     processNotifications(db, eventType, enrichedPayload, lineAccountId),
   ]);
 }
@@ -147,6 +149,7 @@ async function processAutomations(
   payload: EventPayload,
   lineAccessToken?: string,
   lineAccountId?: string | null,
+  env?: Env['Bindings'],
 ): Promise<void> {
   try {
     const allAutomations = await getActiveAutomationsByEvent(db, eventType);
@@ -166,7 +169,7 @@ async function processAutomations(
 
       for (const action of actions) {
         try {
-          await executeAction(db, action, payload, lineAccessToken);
+          await executeAction(db, action, payload, lineAccessToken, env);
           results.push({ action: action.type, success: true });
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -211,6 +214,11 @@ function matchConditions(
     if (payload.eventData.tagId !== conditions.tag_id) return false;
   }
 
+  // action チェック（tag_change の add/remove 区別。conditions.action='add' なら付与時のみ発火）
+  if (conditions.action !== undefined && payload.eventData) {
+    if (payload.eventData.action !== conditions.action) return false;
+  }
+
   // keyword チェック（message_received イベント用）
   if (conditions.keyword !== undefined && payload.eventData) {
     const text = payload.eventData.text as string | undefined;
@@ -233,6 +241,7 @@ async function executeAction(
   action: { type: string; params: Record<string, string> },
   payload: EventPayload,
   lineAccessToken?: string,
+  env?: Env['Bindings'],
 ): Promise<void> {
   const friendId = payload.friendId;
   if (!friendId && action.type !== 'send_webhook') {
@@ -305,6 +314,15 @@ async function executeAction(
       } catch (logErr) {
         console.error('event-bus send_message: failed to log to messages_log', logErr);
       }
+      break;
+    }
+
+    case 'send_booking_invite': {
+      // BB-BOOK-01: 動的な撮影予約招待（友だち毎トークン + Notion 顧客名）を本人へ送る。
+      if (!env || !friendId) break;
+      const { createAndSendBookingInvite } = await import('./booking-invite.js');
+      const result = await createAndSendBookingInvite(env, { friendId, sendLineMessage: true });
+      if (!result.ok) throw new Error(`send_booking_invite failed: ${result.error}`);
       break;
     }
 

@@ -1,1 +1,10 @@
 @import "tailwindcss";
+
+/* モバイル基礎: iOS の自動文字拡大を抑止し、横スクロール暴走を防ぐ
+   （テーブル等の意図的な横スクロールは各自の overflow-x-auto 内に隔離済み） */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  overflow-x: hidden;
+}

@@ -4,26 +4,6 @@ import { useState, useEffect } from 'react'
 import { api } from '@/lib/api'
 import type { User } from '@line-crm/shared'
 import Header from '@/components/layout/header'
-import CcPromptButton from '@/components/cc-prompt-button'
-
-const ccPrompts = [
-  {
-    title: 'ユーザー紐付け確認',
-    prompt: `ユーザーとLINEアカウントの紐付け状況を確認してください。
-1. 各ユーザーの紐付きLINEアカウント数とフォロー状態を一覧表示
-2. 紐付けのないユーザーや孤立アカウントを特定
-3. クロスアカウントUUIDの整合性を検証
-結果をレポートしてください。`,
-  },
-  {
-    title: 'ユーザーデータ整理',
-    prompt: `ユーザーデータのクリーンアップを行ってください。
-1. 重複ユーザー（同一メール・電話番号）の検出
-2. 不完全なプロフィール（表示名・メール・電話が未設定）の一覧
-3. データ品質向上のための具体的なアクションプランを提案
-手順を示してください。`,
-  },
-]
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
@@ -212,7 +192,6 @@ export default function UsersPage() {
           </table>
         </div>
       )}
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

@@ -18,6 +18,27 @@ import type { Env } from '../index.js';
 
 const staffAvailability = new Hono<Env>();
 
+/**
+ * シフト登録対象は撮影スタッフ(role='staff')のみ許可する。
+ * オーナー/マネージャー/管理者は全撮影スタッフのシフトを閲覧できるが、
+ * 自身は撮影に入らないためシフト登録者にはなれない。
+ * 戻り値が null なら OK、object ならその status/error で拒否する。
+ */
+async function checkShiftTarget(
+  db: D1Database,
+  staffId: string,
+): Promise<{ status: 403 | 404; error: string } | null> {
+  const target = (await getStaffMembers(db)).find((s) => s.id === staffId);
+  if (!target) return { status: 404, error: 'Staff not found' };
+  if (target.role !== 'staff') {
+    return {
+      status: 403,
+      error: 'シフト登録は撮影スタッフ(staff)のみ可能です（オーナー/マネージャーは登録対象外）',
+    };
+  }
+  return null;
+}
+
 /** GET /api/staff-availability — 一覧
  *
  * 権限: staffロールは自分のシフトのみ。admin/ownerは全員 or 指定staffIdで絞り込み。
@@ -91,6 +112,9 @@ staffAvailability.post('/api/staff-availability', async (c) => {
       return c.json({ success: false, error: 'Forbidden: cannot create shift for another staff' }, 403);
     }
 
+    const targetErr = await checkShiftTarget(c.env.DB, body.staffId);
+    if (targetErr) return c.json({ success: false, error: targetErr.error }, targetErr.status);
+
     const row = await createStaffAvailability(c.env.DB, body);
     return c.json({ success: true, data: row }, 201);
   } catch (err) {
@@ -120,6 +144,9 @@ staffAvailability.post('/api/staff-availability/bulk', async (c) => {
     if (currentStaff?.role === 'staff' && body.staffId !== currentStaff.id) {
       return c.json({ success: false, error: 'Forbidden: cannot create shifts for another staff' }, 403);
     }
+
+    const targetErr = await checkShiftTarget(c.env.DB, body.staffId);
+    if (targetErr) return c.json({ success: false, error: targetErr.error }, targetErr.status);
 
     const created: unknown[] = [];
     for (const date of body.dates) {

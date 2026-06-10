@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
-import CcPromptButton from '@/components/cc-prompt-button'
 import MessageBubble from '@/components/chats/message-bubble'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
@@ -76,25 +75,6 @@ function formatDatetime(iso: string | null): string {
     minute: '2-digit',
   })
 }
-
-const ccPrompts = [
-  {
-    title: 'チャット対応テンプレート',
-    prompt: `チャット対応で使えるテンプレートメッセージを作成してください。
-1. よくある質問への回答テンプレート（挨拶、FAQ、サポート）
-2. クレーム対応用の丁寧な返信テンプレート
-3. フォローアップメッセージのテンプレート
-手順を示してください。`,
-  },
-  {
-    title: '未対応チャット確認',
-    prompt: `未対応のチャットを確認し、対応優先度を整理してください。
-1. 未読・対応中のチャット数を集計
-2. 最終メッセージからの経過時間で優先度を判定
-3. 長時間未対応のチャットへの対応アクションを提案
-結果をレポートしてください。`,
-  },
-]
 
 interface FriendItem {
   id: string
@@ -296,6 +276,20 @@ export default function ChatsPage() {
   useEffect(() => {
     api.friendStatus.listOptions().then((res) => {
       if (res.success) setStatusOptions(res.data.map((o) => ({ id: o.id, name: o.name, color: o.color, source: o.source })))
+    }).catch(() => { /* non-blocking */ })
+  }, [])
+
+  // 友だち一覧「個別チャットを開く」からの deep-link: /chats?friendId=... を
+  // friendId → chatId(find-or-create) で解決して選択する。useSearchParams は Suspense 境界が
+  // 必要になるため、mount 時に一度だけ window.location から読む。
+  const deepLinkResolvedRef = useRef(false)
+  useEffect(() => {
+    if (deepLinkResolvedRef.current) return
+    deepLinkResolvedRef.current = true
+    const friendId = new URLSearchParams(window.location.search).get('friendId')
+    if (!friendId) return
+    api.chats.create({ friendId }).then((res) => {
+      if (res.success && res.data?.id) setSelectedChatId(res.data.id)
     }).catch(() => { /* non-blocking */ })
   }, [])
 
@@ -618,7 +612,7 @@ export default function ChatsPage() {
           ) : chatDetail ? (
             <>
               {/* Chat Header */}
-              <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between gap-2">
+              <div className="px-4 py-3 border-b border-gray-200 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2 min-w-0">
                   <button
                     onClick={() => setSelectedChatId(null)}
@@ -821,7 +815,6 @@ export default function ChatsPage() {
           ) : null}
         </div>
       </div>
-      <CcPromptButton prompts={ccPrompts} />
 
       <TemplatePickerModal
         isOpen={showTemplatePicker}
