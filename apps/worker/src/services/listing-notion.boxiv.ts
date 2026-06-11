@@ -323,14 +323,28 @@ export async function linkSellerRow(env: ListingNotionEnv, input: LinkInput): Pr
   if (!pageId) pageId = await queryPageId(cfg, cfg.matchKeyProp, input.matchKey);
   if (!pageId) pageId = await queryPageId(cfg, cfg.lineUserIdProp, input.lineUserId);
 
+  // 必須 = lineUserId + 連携ステータス(連携済)。運用ステータス('ステータス ')は別 PATCH の best-effort にする
+  // （プロパティ名の末尾空白差異・選択肢不一致等で失敗しても、連携追記そのものは確定させるため）。
   const props: Record<string, unknown> = {
     [cfg.lineUserIdProp]: richText(input.lineUserId),
     [cfg.linkStatusProp]: notionValue('select', cfg.linkStatusLinked),
   };
-  if (cfg.statusValue) props[cfg.statusProp] = notionValue('status', cfg.statusValue);
+
+  // 運用ステータスを best-effort で付与（失敗は握りつぶす＝非致命）。
+  async function setOperationalStatus(pid: string): Promise<void> {
+    if (!cfg) return;
+    const v = notionValue('status', cfg.statusValue);
+    if (!v) return;
+    try {
+      await notionApi(cfg, `/pages/${pid}`, 'PATCH', { properties: { [cfg.statusProp]: v } });
+    } catch {
+      /* non-fatal: プロパティ名差異等。連携追記は確定済みなので無視 */
+    }
+  }
 
   if (pageId) {
     await notionApi(cfg, `/pages/${pageId}`, 'PATCH', { properties: props });
+    await setOperationalStatus(pageId);
     return pageId;
   }
 
@@ -341,5 +355,6 @@ export async function linkSellerRow(env: ListingNotionEnv, input: LinkInput): Pr
   const lid = await nextListingId(cfg);
   if (lid) createProps[cfg.listingIdProp] = richText(lid);
   const created = await notionApi(cfg, `/pages`, 'POST', { parent: { database_id: cfg.dbId }, properties: createProps });
+  if (created.id) await setOperationalStatus(created.id);
   return created.id ?? null;
 }
