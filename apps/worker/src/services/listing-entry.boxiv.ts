@@ -137,12 +137,15 @@ export async function listDueForReminder(
 ): Promise<ListingEntry[]> {
   const res = await db
     .prepare(
+      // created_at / email_sent_at は ISO8601(strftime '%Y-%m-%dT%H:%M:%SZ') 保存。
+      // datetime('now') はスペース区切り(...HH:MM:SS)を返すため、'T' > ' ' で文字列比較が常に偽になる。
+      // 同じ strftime 形式で比較する（ここを間違えるとリマインダーが永久に発火しない）。
       `SELECT * FROM listing_entries
         WHERE status = 'form_only'
           AND email IS NOT NULL AND email <> ''
           AND reminder_count < ?
-          AND created_at <= datetime('now', ? || ' minutes')
-          AND (email_sent_at IS NULL OR email_sent_at <= datetime('now', ? || ' minutes'))
+          AND created_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' minutes')
+          AND (email_sent_at IS NULL OR email_sent_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' minutes'))
         ORDER BY created_at ASC
         LIMIT ?`,
     )
