@@ -122,6 +122,13 @@ export type Env = {
     LISTING_REMINDER_QUIET_START_HOUR_JST?: string; // default: 21
     LISTING_REMINDER_QUIET_END_HOUR_JST?: string;   // default: 9
     LISTING_REMINDER_RETURN_TO?: string;           // default: https://lightning.boxiv.co.jp/thanks
+    // 催促スケジュール（提出起点・分）
+    LISTING_REMINDER_STEPS_MINUTES?: string;        // default: 10,1440,2880（10分/24h/48h）
+    LISTING_ESCALATE_MINUTES?: string;              // default: 4320（72h→Slackエスカレ）
+    // SMS 催促 (Twilio)
+    TWILIO_ACCOUNT_SID?: string;
+    TWILIO_AUTH_TOKEN?: string;
+    TWILIO_FROM?: string;                           // Twilio番号(+81…) or Messaging Service SID(MG…)
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };

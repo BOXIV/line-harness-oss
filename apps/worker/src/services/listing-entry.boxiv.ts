@@ -19,6 +19,8 @@ export interface ListingEntry {
   reminder_count: number;
   email_sent_at: string | null;
   sms_sent_at: string | null;
+  slack_thread_ts: string | null;
+  escalated_at: string | null;
   return_to: string | null;
   created_at: string;
   linked_at: string | null;
@@ -125,44 +127,62 @@ export async function setNotionPageId(db: D1Database, matchKey: string, pageId: 
 }
 
 /**
- * 催促対象（未連携かつ経過時間しきい値超え）を抽出する。
- * - status='form_only' かつ email がある
- * - created_at が olderThanMinutes 以上前
- * - 直近送信から minIntervalMinutes 以上経過（重送ガード）
- * - reminder_count < maxReminders（送りすぎ防止）
+ * 催促/エスカレ評価の候補（未連携 form_only）を取得する。
+ * - status='form_only'（連携済みは対象外＝一度連携したら以降一切送らない）
+ * - 作成から最小ステップ閾値(minElapsedMinutes、既定10分)以上経過
+ * - 全ステップ未送信(reminder_count<3) または 未エスカレ(escalated_at IS NULL)
+ * どのステップ/72hエスカレが due かは呼び出し側が created_at と reminder_count から判定する。
+ * 日付は created_at の保存形式(ISO strftime)で比較する（datetime('now')はスペース区切りで不一致になるため使わない）。
  */
-export async function listDueForReminder(
+export async function listFormOnlyForReminder(
   db: D1Database,
-  opts: { olderThanMinutes: number; minIntervalMinutes: number; maxReminders: number; limit: number },
+  opts: { minElapsedMinutes: number; limit: number },
 ): Promise<ListingEntry[]> {
   const res = await db
     .prepare(
       `SELECT * FROM listing_entries
         WHERE status = 'form_only'
-          AND email IS NOT NULL AND email <> ''
-          AND reminder_count < ?
-          AND created_at <= datetime('now', ? || ' minutes')
-          AND (email_sent_at IS NULL OR email_sent_at <= datetime('now', ? || ' minutes'))
+          AND created_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' minutes')
+          AND (reminder_count < 3 OR escalated_at IS NULL)
         ORDER BY created_at ASC
         LIMIT ?`,
     )
-    .bind(opts.maxReminders, `-${opts.olderThanMinutes}`, `-${opts.minIntervalMinutes}`, opts.limit)
+    .bind(`-${opts.minElapsedMinutes}`, opts.limit)
     .all<ListingEntry>();
   return res.results ?? [];
 }
 
-export async function markReminderSent(
+/** 1 催促ステップ送信後の記録。reminder_count を1進め、送れたチャネルの時刻を更新。 */
+export async function markStepSent(
   db: D1Database,
   matchKey: string,
-  channel: 'email' | 'sms',
+  sent: { email: boolean; sms: boolean },
 ): Promise<void> {
-  const col = channel === 'email' ? 'email_sent_at' : 'sms_sent_at';
   await db
     .prepare(
       `UPDATE listing_entries
-         SET ${col} = ${NOW}, reminder_count = reminder_count + 1, updated_at = ${NOW}
+         SET reminder_count = reminder_count + 1,
+             email_sent_at = CASE WHEN ? THEN ${NOW} ELSE email_sent_at END,
+             sms_sent_at   = CASE WHEN ? THEN ${NOW} ELSE sms_sent_at END,
+             updated_at = ${NOW}
        WHERE match_key = ?`,
     )
+    .bind(sent.email ? 1 : 0, sent.sms ? 1 : 0, matchKey)
+    .run();
+}
+
+/** 72h 未連携エスカレ通知の送信記録（重複防止）。 */
+export async function markEscalated(db: D1Database, matchKey: string): Promise<void> {
+  await db
+    .prepare(`UPDATE listing_entries SET escalated_at = ${NOW}, updated_at = ${NOW} WHERE match_key = ?`)
     .bind(matchKey)
+    .run();
+}
+
+/** フォーム送信時に投稿した Slack 通知の ts を保存（連携完了/エスカレのスレッド返信キー）。 */
+export async function setSlackThreadTs(db: D1Database, matchKey: string, ts: string): Promise<void> {
+  await db
+    .prepare(`UPDATE listing_entries SET slack_thread_ts = ?, updated_at = ${NOW} WHERE match_key = ?`)
+    .bind(ts, matchKey)
     .run();
 }

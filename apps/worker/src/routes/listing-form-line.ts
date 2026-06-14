@@ -27,9 +27,10 @@
 import { Hono } from 'hono';
 import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId } from '../services/listing-entry.boxiv.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
+import { slackPost } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
@@ -270,6 +271,22 @@ listingFormLine.post('/listing-form/submit', async (c) => {
     console.error('listing-form submit: Notion 起票 failed', e);
   }
 
+  // 4) Slack #pj-lightning-sell へフォーム通知を投稿し ts を保存（連携完了/72hエスカレのスレッド親）— 非致命
+  try {
+    const carModel = pick('メーカー/車種') || pick('車種');
+    const lines = [
+      '🆕 *出品フォーム送信*（LINE連携待ち）',
+      `• お名前: ${name || '—'}`,
+      `• 連絡先: ${[phone, email].filter(Boolean).join(' / ') || '—'}`,
+      ...(carModel ? [`• 車種: ${carModel}`] : []),
+      `• match_key: \`${matchKey}\``,
+    ];
+    const r = await slackPost(c.env, lines.join('\n'));
+    if (r.ok && r.ts) await setSlackThreadTs(c.env.DB, matchKey, r.ts);
+  } catch (e) {
+    console.error('listing-form submit: Slack 通知 failed', e);
+  }
+
   return c.json({ success: true }, 200);
 });
 
@@ -358,12 +375,14 @@ listingFormLine.get('/listing-form/callback', async (c) => {
   // BOXIV: D1 台帳 + Notion を match_key で「連携済み」に更新（旧 reconcile-daemon の Notion 起票を Worker に集約）。
   // フォーム送信時に submit で起票済みの行へ lineUserId を追記。form_submit が無い直リンクは orphan 行を作る。非致命。
   let notionPageId: string | null = null;
+  let slackThreadTs: string | null = null;
   try {
     const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
     if (!entry) {
       await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
     } else {
       notionPageId = entry.notion_page_id;
+      slackThreadTs = entry.slack_thread_ts;
     }
   } catch (err) {
     console.error(`listing-form callback: D1 markLinked failed (form_id=${ctx.form_id})`, err);
@@ -385,10 +404,20 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     console.error('listing-form callback: listing_link_completed fire threw', err);
   });
 
-  // Post to Slack — non-fatal: 突合ボット用（#pj-lightning-sell）。失敗してもフロー継続。
-  await postSlackLinkNotification(c.env, ctx, profile).catch((err) => {
+  // Slack: フォーム通知スレッドに「連携完了」を返信（thread_ts があればスレッド、無ければ単発）。非致命。
+  try {
+    const notionUrl = notionPageId ? `https://www.notion.so/${notionPageId.replace(/-/g, '')}` : null;
+    const lines = [
+      '✅ *LINE連携が完了しました*',
+      `• 表示名: ${profile.displayName || '—'}`,
+      `• LINE userId: \`${profile.userId}\``,
+      ...(notionUrl ? [`• Notion: <${notionUrl}|出品者リストを開く>`] : []),
+      `• match_key: \`${ctx.form_id}\``,
+    ];
+    await slackPost(c.env, lines.join('\n'), { threadTs: slackThreadTs });
+  } catch (err) {
     console.error(`listing-form callback: slack post threw (form_id=${ctx.form_id})`, err);
-  });
+  }
 
   // Redirect to return_to (with ?linked=1) or render success page.
   // Re-validate against the allowlist at the redirect site (defense-in-depth).
