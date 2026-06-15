@@ -77,7 +77,13 @@ BOXIV Lightning サポートチーム
   return { subject, text, html };
 }
 
-/** SMS 本文（プレーン。連携リンク付き・短文）。 */
+/** SMS 本文（プレーン・実改行・短縮リンク）。link は短縮URL(/r/<key>)を渡す想定。 */
 export function buildReminderSms(link: string): string {
-  return `【BOXIV Lightning】出品フォームのご入力ありがとうございます。お車の成約までLINEでやり取りいたしますので、公式LINEの連携をお願いします。\n${link}`;
+  return [
+    '【BOXIV Lightning】',
+    '出品フォームのご入力ありがとうございます。お車の成約までLINEでやり取りいたしますので、公式LINEの連携をお願いします。',
+    '',
+    '▼連携はこちら',
+    link,
+  ].join('\n');
 }
