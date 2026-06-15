@@ -53,6 +53,12 @@ function buildLink(env: ReminderEnv, entry: ListingEntry): string {
   return start;
 }
 
+/** SMS 用の短縮リンク（/r/<key> → 302 で LIFF ラップ先へ）。SMSで長い encoded URL を避ける。 */
+function buildSmsLink(env: ReminderEnv, entry: ListingEntry): string {
+  const base = (env.WORKER_URL || 'https://line-connect.boxiv.workers.dev').replace(/\/+$/, '');
+  return `${base}/r/${encodeURIComponent(entry.match_key)}`;
+}
+
 export async function processListingFormReminders(env: ReminderEnv): Promise<void> {
   const haveEmail = !!(env.SENDGRID_API_KEY && env.SENDGRID_FROM_EMAIL);
   const haveSms = twilioConfigured(env);
@@ -100,16 +106,15 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
         if (inQuiet) continue;          // 夜間は催促を保留（日中の次tickで送る）
         if (sends >= perTick) continue; // 1tick上限
         if (!e.email && !e.phone) continue; // 連絡先なし＝送れない
-        const link = buildLink(env, e);
         let sentEmail = false, sentSms = false;
         if (haveEmail && e.email) {
-          const { subject, text, html } = buildReminderEmail(link);
+          const { subject, text, html } = buildReminderEmail(buildLink(env, e)); // メールはLIFFラップ(ボタン裏)
           const r = await sendEmail(env, e.email, subject, { text, html });
           sentEmail = r.ok;
           if (!r.ok) console.error(`listing reminder: email failed ${e.match_key} ${r.error}`);
         }
         if (haveSms && e.phone) {
-          const r = await sendSms(env, e.phone, buildReminderSms(link));
+          const r = await sendSms(env, e.phone, buildReminderSms(buildSmsLink(env, e))); // SMSは短縮リンク
           sentSms = r.ok;
           if (!r.ok && !r.skipped) console.error(`listing reminder: sms failed ${e.match_key} ${r.error}`);
         }

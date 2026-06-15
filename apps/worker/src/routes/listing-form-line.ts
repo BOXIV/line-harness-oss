@@ -191,6 +191,23 @@ listingFormLine.get('/listing-form/start', async (c) => {
   return c.redirect(loginUrl.toString());
 });
 
+/**
+ * GET /r/:key — SMS 等に載せる短縮リンク。
+ * LIFF ラップ済みの /listing-form/start へ 302。SMS で長い encoded URL を避けるため。
+ */
+listingFormLine.get('/r/:key', (c) => {
+  const key = c.req.param('key');
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(key)) return c.text('not found', 404);
+  const base = (c.env.WORKER_URL || new URL(c.req.url).origin).replace(/\/+$/, '');
+  const returnTo = 'https://lightning.boxiv.co.jp/thanks';
+  const start = `${base}/listing-form/start?form_id=${encodeURIComponent(key)}&return_to=${encodeURIComponent(returnTo)}`;
+  const liffUrl = c.env.LIFF_URL || '';
+  const target = /liff\.line\.me\/[0-9]+-[A-Za-z0-9]+/.test(liffUrl)
+    ? `${liffUrl}?redirect=${encodeURIComponent(start)}`
+    : start;
+  return c.redirect(target, 302);
+});
+
 // ─── CORS（公開フォームページからの直接 POST 用） ────────────────
 function applyCors(c: any): void {
   const origin = c.req.header('origin') || '';
