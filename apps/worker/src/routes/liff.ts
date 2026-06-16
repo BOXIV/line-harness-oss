@@ -12,14 +12,16 @@ import {
   getLineAccounts,
   jstNow,
 } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
+import { checkFollowing } from '../services/friendship.boxiv.js';
 import type { Env } from '../index.js';
 
 const liffRoutes = new Hono<Env>();
 
-// ─── LINE Login OAuth (bot_prompt=normal) ───────────────────
+// ─── LINE Login OAuth (bot_prompt=aggressive) ───────────────────
 
 /**
- * GET /auth/line — redirect to LINE Login with bot_prompt=normal
+ * GET /auth/line — redirect to LINE Login with bot_prompt=aggressive
  *
  * This is THE friend-add URL. Put this on LPs, SNS, ads.
  * Query params:
@@ -91,7 +93,10 @@ liffRoutes.get('/auth/line', async (c) => {
   // BOXIV: prod Login channel 2010320277 に email スコープが無いため除外
   // （email は liff.ts:295 の getUserByEmail フォールバックでのみ使用・ガード済）。
   loginUrl.searchParams.set('scope', 'profile openid');
-  loginUrl.searchParams.set('bot_prompt', 'normal');
+  // aggressive: 同意画面の後に「友だち追加」専用画面を必ず表示し、未追加/ブロック中の人にも
+  // 追加（=ブロック解除）を強く促す。normal は同意画面内の一オプションのため外されやすく、
+  // 「連携済みだが未フォロー（=配信不達）」を生みやすい。callback 側でも実フォローを再判定する。
+  loginUrl.searchParams.set('bot_prompt', 'aggressive');
   loginUrl.searchParams.set('state', encodedState);
 
   // Build LIFF URL with params (opens LINE app directly on mobile + QR on PC)
@@ -272,12 +277,26 @@ liffRoutes.get('/auth/callback', async (c) => {
     const db = c.env.DB;
     const lineUserId = verified.sub;
 
-    // Upsert friend (may not exist yet if webhook hasn't fired)
+    // 実フォロー状態を Messaging API で判定する。LINE Login の profile/openid は
+    // 友だち状態と無関係に userId を返すため、「連携完了（user_id 付与）＝配信可能」ではない。
+    // accountParam があればそのOAのトークンを使う（既定は環境のチャネルトークン）。
+    let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
+    if (accountParam) {
+      const acct = await getLineAccountByChannelId(db, accountParam);
+      if (acct?.channel_access_token) accessToken = acct.channel_access_token;
+    }
+    const lineClient = new LineClient(accessToken);
+    const followStatus = await checkFollowing(lineClient, lineUserId); // true=友だち / false=未追加 / null=判定不能
+
+    // Upsert friend (may not exist yet if webhook hasn't fired)。
+    // 実フォロー判定値を渡し、未追加で連携しただけのユーザーを is_following=1 と誤検知させない。
+    // null（判定不能）のときは既存値を維持（勝手に下げない）。
     const friend = await upsertFriend(db, {
       lineUserId,
       displayName,
       pictureUrl,
       statusMessage: null,
+      isFollowing: followStatus === null ? undefined : followStatus,
     });
 
     // Create or find user → link
@@ -400,24 +419,18 @@ liffRoutes.get('/auth/callback', async (c) => {
       }
     }
 
-    // Auto-enroll in friend_add scenarios + immediate delivery (skip delivery window)
-    try {
+    // Auto-enroll in friend_add scenarios + immediate delivery (skip delivery window)。
+    // 実フォロー済み（followStatus === true）のときだけ実行する。未追加ユーザーへの即時 push は
+    // LINE 上は不達（HTTP 200 でもサイレント）になるため。未追加→後で友だち追加すれば
+    // follow webhook が同じ friend_add シナリオを発火する。
+    if (followStatus === true) try {
       const { getScenarios, enrollFriendInScenario: enroll, getScenarioSteps } = await import('@line-crm/db');
-      const { LineClient } = await import('@line-crm/line-sdk');
       const { buildMessage, expandVariables } = await import('../services/step-delivery.js');
 
       // Resolve which account this friend belongs to
       const matchedAccountId = accountParam
         ? (await getLineAccountByChannelId(db, accountParam))?.id ?? null
         : null;
-
-      // Get access token for this account
-      let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
-      if (accountParam) {
-        const acct = await getLineAccountByChannelId(db, accountParam);
-        if (acct) accessToken = acct.channel_access_token;
-      }
-      const lineClient = new LineClient(accessToken);
 
       const scenarios = await getScenarios(db);
       for (const scenario of scenarios) {
@@ -446,6 +459,14 @@ liffRoutes.get('/auth/callback', async (c) => {
       }
     } catch (err) {
       console.error('OAuth scenario enrollment error:', err);
+    }
+
+    // 未フォロー（友だち追加を断った/まだ追加していない）かつ遷移先指定が無い場合は、
+    // 友だち追加ページを表示して追加を促す。連携（user_id）は完了しているが、これだけでは
+    // メッセージが届かないため。redirect/booking フローは遷移先がUXを持つので従来どおり進める。
+    if (followStatus === false && !redirect) {
+      const basicId = await fetchBotBasicId(accessToken);
+      return c.html(friendAddPage(displayName, pictureUrl, basicId));
     }
 
     // 撮影予約ページへのリダイレクトの場合はセッションCookieを発行
@@ -959,11 +980,70 @@ function completionPage(displayName: string, pictureUrl: string | null, ref: str
     <div class="check">✓</div>
     <h2>登録完了！</h2>
     <div class="profile">
-      ${pictureUrl ? `<img src="${pictureUrl}" alt="">` : ''}
+      ${pictureUrl ? `<img src="${escapeHtml(pictureUrl)}" alt="">` : ''}
       <p class="name">${escapeHtml(displayName)} さん</p>
     </div>
     <p class="message">ありがとうございます！<br>これからお役立ち情報をお届けします。<br>このページは閉じて大丈夫です。</p>
     ${ref ? `<p class="ref">${escapeHtml(ref)}</p>` : ''}
+  </div>
+</body>
+</html>`;
+}
+
+/** Messaging API の /v2/bot/info から OA の basicId（@xxxx）を取得。友だち追加URLの組み立てに使う。 */
+async function fetchBotBasicId(channelAccessToken: string): Promise<string> {
+  try {
+    const res = await fetch('https://api.line.me/v2/bot/info', {
+      headers: { Authorization: `Bearer ${channelAccessToken}` },
+    });
+    if (res.ok) {
+      const bot = (await res.json()) as { basicId?: string };
+      return bot.basicId || '';
+    }
+  } catch {
+    // ignore — basicId 無しでもページは表示する
+  }
+  return '';
+}
+
+/**
+ * 連携は完了したが OA を友だち追加していないユーザーに、友だち追加を促すページ。
+ * 追加しないとメッセージが届かないため、登録完了ではなくこの画面を出す。
+ */
+function friendAddPage(displayName: string, pictureUrl: string | null, basicId: string): string {
+  const addUrl = basicId ? `https://line.me/R/ti/p/${escapeHtml(basicId)}` : '';
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>あと少しで完了</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Hiragino Sans', system-ui, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: #fff; border-radius: 16px; padding: 40px 24px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; max-width: 400px; width: 90%; }
+    .icon { width: 64px; height: 64px; border-radius: 50%; background: #06C755; color: #fff; font-size: 32px; line-height: 64px; margin: 0 auto 16px; }
+    h2 { font-size: 20px; color: #0f172a; margin-bottom: 12px; }
+    .profile { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 12px 0; }
+    .profile img { width: 40px; height: 40px; border-radius: 50%; }
+    .profile .name { font-size: 15px; font-weight: 600; }
+    .message { font-size: 14px; color: #475569; line-height: 1.7; margin: 12px 0 24px; }
+    .btn { display: block; width: 100%; padding: 16px; border: none; border-radius: 10px; font-size: 16px; font-weight: 700; text-decoration: none; text-align: center; background: #06C755; color: #fff; }
+    .btn:active { opacity: 0.85; }
+    .sub { font-size: 12px; color: #94a3b8; margin-top: 16px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">+</div>
+    <h2>あと少しで完了です</h2>
+    <div class="profile">
+      ${pictureUrl ? `<img src="${escapeHtml(pictureUrl)}" alt="">` : ''}
+      <p class="name">${escapeHtml(displayName)} さん</p>
+    </div>
+    <p class="message">メッセージをお届けするには<br><b>友だち追加</b>が必要です。<br>下のボタンから追加をお願いします。</p>
+    ${addUrl ? `<a href="${addUrl}" class="btn">LINEで友だち追加する</a>` : `<p class="message">お手数ですが LINE 公式アカウントを検索して友だち追加してください。</p>`}
+    <p class="sub">追加後、メッセージが届くようになります。<br>このページは閉じて大丈夫です。</p>
   </div>
 </body>
 </html>`;

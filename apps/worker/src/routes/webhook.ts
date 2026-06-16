@@ -110,6 +110,8 @@ async function resolveOrCreateFriend(
     displayName: profile?.displayName ?? null,
     pictureUrl: profile?.pictureUrl ?? null,
     statusMessage: profile?.statusMessage ?? null,
+    // 接触（message/postback）が来た時点で相手は OA を友だち追加済み（=push 可能）。
+    isFollowing: true,
   });
   if (lineAccountId) {
     await db
@@ -149,6 +151,8 @@ async function handleEvent(
       displayName: profile?.displayName ?? null,
       pictureUrl: profile?.pictureUrl ?? null,
       statusMessage: profile?.statusMessage ?? null,
+      // follow イベント = 友だち追加（またはブロック解除）。確実に push 可能。
+      isFollowing: true,
     });
 
     // Set line_account_id for multi-account tracking

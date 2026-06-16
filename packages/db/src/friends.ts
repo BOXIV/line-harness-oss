@@ -95,6 +95,18 @@ export interface UpsertFriendInput {
   displayName?: string | null;
   pictureUrl?: string | null;
   statusMessage?: string | null;
+  /**
+   * 友だち（フォロー）状態を明示的に設定する。
+   *   - 省略時: 既存行は現状維持（is_following を上書きしない）、新規行は 1（後方互換）。
+   *   - true/false 指定時: その値を書き込む。
+   *
+   * 重要: OAuth / Web 連携経路（friends.user_id を付与する経路）は、ユーザーが実際に
+   * 友だち追加したか分からないまま呼ばれる。以前はこの関数が無条件に is_following=1 を
+   * 立てていたため「連携済みだが未フォロー（=配信不達）」が is_following=1 と誤検知された。
+   * これらの経路は Messaging API の実フォロー判定（LineClient.isFollowing）の結果を
+   * 必ず isFollowing で渡すこと。follow webhook は true、lazy backfill（接触＝友だち）も true。
+   */
+  isFollowing?: boolean;
 }
 
 export async function upsertFriend(
@@ -105,13 +117,16 @@ export async function upsertFriend(
   const existing = await getFriendByLineUserId(db, input.lineUserId);
 
   if (existing) {
+    // 省略時は既存の is_following を維持する（連携経路が勝手に 1 へ上書きしない）。
+    const nextFollowing =
+      input.isFollowing === undefined ? existing.is_following : input.isFollowing ? 1 : 0;
     await db
       .prepare(
         `UPDATE friends
          SET display_name = ?,
              picture_url = ?,
              status_message = ?,
-             is_following = 1,
+             is_following = ?,
              updated_at = ?
          WHERE line_user_id = ?`,
       )
@@ -119,6 +134,7 @@ export async function upsertFriend(
         'displayName' in input ? (input.displayName ?? null) : existing.display_name,
         'pictureUrl' in input ? (input.pictureUrl ?? null) : existing.picture_url,
         'statusMessage' in input ? (input.statusMessage ?? null) : existing.status_message,
+        nextFollowing,
         now,
         input.lineUserId,
       )
@@ -127,11 +143,13 @@ export async function upsertFriend(
     return (await getFriendByLineUserId(db, input.lineUserId))!;
   }
 
+  // 新規行: 省略時は 1（後方互換）。連携経路は明示的に実フォロー判定値を渡す。
+  const insertFollowing = input.isFollowing === undefined ? 1 : input.isFollowing ? 1 : 0;
   const id = crypto.randomUUID();
   await db
     .prepare(
       `INSERT INTO friends (id, line_user_id, display_name, picture_url, status_message, is_following, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -139,6 +157,7 @@ export async function upsertFriend(
       input.displayName ?? null,
       input.pictureUrl ?? null,
       input.statusMessage ?? null,
+      insertFollowing,
       now,
       now,
     )
