@@ -53,6 +53,10 @@ export default function StaffPage() {
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState('')
 
+  // ログイン中ユーザーのロール（manager は撮影スタッフのみ追加可）
+  const [myRole, setMyRole] = useState<string | null>(null)
+  const isManager = myRole === 'manager'
+
   const loadMembers = async () => {
     setLoading(true)
     setError('')
@@ -71,6 +75,7 @@ export default function StaffPage() {
   }
 
   useEffect(() => {
+    setMyRole(localStorage.getItem('lh_staff_role'))
     loadMembers()
   }, [])
 
@@ -235,16 +240,29 @@ export default function StaffPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">ロール *</label>
-                <select
-                  value={formRole}
-                  onChange={(e) => setFormRole(e.target.value as 'owner' | 'admin' | 'manager' | 'staff')}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
-                >
-                  <option value="staff">撮影スタッフ（シフト登録専用）</option>
-                  <option value="admin">管理者</option>
-                  <option value="manager">マネージャー</option>
-                  <option value="owner">オーナー</option>
-                </select>
+                {isManager ? (
+                  <>
+                    <select
+                      value="staff"
+                      disabled
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-gray-100 text-gray-500 cursor-not-allowed focus:outline-none"
+                    >
+                      <option value="staff">撮影スタッフ（シフト登録専用）</option>
+                    </select>
+                    <p className="mt-1 text-[11px] text-gray-500">マネージャーは撮影スタッフのみ追加できます</p>
+                  </>
+                ) : (
+                  <select
+                    value={formRole}
+                    onChange={(e) => setFormRole(e.target.value as 'owner' | 'admin' | 'manager' | 'staff')}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                  >
+                    <option value="staff">撮影スタッフ（シフト登録専用）</option>
+                    <option value="admin">管理者</option>
+                    <option value="manager">マネージャー</option>
+                    <option value="owner">オーナー</option>
+                  </select>
+                )}
               </div>
             </div>
             {formError && (

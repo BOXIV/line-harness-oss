@@ -11,7 +11,7 @@ import StatusPicker from '@/components/friends/status-picker'
 import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import { detectFriendSource } from '@/lib/friend-source'
 import { notionPillClass } from '@/lib/notion-color'
-import { formatFriendLabel } from '@/lib/friend-name'
+import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 
 interface NotionFriendLink {
   source: 'seller' | 'buyer'
@@ -32,6 +32,7 @@ interface Chat {
   id: string
   friendId: string
   friendName: string
+  managedName: string | null
   friendPictureUrl: string | null
   notion: NotionFriendLink | null
   customerStatus: CustomerStatus | null
@@ -211,8 +212,12 @@ export default function ChatsPage() {
   const [error, setError] = useState('')
   const [messageContent, setMessageContent] = useState('')
   const [sending, setSending] = useState(false)
-  const [notes, setNotes] = useState('')
-  const [savingNotes, setSavingNotes] = useState(false)
+  const [nameQuery, setNameQuery] = useState('')
+  // 表示名編集モーダル（管理名 managedName を「表示中の文字列」としてフル編集）
+  const [editOpen, setEditOpen] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
   const [showLoadingIndicator, setShowLoadingIndicator] = useState(false)
   const [loadingSeconds, setLoadingSeconds] = useState(5)
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
@@ -305,8 +310,6 @@ export default function ChatsPage() {
         setChatDetail((prev) =>
           opts?.silent && prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
         )
-        // notes は明示リフレッシュ時のみ反映（5秒ポーリングで編集中の入力を上書きしない）
-        if (!opts?.silent) setNotes(next.notes || '')
       }
     } catch {
       if (!opts?.silent) setError('チャット詳細の読み込みに失敗しました。')
@@ -457,16 +460,31 @@ export default function ChatsPage() {
     }
   }
 
-  const handleSaveNotes = async () => {
-    if (!selectedChatId) return
-    setSavingNotes(true)
+  const openEditName = () => {
+    if (!chatDetail) return
+    // 現在表示されている文字列（管理名があればそれ、無ければ Notion 合成名）をプリフィル
+    setEditName(chatDetail.managedName?.trim() || composeDisplayLabel(chatDetail))
+    setEditError('')
+    setEditOpen(true)
+  }
+
+  const saveEditName = async () => {
+    if (!chatDetail) return
+    setEditSaving(true)
+    setEditError('')
     try {
-      await api.chats.update(selectedChatId, { notes })
-      loadChatDetail(selectedChatId)
+      const res = await api.friends.update(chatDetail.friendId, { managedName: editName.trim() || null })
+      if (res.success) {
+        setEditOpen(false)
+        loadChatDetail(chatDetail.id)
+        loadChats()
+      } else {
+        setEditError(res.error ?? '表示名の更新に失敗しました')
+      }
     } catch {
-      setError('メモの保存に失敗しました。')
+      setEditError('表示名の更新に失敗しました')
     } finally {
-      setSavingNotes(false)
+      setEditSaving(false)
     }
   }
 
@@ -536,6 +554,17 @@ export default function ChatsPage() {
             </select>
           </div>
 
+          {/* 名前で検索 */}
+          <div className="px-3 py-2 border-b border-gray-200">
+            <input
+              type="text"
+              value={nameQuery}
+              onChange={(e) => setNameQuery(e.target.value)}
+              placeholder="名前で検索..."
+              className="w-full text-xs border border-gray-300 rounded-lg px-2 py-2 min-h-[36px] bg-white focus:outline-none focus:border-slate-900"
+            />
+          </div>
+
           {/* Chat List */}
           <div className="flex-1 overflow-y-auto">
             {loading ? (
@@ -554,7 +583,13 @@ export default function ChatsPage() {
               </div>
             ) : (
               <>
-                {chats.map((chat) => {
+                {chats
+                  .filter((chat) => {
+                    const q = nameQuery.trim().toLowerCase()
+                    if (!q) return true
+                    return formatChatLabel(chat).toLowerCase().includes(q)
+                  })
+                  .map((chat) => {
                   const isSelected = selectedChatId === chat.id
                   const label = formatChatLabel(chat)
                   return (
@@ -580,6 +615,11 @@ export default function ChatsPage() {
                         {chat.customerStatus && (
                           <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${notionPillClass(chat.customerStatus.color)}`}>
                             {chat.customerStatus.name}
+                          </span>
+                        )}
+                        {chat.notion?.label && (
+                          <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 bg-slate-100 text-slate-600 max-w-[7rem] truncate">
+                            {chat.notion.source === 'seller' ? '掲載' : '取引'} {chat.notion.label}
                           </span>
                         )}
                       </div>
@@ -627,21 +667,33 @@ export default function ChatsPage() {
                     <img src={chatDetail.friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0" />
                   )}
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {formatChatLabel(chatDetail)}
-                    </p>
+                    <div className="flex items-center gap-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {formatChatLabel(chatDetail)}
+                      </p>
+                      <button
+                        onClick={openEditName}
+                        className="flex-shrink-0 text-gray-400 hover:text-slate-700 transition-colors"
+                        title="表示名を編集"
+                        aria-label="表示名を編集"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                    </div>
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       <StatusPicker
                         friendId={chatDetail.friendId}
                         preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
                         compact
                       />
-                      <RichMenuPicker friendId={chatDetail.friendId} />
                       {chatDetail.notion?.label && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
                           {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}
                         </span>
                       )}
+                      <RichMenuPicker friendId={chatDetail.friendId} />
                     </div>
                   </div>
                 </div>
@@ -704,26 +756,6 @@ export default function ChatsPage() {
                     />
                   ))
                 )}
-              </div>
-
-              {/* Notes */}
-              <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="メモを入力..."
-                    className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-green-500"
-                  />
-                  <button
-                    onClick={handleSaveNotes}
-                    disabled={savingNotes}
-                    className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
-                  >
-                    {savingNotes ? '保存中...' : 'メモ保存'}
-                  </button>
-                </div>
               </div>
 
               {/* Send Message Form */}
@@ -829,6 +861,41 @@ export default function ChatsPage() {
           friendId={chatDetail.friendId}
           friendName={chatDetail.friendName}
         />
+      )}
+
+      {/* 表示名編集モーダル（管理名 managedName を「表示中の文字列」としてフル編集） */}
+      {editOpen && chatDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setEditOpen(false)}>
+          <div className="w-full max-w-sm bg-white rounded-lg shadow-lg p-5" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-gray-900 mb-1">表示名を編集</h3>
+            <p className="text-[11px] text-gray-500 mb-3">表示中の文字列をそのまま編集できます。空にすると LINE プロフィール名に戻ります。</p>
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter') saveEditName() }}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            />
+            {editError && <p className="mt-2 text-xs text-red-600">{editError}</p>}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setEditOpen(false)}
+                className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={saveEditName}
+                disabled={editSaving}
+                className="px-3 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
+                style={{ backgroundColor: '#0f172a' }}
+              >
+                {editSaving ? '保存中...' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

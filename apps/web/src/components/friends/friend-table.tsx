@@ -8,7 +8,7 @@ import { api } from '@/lib/api'
 import TagBadge from './tag-badge'
 import StatusPicker from './status-picker'
 import { detectFriendSource } from '@/lib/friend-source'
-import { formatFriendLabel } from '@/lib/friend-name'
+import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 
 interface FriendTableProps {
   friends: FriendWithTags[]
@@ -193,7 +193,8 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                             onClick={(e) => {
                               e.stopPropagation()
                               setEditFriend(friend)
-                              setEditName(friend.managedName ?? friend.displayName ?? '')
+                              // 表示中の文字列全体（管理名 or Notion 合成名）をプリフィル
+                              setEditName(friend.managedName?.trim() || composeDisplayLabel(friend))
                               setEditError('')
                             }}
                             className="shrink-0 text-gray-400 hover:text-slate-700 transition-colors"
@@ -463,7 +464,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
             </div>
             <div className="px-6 py-5 space-y-4">
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">管理名（管理画面での表示名）</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">表示名（表示中の文字列をそのまま編集）</label>
                 <input
                   type="text"
                   value={editName}

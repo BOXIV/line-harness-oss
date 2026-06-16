@@ -126,7 +126,7 @@ chats.get('/api/chats', async (c) => {
     const statusOptionId = c.req.query('statusOptionId') ?? undefined;
 
     // JOIN friends to get display_name / picture / metadata + current Notion-synced status.
-    let sql = `SELECT c.*, f.display_name, f.picture_url, f.line_user_id, f.metadata,
+    let sql = `SELECT c.*, f.display_name, f.managed_name, f.picture_url, f.line_user_id, f.metadata,
                       so.id AS status_option_id, so.name AS status_option_name,
                       so.color AS status_option_color, so.source AS status_option_source
                FROM chats c
@@ -169,6 +169,7 @@ chats.get('/api/chats', async (c) => {
         id: ch.id,
         friendId: ch.friend_id,
         friendName: ch.display_name || '名前なし',
+        managedName: ch.managed_name ?? null,
         friendPictureUrl: ch.picture_url || null,
         notion: parseFriendNotion(ch.metadata),
         customerStatus: ch.status_option_id
@@ -200,9 +201,9 @@ chats.get('/api/chats/:id', async (c) => {
 
     // 友だち情報を取得
     const friend = await c.env.DB
-      .prepare(`SELECT display_name, picture_url, line_user_id, metadata FROM friends WHERE id = ?`)
+      .prepare(`SELECT display_name, managed_name, picture_url, line_user_id, metadata FROM friends WHERE id = ?`)
       .bind(item.friend_id)
-      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string; metadata: string | null }>();
+      .first<{ display_name: string | null; managed_name: string | null; picture_url: string | null; line_user_id: string; metadata: string | null }>();
 
     // チャットに関連するメッセージログも取得
     const messages = await c.env.DB
@@ -216,6 +217,7 @@ chats.get('/api/chats/:id', async (c) => {
         id: item.id,
         friendId: item.friend_id,
         friendName: friend?.display_name || '名前なし',
+        managedName: friend?.managed_name ?? null,
         friendPictureUrl: friend?.picture_url || null,
         notion: parseFriendNotion(friend?.metadata ?? null),
         operatorId: item.operator_id,
