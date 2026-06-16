@@ -53,3 +53,19 @@ export function formatFriendLabel(
   if (parts.length === 0) return nickname
   return `${parts.join(' ')} (${nickname})`
 }
+
+/** managedName を無視して「Notion 合成名（label realName (nickname)）or LINE名」を返す。
+ *  表示名編集モーダルの初期値（＝現在表示されている文字列）に使う。 */
+export function composeDisplayLabel(
+  input: { displayName?: string | null; friendName?: string | null; metadata?: unknown; notion?: NotionFriendLink | null } | null | undefined,
+): string {
+  if (!input) return ''
+  const nickname = (input.displayName ?? input.friendName ?? '') || '名前なし'
+  const notion = input.notion ?? pickNotion(input)
+  if (!notion) return nickname
+  const parts: string[] = []
+  if (notion.label) parts.push(notion.label)
+  if (notion.realName) parts.push(notion.realName)
+  if (parts.length === 0) return nickname
+  return `${parts.join(' ')} (${nickname})`
+}
