@@ -122,11 +122,24 @@ CREATE TABLE IF NOT EXISTS messages_log (
   broadcast_id     TEXT REFERENCES broadcasts (id) ON DELETE SET NULL,
   scenario_step_id TEXT REFERENCES scenario_steps (id) ON DELETE SET NULL,
   delivery_type    TEXT CHECK (delivery_type IN ('push', 'reply')),
+  slack_notified_at TEXT,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_log_friend_id ON messages_log (friend_id);
 CREATE INDEX IF NOT EXISTS idx_messages_log_created_at ON messages_log (created_at);
+
+-- BOXIV: Slack 受信通知のバースト集約状態（friend 単位, notify_after=最終受信+30秒）。
+CREATE TABLE IF NOT EXISTS slack_notify_buffers (
+  friend_id        TEXT PRIMARY KEY REFERENCES friends (id) ON DELETE CASCADE,
+  line_account_id  TEXT,
+  first_msg_at     TEXT NOT NULL,
+  last_msg_at      TEXT NOT NULL,
+  notify_after     TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'pending',
+  created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+CREATE INDEX IF NOT EXISTS idx_slack_notify_buffers_due ON slack_notify_buffers (notify_after);
 
 -- ============================================================
 -- Auto Replies

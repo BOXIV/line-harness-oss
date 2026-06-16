@@ -24,7 +24,7 @@ const EXPECTED: Record<string, Array<[string, string]>> = {
   chats: [['line_account_id', 'TEXT']],
   auto_replies: [['line_account_id', 'TEXT']],
   notification_rules: [['line_account_id', 'TEXT']],
-  messages_log: [['delivery_type', 'TEXT']],
+  messages_log: [['delivery_type', 'TEXT'], ['slack_notified_at', 'TEXT']],
   ref_tracking: [['fbclid', 'TEXT'], ['gclid', 'TEXT'], ['twclid', 'TEXT'], ['ttclid', 'TEXT'], ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_campaign', 'TEXT'], ['user_agent', 'TEXT'], ['ip_address', 'TEXT']],
 };
 

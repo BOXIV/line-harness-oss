@@ -7,6 +7,7 @@ import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
 import { processScheduledMessages } from './services/scheduled-message-delivery.boxiv.js';
 import { processListingFormReminders } from './services/listing-reminder.boxiv.js';
+import { processSlackBurstNotify } from './services/slack-burst-notify.boxiv.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -256,10 +257,18 @@ app.notFound((c) => {
 
 // Scheduled handler for cron triggers — runs for all active LINE accounts
 async function scheduled(
-  _event: ScheduledEvent,
+  event: ScheduledEvent,
   env: Env['Bindings'],
   _ctx: ExecutionContext,
 ): Promise<void> {
+  // BOXIV: 1分 cron は Slack 受信通知のバースト flush 専用（軽量・30秒デバウンス）。
+  // 重い配信系ジョブ（ステップ/ブロードキャスト/リマインダ/催促 等）は 5分 cron のみで回す。
+  // （flush を 1分 cron に限定することで 5分 cron との二重送信レースを避ける）
+  if (event.cron === '* * * * *') {
+    await processSlackBurstNotify(env);
+    return;
+  }
+
   // Get all active accounts from DB, plus the default env account
   const dbAccounts = await getLineAccounts(env.DB);
   const activeTokens = new Set<string>();
