@@ -61,6 +61,8 @@ import { richMenuStatus } from './routes/rich-menu-status.boxiv.js';
 import { friendImport } from './routes/friend-import.boxiv.js';
 // prod スキーマ整合 (BOXIV, bootstrap 取りこぼし列の補填)
 import { schemaReconcile } from './routes/schema-reconcile.boxiv.js';
+import { notionWebhook } from './routes/notion-webhook.boxiv.js';
+import { reconcileNotionStatuses } from './services/notion-status-sync.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -97,6 +99,7 @@ export type Env = {
     NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
     NOTION_BUYER_STATUS_PROP?: string;
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
+    NOTION_AUTOMATION_SECRET?: string;       // PR6: Notion DBオートメーション Send webhook の共有シークレット（未設定なら受信口は無効）
     // 出品フォーム台帳→Notion 即起票 + 催促 (BOXIV)
     LISTING_FORM_SUBMIT_TOKEN?: string;        // /listing-form/submit の簡易共有トークン（任意）
     NOTION_SELLER_MATCH_KEY_PROP?: string;     // default: match_key
@@ -205,6 +208,8 @@ app.route('/', richMenuStatus);
 app.route('/', friendImport);
 // prod スキーマ整合 (BOXIV)
 app.route('/', schemaReconcile);
+// 顧客ステータス Notion 連携の受信口 (BOXIV, PR6 / 案2 automation Send webhook)
+app.route('/', notionWebhook);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
@@ -261,13 +266,20 @@ async function scheduled(
   env: Env['Bindings'],
   _ctx: ExecutionContext,
 ): Promise<void> {
-  // BOXIV: 1分 cron は Slack 受信通知のバースト flush 専用（軽量・30秒デバウンス）。
-  // 重い配信系ジョブ（ステップ/ブロードキャスト/リマインダ/催促 等）は 5分 cron のみで回す。
-  // （flush を 1分 cron に限定することで 5分 cron との二重送信レースを避ける）
-  if (event.cron === '* * * * *') {
-    await processSlackBurstNotify(env);
-    return;
-  }
+  // BOXIV: cron はアカウントの 5 トリガー上限を避けるため単一(* * * * *)に集約し、
+  // 実行時刻(scheduledTime)で分岐する:
+  //   毎分      → Slack 受信通知のバースト flush（軽量・30秒デバウンス）
+  //   5分ごと   → 配信系ジョブ（ステップ/ブロードキャスト/リマインダ/催促 等）
+  //   12時間ごと → Notion → D1 顧客ステータス reconcile（取りこぼし自己修復）
+  const at = new Date(event.scheduledTime);
+  const minute = at.getUTCMinutes();
+  const hour = at.getUTCHours();
+
+  // 毎分: Slack バースト flush（単一 invocation なので 5分ジョブとの二重送信レースも無い）
+  await processSlackBurstNotify(env);
+
+  // 以降は 5 分ごと
+  if (minute % 5 !== 0) return;
 
   // Get all active accounts from DB, plus the default env account
   const dbAccounts = await getLineAccounts(env.DB);
@@ -299,6 +311,11 @@ async function scheduled(
   jobs.push(processScheduledMessages(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN, LineClient));
   // BOXIV: 出品フォーム未連携者へのフォローアップメール催促（夜間抑止/上限/間隔/重送ガードは内部で実施）
   jobs.push(processListingFormReminders(env));
+
+  // BOXIV: 12時間ごと(UTC 00:00 / 12:00 = JST 09:00 / 21:00) — Notion → D1 ステータス reconcile
+  if (minute === 0 && hour % 12 === 0) {
+    jobs.push(reconcileNotionStatuses(env.DB, env));
+  }
 
   await Promise.allSettled(jobs);
 }

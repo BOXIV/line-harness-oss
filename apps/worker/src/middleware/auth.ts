@@ -20,6 +20,7 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path.startsWith('/booking') ||
     path.startsWith('/listing-form/') ||
     path === '/api/integrations/stripe/webhook' ||
+    path === '/api/notion/automation' ||
     path.match(/^\/api\/webhooks\/incoming\/[^/]+\/receive$/) ||
     path.match(/^\/api\/forms\/[^/]+\/submit$/) ||
     path.match(/^\/api\/forms\/[^/]+$/) // GET form definition (public for LIFF)

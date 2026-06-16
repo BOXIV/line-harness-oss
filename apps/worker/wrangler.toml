@@ -19,9 +19,9 @@ binding = "IMAGES"
 bucket_name = "line-harness-images"
 
 [triggers]
-# "* * * * *"  = 1分: Slack 受信通知のバースト flush 専用（30秒デバウンス）
-# "*/5 * * * *" = 5分: 配信系ジョブ（ステップ/ブロードキャスト/リマインダ/催促 等）
-crons = ["* * * * *", "*/5 * * * *"]
+# cron はアカウントの 5 トリガー上限対策で単一に集約。scheduled() が scheduledTime で分岐:
+#   毎分=Slackバースト flush / 5分ごと=配信ジョブ / 12時間ごと=Notion reconcile
+crons = ["* * * * *"]
 
 # Test environment is NOT defined here because @cloudflare/vite-plugin
 # strips [env.*] sections from the generated dist/line_harness/wrangler.json.
