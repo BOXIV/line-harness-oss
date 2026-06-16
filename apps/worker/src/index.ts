@@ -61,6 +61,8 @@ import { richMenuStatus } from './routes/rich-menu-status.boxiv.js';
 import { friendImport } from './routes/friend-import.boxiv.js';
 // prod スキーマ整合 (BOXIV, bootstrap 取りこぼし列の補填)
 import { schemaReconcile } from './routes/schema-reconcile.boxiv.js';
+import { notionWebhook } from './routes/notion-webhook.boxiv.js';
+import { reconcileNotionStatuses } from './services/notion-status-sync.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -97,6 +99,7 @@ export type Env = {
     NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
     NOTION_BUYER_STATUS_PROP?: string;
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
+    NOTION_AUTOMATION_SECRET?: string;       // PR6: Notion DBオートメーション Send webhook の共有シークレット（未設定なら受信口は無効）
     // 出品フォーム台帳→Notion 即起票 + 催促 (BOXIV)
     LISTING_FORM_SUBMIT_TOKEN?: string;        // /listing-form/submit の簡易共有トークン（任意）
     NOTION_SELLER_MATCH_KEY_PROP?: string;     // default: match_key
@@ -205,6 +208,8 @@ app.route('/', richMenuStatus);
 app.route('/', friendImport);
 // prod スキーマ整合 (BOXIV)
 app.route('/', schemaReconcile);
+// 顧客ステータス Notion 連携の受信口 (BOXIV, PR6 / 案2 automation Send webhook)
+app.route('/', notionWebhook);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
@@ -266,6 +271,12 @@ async function scheduled(
   // （flush を 1分 cron に限定することで 5分 cron との二重送信レースを避ける）
   if (event.cron === '* * * * *') {
     await processSlackBurstNotify(env);
+    return;
+  }
+
+  // BOXIV: 12時間ごと — Notion → D1 顧客ステータス reconcile（webhook 取りこぼしの自己修復）。
+  if (event.cron === '0 */12 * * *') {
+    await reconcileNotionStatuses(env.DB, env);
     return;
   }
 

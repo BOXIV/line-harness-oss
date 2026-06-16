@@ -3,7 +3,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 import { syncStatusOptionsFromNotion, type StatusSource } from '../services/notion-status.boxiv.js';
-import { applyRichMenuForStatus } from '../services/rich-menu-auto-switch.boxiv.js';
 
 const friendStatus = new Hono<Env>();
 
@@ -128,53 +127,16 @@ friendStatus.get('/api/friends/:id/status', async (c) => {
   }
 });
 
-// PUT /api/friends/:id/status — body: { statusOptionId: string | null }
+// PUT /api/friends/:id/status — 封鎖（read-only 化）。
+// 顧客ステータスは Notion をマスターとし、LINE Connect 側からは変更できない。
+// Notion → D1 の取り込みで表示のみ反映する（UI=StatusPicker も表示専用化済み）。
+// ※ 旧実装ではここで friend_status_assignments を upsert し、ステータス連動の
+//    リッチメニュー自動切替(applyRichMenuForStatus)も発火していた。read-only 化に伴い停止。
 friendStatus.put('/api/friends/:id/status', async (c) => {
-  try {
-    const friendId = c.req.param('id');
-    const body = await c.req.json<{ statusOptionId: string | null }>();
-    const staffId = c.var.staff?.id ?? null;
-    if (body.statusOptionId === null) {
-      await c.env.DB
-        .prepare('DELETE FROM friend_status_assignments WHERE friend_id = ?')
-        .bind(friendId)
-        .run();
-      return c.json({ success: true, data: null });
-    }
-    // upsert (PRIMARY KEY = friend_id なので REPLACE で 1 行だけ保つ)
-    await c.env.DB
-      .prepare(
-        `INSERT INTO friend_status_assignments (friend_id, status_option_id, assigned_by)
-         VALUES (?, ?, ?)
-         ON CONFLICT(friend_id) DO UPDATE SET
-           status_option_id = excluded.status_option_id,
-           assigned_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'),
-           assigned_by = excluded.assigned_by`,
-      )
-      .bind(friendId, body.statusOptionId, staffId)
-      .run();
-
-    // BOXIV: ステータスに紐付くリッチメニューがあれば LINE 側で自動切替。
-    // 失敗してもステータス更新自体は成功扱いとする (warning のみ data に同梱)。
-    const autoSwitch = await applyRichMenuForStatus(
-      c.env.DB,
-      c.env.LINE_CHANNEL_ACCESS_TOKEN,
-      friendId,
-      body.statusOptionId,
-    );
-
-    return c.json({
-      success: true,
-      data: {
-        friendId,
-        statusOptionId: body.statusOptionId,
-        richMenuAutoSwitch: autoSwitch,
-      },
-    });
-  } catch (err) {
-    console.error('PUT /api/friends/:id/status error:', err);
-    return c.json({ success: false, error: 'Internal server error' }, 500);
-  }
+  return c.json(
+    { success: false, error: '顧客ステータスは Notion がマスターのため、ここからは変更できません' },
+    405,
+  );
 });
 
 export { friendStatus };
