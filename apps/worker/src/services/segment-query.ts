@@ -93,7 +93,8 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
 
   const separator = condition.operator === 'AND' ? ' AND ' : ' OR '
   const where = clauses.length > 0 ? clauses.join(separator) : '1=1'
-  const sql = `SELECT f.id, f.line_user_id FROM friends f WHERE ${where}`
+  // is_following も返す。配信側（segment-send）が未フォローを除外するために使う。
+  const sql = `SELECT f.id, f.line_user_id, f.is_following FROM friends f WHERE ${where}`
 
   return { sql, bindings }
 }

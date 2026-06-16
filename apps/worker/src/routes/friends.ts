@@ -14,6 +14,7 @@ import {
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
+import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
@@ -353,11 +354,11 @@ friends.get('/api/friends/:id/messages', async (c) => {
     const friendId = c.req.param('id');
     const result = await c.env.DB
       .prepare(
-        `SELECT id, direction, message_type as messageType, content, created_at as createdAt
+        `SELECT id, direction, message_type as messageType, content, status, created_at as createdAt
          FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`,
       )
       .bind(friendId)
-      .all<{ id: string; direction: string; messageType: string; content: string; createdAt: string }>();
+      .all<{ id: string; direction: string; messageType: string; content: string; status: string | null; createdAt: string }>();
     return c.json({ success: true, data: result.results });
   } catch (err) {
     console.error('GET /api/friends/:id/messages error:', err);
@@ -385,6 +386,15 @@ friends.post('/api/friends/:id/messages', async (c) => {
       return c.json({ success: false, error: 'Friend not found' }, 404);
     }
 
+    const messageType = body.messageType ?? 'text';
+
+    // 未フォロー（友だち未追加/ブロック中）には送れない。LINE は push に 200 を返すが届かないため、
+    // 失敗を即時通知し、送信失敗として記録する（黙って成功扱いにしない）。
+    if (!friend.is_following) {
+      await logFailedOutgoing(db, friend.id, messageType, body.content);
+      return c.json({ success: false, error: 'この友だちは未フォロー（友だち未追加・ブロック中）のため送信できません。友だち追加を依頼してください。' }, 422);
+    }
+
     const { LineClient } = await import('@line-crm/line-sdk');
     // Resolve access token from friend's account (multi-account support)
     let accessToken = c.env.LINE_CHANNEL_ACCESS_TOKEN;
@@ -394,7 +404,6 @@ friends.post('/api/friends/:id/messages', async (c) => {
       if (account) accessToken = account.channel_access_token;
     }
     const lineClient = new LineClient(accessToken);
-    const messageType = body.messageType ?? 'text';
 
     // Auto-wrap URLs with tracking links (text with URLs → Flex with button)
     const { autoTrackContent } = await import('../services/auto-track.js');
@@ -404,7 +413,13 @@ friends.post('/api/friends/:id/messages', async (c) => {
     );
 
     const message = buildMessage(tracked.messageType, tracked.content, body.altText);
-    await lineClient.pushMessage(friend.line_user_id, [message]);
+    try {
+      await lineClient.pushMessage(friend.line_user_id, [message]);
+    } catch (err) {
+      await logFailedOutgoing(db, friend.id, messageType, body.content);
+      console.error('POST /api/friends/:id/messages: LINE push failed', err);
+      return c.json({ success: false, error: 'LINE への送信に失敗しました。時間をおいて再度お試しください。' }, 502);
+    }
 
     // Log outgoing message
     const logId = crypto.randomUUID();

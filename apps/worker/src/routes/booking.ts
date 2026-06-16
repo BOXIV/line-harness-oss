@@ -1006,6 +1006,12 @@ async function sendBookingReceivedNotification(
     },
   };
 
+  // 未フォロー（友だち未追加/ブロック中）には届かない。送信失敗として記録してスキップ。
+  if (!friend.is_following) {
+    const { logFailedOutgoing } = await import('../services/message-log.boxiv.js');
+    await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex));
+    return;
+  }
   const { LineClient } = await import('@line-crm/line-sdk');
   const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
   await client.pushMessage(friend.line_user_id, [
@@ -1093,6 +1099,12 @@ async function sendOtherReceivedNotification(
     },
   };
 
+  // 未フォロー（友だち未追加/ブロック中）には届かない。送信失敗として記録してスキップ。
+  if (!friend.is_following) {
+    const { logFailedOutgoing } = await import('../services/message-log.boxiv.js');
+    await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex));
+    return;
+  }
   const { LineClient } = await import('@line-crm/line-sdk');
   const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
   await client.pushMessage(friend.line_user_id, [

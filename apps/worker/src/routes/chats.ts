@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { buildMessage } from '../services/step-delivery.js';
 import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
+import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import {
   getOperators,
   getOperatorById,
@@ -207,7 +208,7 @@ chats.get('/api/chats/:id', async (c) => {
 
     // チャットに関連するメッセージログも取得
     const messages = await c.env.DB
-      .prepare(`SELECT id, friend_id, direction, message_type, content, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
+      .prepare(`SELECT id, friend_id, direction, message_type, content, status, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
       .bind(item.friend_id)
       .all();
 
@@ -230,6 +231,7 @@ chats.get('/api/chats/:id', async (c) => {
           direction: m.direction,
           messageType: m.message_type,
           content: m.content,
+          status: m.status,
           createdAt: m.created_at,
         })),
       },
@@ -334,17 +336,31 @@ chats.post('/api/chats/:id/send', async (c) => {
     if (!body.content) return c.json({ success: false, error: 'content is required' }, 400);
 
     const friend = await c.env.DB
-      .prepare(`SELECT * FROM friends WHERE id = ?`)
+      .prepare(`SELECT id, line_user_id, is_following, metadata FROM friends WHERE id = ?`)
       .bind(chat.friend_id)
-      .first<{ id: string; line_user_id: string; metadata: string | null }>();
+      .first<{ id: string; line_user_id: string; is_following: number; metadata: string | null }>();
     if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
+
+    const messageType = body.messageType ?? 'text';
+
+    // 未フォロー（友だち未追加/ブロック中）には送れない。LINE は push に 200 を返すが届かないため、
+    // オペレーターに失敗を即時通知し、送信失敗として記録する（黙って成功扱いにしない）。
+    if (!friend.is_following) {
+      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content);
+      return c.json({ success: false, error: 'この友だちは未フォロー（友だち未追加・ブロック中）のため送信できません。友だち追加を依頼してください。' }, 422);
+    }
 
     // LINE APIでメッセージ送信 — buildMessage で text / image / video / flex / file を統一処理
     const { LineClient } = await import('@line-crm/line-sdk');
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
-    const messageType = body.messageType ?? 'text';
     const lineMessage = buildMessage(messageType, body.content);
-    await lineClient.pushMessage(friend.line_user_id, [lineMessage]);
+    try {
+      await lineClient.pushMessage(friend.line_user_id, [lineMessage]);
+    } catch (err) {
+      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content);
+      console.error('POST /api/chats/:id/send: LINE push failed', err);
+      return c.json({ success: false, error: 'LINE への送信に失敗しました。時間をおいて再度お試しください。' }, 502);
+    }
 
     // メッセージログに記録
     const logId = crypto.randomUUID();
