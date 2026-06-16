@@ -110,8 +110,9 @@ staff.post('/api/staff', requireRole('owner', 'manager'), async (c) => {
       return c.json({ success: false, error: 'role must be owner, admin, manager, or staff' }, 400);
     }
 
-    if (currentStaff.role === 'manager' && body.role === 'owner') {
-      return c.json({ success: false, error: 'マネージャーはオーナーロールを付与できません' }, 403);
+    // 撮影スタッフ限定運用: マネージャーは「撮影スタッフ」ロールのユーザーのみ追加できる。
+    if (currentStaff.role === 'manager' && body.role !== 'staff') {
+      return c.json({ success: false, error: 'マネージャーは撮影スタッフ権限のユーザーのみ追加できます' }, 403);
     }
 
     const member = await createStaffMember(c.env.DB, {
@@ -155,8 +156,10 @@ staff.patch('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
       if (target.role === 'owner') {
         return c.json({ success: false, error: 'マネージャーはオーナーを編集できません' }, 403);
       }
-      if (body.role === 'owner') {
-        return c.json({ success: false, error: 'マネージャーはオーナーロールを付与できません' }, 403);
+      // 撮影スタッフ限定運用: マネージャーはロールを「撮影スタッフ」以外へ変更できない
+      // （staff 作成→昇格 による権限回避を防ぐ）。
+      if (body.role !== undefined && body.role !== 'staff') {
+        return c.json({ success: false, error: 'マネージャーは撮影スタッフ権限のみ設定できます' }, 403);
       }
     }
     if (target.role === 'owner' && target.is_active === 1) {

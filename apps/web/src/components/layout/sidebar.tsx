@@ -222,7 +222,7 @@ export default function Sidebar() {
             if (staffRole === 'staff') {
               return item.href === '/bookings' || item.href === '/staff-availability'
             }
-            if (item.href === '/staff' && staffRole !== 'owner') return false
+            if (item.href === '/staff' && staffRole !== 'owner' && staffRole !== 'manager') return false
             if (item.href === '/accounts' && staffRole === 'staff') return false
             return true
           })
