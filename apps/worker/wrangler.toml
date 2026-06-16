@@ -19,7 +19,9 @@ binding = "IMAGES"
 bucket_name = "line-harness-images"
 
 [triggers]
-crons = ["*/5 * * * *"]
+# "* * * * *"  = 1分: Slack 受信通知のバースト flush 専用（30秒デバウンス）
+# "*/5 * * * *" = 5分: 配信系ジョブ（ステップ/ブロードキャスト/リマインダ/催促 等）
+crons = ["* * * * *", "*/5 * * * *"]
 
 # Test environment is NOT defined here because @cloudflare/vite-plugin
 # strips [env.*] sections from the generated dist/line_harness/wrangler.json.
