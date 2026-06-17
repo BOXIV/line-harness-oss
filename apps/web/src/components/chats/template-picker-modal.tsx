@@ -16,6 +16,8 @@ interface TemplatePickerModalProps {
   isOpen: boolean
   onClose: () => void
   onSubmit: (payload: { content: string; messageType: string }) => void
+  /** 確定ボタンの文言。即時送信なら「この内容で送信」(既定)、予約フォームへ反映する用途なら「この内容を反映」等。 */
+  submitLabel?: string
 }
 
 const messageTypeLabels: Record<string, string> = {
@@ -25,7 +27,7 @@ const messageTypeLabels: Record<string, string> = {
   carousel: 'カルーセル',
 }
 
-export default function TemplatePickerModal({ isOpen, onClose, onSubmit }: TemplatePickerModalProps) {
+export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitLabel = 'この内容で送信' }: TemplatePickerModalProps) {
   const [templates, setTemplates] = useState<Template[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -299,7 +301,7 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit }: Templ
                 className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
                 style={{ backgroundColor: '#0f172a' }}
               >
-                この内容で送信
+                {submitLabel}
               </button>
             </div>
           </>
