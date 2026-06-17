@@ -91,6 +91,13 @@ function MediaContent({ messageType, content }: { messageType: string; content: 
  * バブル側の bg / padding を被せない。 */
 const RICH_TYPES = new Set(['flex', 'image', 'video', 'audio', 'file'])
 
+/** チャットのタイムスタンプ。時刻だけでなく日付も表示する（例: 06/17 14:30）。 */
+function formatStamp(iso: string): string {
+  return new Date(iso).toLocaleString('ja-JP', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
+}
+
 export default function MessageBubble({ message, friendPictureUrl, variant = 'chat' }: MessageBubbleProps) {
   const isOutgoing = message.direction === 'outgoing'
   const isRich = RICH_TYPES.has(message.messageType)
@@ -114,7 +121,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
           </div>
           <p className={`text-xs mt-1 ${isRich ? 'text-gray-500' : isOutgoing ? 'text-green-200' : 'text-gray-400'}`}>
             {isFailed && <span className="text-red-500 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
-            {new Date(message.createdAt).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+            {formatStamp(message.createdAt)}
           </p>
         </div>
       </div>
@@ -153,7 +160,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
         )}
         <span className="text-xs text-white/50 mt-0.5 px-1">
           {isFailed && <span className="text-red-400 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
-          {new Date(message.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+          {formatStamp(message.createdAt)}
         </span>
       </div>
     </div>
