@@ -97,8 +97,17 @@ friends.get('/api/friends', async (c) => {
       binds.push(statusOptionId);
     }
     if (search) {
-      conditions.push('(f.display_name LIKE ? OR f.managed_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?)');
-      binds.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      // 友だち管理の表示ラベルは formatFriendLabel で managed_name か Notion 合成名
+      // 「{notion.label} {notion.realName} (nickname)」になる。display_name(=nickname) だけだと
+      // 例「10472 〇〇（〇〇）」の「10472」(=notion.label) や Notion実名(realName) が引っかからないため、
+      // それらも検索対象に含める（metadata 内 JSON は json_extract で参照）。
+      conditions.push(
+        '(f.display_name LIKE ? OR f.managed_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?'
+        + " OR json_extract(f.metadata, '$.notion.label') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notion.realName') LIKE ?)",
+      );
+      const like = `%${search}%`;
+      binds.push(like, like, like, like, like, like);
     }
     // Metadata filters: ?metadata.key=value (e.g. ?metadata.monthly_cost=〜100万円)
     const url = new URL(c.req.url);
