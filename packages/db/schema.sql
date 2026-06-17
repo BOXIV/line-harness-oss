@@ -411,6 +411,8 @@ CREATE TABLE IF NOT EXISTS chats (
   status        TEXT NOT NULL DEFAULT 'unread' CHECK (status IN ('unread', 'in_progress', 'resolved')),
   notes         TEXT,
   last_message_at TEXT,
+  -- 最終既読時刻。未読数 = この時刻以降の incoming 件数（NULL の間は全 incoming）。migration 909。
+  last_read_at  TEXT,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );

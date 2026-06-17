@@ -129,7 +129,10 @@ chats.get('/api/chats', async (c) => {
     // JOIN friends to get display_name / picture / metadata + current Notion-synced status.
     let sql = `SELECT c.*, f.display_name, f.managed_name, f.picture_url, f.line_user_id, f.metadata,
                       so.id AS status_option_id, so.name AS status_option_name,
-                      so.color AS status_option_color, so.source AS status_option_source
+                      so.color AS status_option_color, so.source AS status_option_source,
+                      (SELECT COUNT(*) FROM messages_log m
+                         WHERE m.friend_id = c.friend_id AND m.direction = 'incoming'
+                           AND (c.last_read_at IS NULL OR m.created_at > c.last_read_at)) AS unread_count
                FROM chats c
                LEFT JOIN friends f ON c.friend_id = f.id
                LEFT JOIN friend_status_assignments fsa ON fsa.friend_id = f.id
@@ -185,6 +188,7 @@ chats.get('/api/chats', async (c) => {
         status: ch.status,
         notes: ch.notes,
         lastMessageAt: ch.last_message_at,
+        unreadCount: Number(ch.unread_count) || 0,
         createdAt: ch.created_at,
         updatedAt: ch.updated_at,
       })),
@@ -289,6 +293,24 @@ chats.put('/api/chats/:id', async (c) => {
   }
 });
 
+// チャットを既読にする（last_read_at を now に更新→未読数を 0 に戻す）。status も in_progress へ。
+chats.post('/api/chats/:id/read', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const existing = await getChatById(c.env.DB, id);
+    if (!existing) return c.json({ success: false, error: 'Not found' }, 404);
+    const now = jstNow();
+    await updateChat(c.env.DB, id, {
+      lastReadAt: now,
+      status: existing.status === 'unread' ? 'in_progress' : existing.status,
+    });
+    return c.json({ success: true, data: { id, lastReadAt: now } });
+  } catch (err) {
+    console.error('POST /api/chats/:id/read error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 // オペレーター入力中のローディング表示を開始
 chats.post('/api/chats/:id/loading', async (c) => {
   try {
@@ -369,8 +391,8 @@ chats.post('/api/chats/:id/send', async (c) => {
       .bind(logId, friend.id, messageType, body.content, jstNow())
       .run();
 
-    // チャットの最終メッセージ日時を更新
-    await updateChat(c.env.DB, chatId, { status: 'in_progress', lastMessageAt: jstNow() });
+    // チャットの最終メッセージ日時を更新。返信＝既読とみなし last_read_at も now にして未読数を 0 に戻す。
+    await updateChat(c.env.DB, chatId, { status: 'in_progress', lastMessageAt: jstNow(), lastReadAt: jstNow() });
 
     // BOXIV: Notion 出品者DB との初回自動連携 (metadata.notion 未設定のときだけ)
     let needsNotionLink = true;
