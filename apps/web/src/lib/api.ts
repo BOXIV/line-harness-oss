@@ -383,6 +383,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+    /** チャットを既読にする（未読数を 0 に戻す） */
+    markRead: (id: string) =>
+      fetchApi<ApiResponse<{ id: string; lastReadAt: string }>>(`/api/chats/${id}/read`, {
+        method: 'POST',
+      }),
     notionLink: (friendId: string) =>
       fetchApi<ApiResponse<{
         linked: boolean

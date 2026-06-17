@@ -21,7 +21,7 @@ const EXPECTED: Record<string, Array<[string, string]>> = {
   broadcasts: [['alt_text', 'TEXT'], ['line_account_id', 'TEXT']],
   reminders: [['line_account_id', 'TEXT']],
   automations: [['line_account_id', 'TEXT']],
-  chats: [['line_account_id', 'TEXT']],
+  chats: [['line_account_id', 'TEXT'], ['last_read_at', 'TEXT']],
   auto_replies: [['line_account_id', 'TEXT']],
   notification_rules: [['line_account_id', 'TEXT']],
   messages_log: [['delivery_type', 'TEXT'], ['slack_notified_at', 'TEXT'], ['status', 'TEXT']],

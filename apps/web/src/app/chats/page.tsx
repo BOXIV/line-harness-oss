@@ -40,6 +40,7 @@ interface Chat {
   status: 'unread' | 'in_progress' | 'resolved'
   notes: string | null
   lastMessageAt: string | null
+  unreadCount?: number
   createdAt: string
   updatedAt: string
 }
@@ -230,6 +231,7 @@ export default function ChatsPage() {
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [showSchedulePanel, setShowSchedulePanel] = useState(false)
+  const [markingRead, setMarkingRead] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -466,6 +468,20 @@ export default function ChatsPage() {
     }
   }
 
+  const handleMarkRead = async () => {
+    if (!selectedChatId || markingRead) return
+    setMarkingRead(true)
+    try {
+      await api.chats.markRead(selectedChatId)
+      loadChats()          // 一覧の未読バッジを更新
+      loadChatDetail(selectedChatId)
+    } catch {
+      setError('既読への更新に失敗しました。')
+    } finally {
+      setMarkingRead(false)
+    }
+  }
+
   const openEditName = () => {
     if (!chatDetail) return
     // 現在表示されている文字列（管理名があればそれ、無ければ Notion 合成名）をプリフィル
@@ -623,9 +639,13 @@ export default function ChatsPage() {
                             {chat.customerStatus.name}
                           </span>
                         )}
-                        {chat.notion?.label && (
-                          <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 bg-slate-100 text-slate-600 max-w-[7rem] truncate">
-                            {chat.notion.source === 'seller' ? '掲載' : '取引'} {chat.notion.label}
+                        {!!chat.unreadCount && chat.unreadCount > 0 && (
+                          <span
+                            className="ml-1 flex-shrink-0 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-bold leading-none"
+                            title={`未読 ${chat.unreadCount} 件`}
+                            aria-label={`未読 ${chat.unreadCount} 件`}
+                          >
+                            {chat.unreadCount > 99 ? '99+' : chat.unreadCount}
                           </span>
                         )}
                       </div>
@@ -829,6 +849,15 @@ export default function ChatsPage() {
                       <option key={sec} value={sec}>{sec}秒</option>
                     ))}
                   </select>
+                  <button
+                    type="button"
+                    onClick={handleMarkRead}
+                    disabled={markingRead}
+                    className="ml-auto px-3 py-1 min-h-[32px] text-xs font-medium text-white bg-slate-700 hover:bg-slate-800 disabled:opacity-50 rounded-md transition-colors flex-shrink-0"
+                    title="このチャットを既読にする（未読数を 0 に戻す）"
+                  >
+                    {markingRead ? '...' : '✓ 既読にする'}
+                  </button>
                 </div>
                 <div className="flex items-stretch gap-2">
                   <input

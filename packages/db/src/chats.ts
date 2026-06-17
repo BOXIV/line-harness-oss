@@ -18,6 +18,7 @@ export interface ChatRow {
   status: string;
   notes: string | null;
   last_message_at: string | null;
+  last_read_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -110,7 +111,7 @@ export async function createChat(
 export async function updateChat(
   db: D1Database,
   id: string,
-  updates: Partial<{ operatorId: string | null; status: string; notes: string; lastMessageAt: string }>,
+  updates: Partial<{ operatorId: string | null; status: string; notes: string; lastMessageAt: string; lastReadAt: string }>,
 ): Promise<void> {
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -118,6 +119,7 @@ export async function updateChat(
   if (updates.status !== undefined) { sets.push('status = ?'); values.push(updates.status); }
   if (updates.notes !== undefined) { sets.push('notes = ?'); values.push(updates.notes); }
   if (updates.lastMessageAt !== undefined) { sets.push('last_message_at = ?'); values.push(updates.lastMessageAt); }
+  if (updates.lastReadAt !== undefined) { sets.push('last_read_at = ?'); values.push(updates.lastReadAt); }
   if (sets.length === 0) return;
   sets.push('updated_at = ?');
   values.push(jstNow());
