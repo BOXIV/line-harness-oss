@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
+import TemplatePickerModal from '@/components/chats/template-picker-modal'
 
 interface ScheduledMessage {
   id: string
@@ -63,6 +64,8 @@ export default function ScheduledMessagePanel({
   const [error, setError] = useState('')
   const [scheduledAtLocal, setScheduledAtLocal] = useState(defaultScheduledAt())
   const [content, setContent] = useState('')
+  const [messageType, setMessageType] = useState<'text' | 'flex'>('text')
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const load = useCallback(async () => {
@@ -84,6 +87,7 @@ export default function ScheduledMessagePanel({
       load()
       setScheduledAtLocal(defaultScheduledAt())
       setContent('')
+      setMessageType('text')
     }
   }, [isOpen, load])
 
@@ -97,17 +101,22 @@ export default function ScheduledMessagePanel({
   }, [isOpen, onClose])
 
   const handleCreate = async () => {
-    if (!scheduledAtLocal || !content.trim()) return
+    const trimmed = content.trim()
+    if (!scheduledAtLocal || !trimmed) return
+    if (messageType === 'flex') {
+      try { JSON.parse(trimmed) } catch { setError('Flex テンプレートの JSON が不正です'); return }
+    }
     setSubmitting(true)
     setError('')
     try {
       const res = await api.scheduledMessages.create(friendId, {
         scheduledAt: jstLocalToIso(scheduledAtLocal),
-        messageType: 'text',
-        content: content.trim(),
+        messageType,
+        content: trimmed,
       })
       if (res.success) {
         setContent('')
+        setMessageType('text')
         await load()
       } else {
         setError(res.error)
@@ -135,6 +144,7 @@ export default function ScheduledMessagePanel({
   if (!isOpen) return null
 
   return (
+    <>
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
@@ -173,16 +183,31 @@ export default function ScheduledMessagePanel({
                   className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:border-slate-900"
                 />
               </label>
-              <label className="block">
-                <span className="text-xs text-gray-600">本文</span>
-                <textarea
-                  rows={4}
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder="送信したいメッセージを入力"
-                  className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 resize-y"
-                />
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-gray-600">
+                  本文
+                  {messageType === 'flex' && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]">Flex</span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowTemplatePicker(true)}
+                  className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
+                >
+                  📋 テンプレートから選択
+                </button>
+              </div>
+              <textarea
+                rows={messageType === 'flex' ? 6 : 4}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder={messageType === 'flex' ? 'Flex JSON（テンプレートから選択を推奨）' : '送信したいメッセージを入力（またはテンプレートから選択）'}
+                className={`w-full text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 resize-y ${messageType === 'flex' ? 'font-mono text-xs' : ''}`}
+              />
+              {messageType === 'flex' && (
+                <p className="text-[11px] text-gray-400">Flex テンプレート選択済み。予約時刻にこの JSON が Flex として配信されます。テキストに戻すにはテンプレートから選び直すか、本文を書き換えてください。</p>
+              )}
               <button
                 onClick={handleCreate}
                 disabled={submitting || !content.trim() || !scheduledAtLocal}
@@ -255,5 +280,17 @@ export default function ScheduledMessagePanel({
         </div>
       </div>
     </div>
+
+    <TemplatePickerModal
+      isOpen={showTemplatePicker}
+      onClose={() => setShowTemplatePicker(false)}
+      onSubmit={({ content: c, messageType: mt }) => {
+        setContent(c)
+        setMessageType(mt === 'flex' ? 'flex' : 'text')
+        setShowTemplatePicker(false)
+      }}
+      submitLabel="この内容を予約フォームに反映"
+    />
+    </>
   )
 }
