@@ -56,6 +56,7 @@ interface ChatMessage {
 
 interface ChatDetail extends Chat {
   friendName: string
+  lineUserId: string | null
   friendPictureUrl: string | null
   messages?: ChatMessage[]
 }
@@ -697,6 +698,14 @@ export default function ChatsPage() {
                       <p className="text-sm font-medium text-gray-900 truncate">
                         {formatChatLabel(chatDetail)}
                       </p>
+                      {chatDetail.lineUserId && (
+                        <span
+                          className="text-xs font-normal text-gray-400 truncate select-all"
+                          title={chatDetail.lineUserId}
+                        >
+                          [{chatDetail.lineUserId}]
+                        </span>
+                      )}
                       <button
                         onClick={openEditName}
                         className="flex-shrink-0 text-gray-400 hover:text-slate-700 transition-colors"
