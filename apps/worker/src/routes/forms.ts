@@ -321,6 +321,13 @@ forms.post('/api/forms/:id/submit', async (c) => {
           };
 
           const { buildMessage } = await import('../services/step-delivery.js');
+          // 未フォロー（友だち未追加/ブロック中）には届かない。送信失敗として記録してスキップ。
+          if (!friend.is_following) {
+            const { logFailedOutgoing } = await import('../services/message-log.boxiv.js');
+            await logFailedOutgoing(db, friend.id, 'flex', JSON.stringify(flex));
+            console.log('Form reply: friend not following — skip push, recorded as failed');
+            return;
+          }
           await lineClient.pushMessage(friend.line_user_id, [buildMessage('flex', JSON.stringify(flex))]);
         })(),
       );

@@ -7,6 +7,8 @@ export interface ChatMessageRow {
   direction: 'incoming' | 'outgoing'
   messageType: string
   content: string
+  /** 'failed'=送信失敗（未フォロー宛/LINE APIエラーで不達）。null/'sent'=成功。 */
+  status?: string | null
   createdAt: string
 }
 
@@ -92,6 +94,7 @@ const RICH_TYPES = new Set(['flex', 'image', 'video', 'audio', 'file'])
 export default function MessageBubble({ message, friendPictureUrl, variant = 'chat' }: MessageBubbleProps) {
   const isOutgoing = message.direction === 'outgoing'
   const isRich = RICH_TYPES.has(message.messageType)
+  const isFailed = isOutgoing && message.status === 'failed'
 
   if (variant === 'compact') {
     // Tailwind-light variant for the DM panel that doesn't share the LINE-style background.
@@ -110,6 +113,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
             <MediaContent messageType={message.messageType} content={message.content} />
           </div>
           <p className={`text-xs mt-1 ${isRich ? 'text-gray-500' : isOutgoing ? 'text-green-200' : 'text-gray-400'}`}>
+            {isFailed && <span className="text-red-500 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
             {new Date(message.createdAt).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
           </p>
         </div>
@@ -148,6 +152,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
           </div>
         )}
         <span className="text-xs text-white/50 mt-0.5 px-1">
+          {isFailed && <span className="text-red-400 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
           {new Date(message.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
         </span>
       </div>

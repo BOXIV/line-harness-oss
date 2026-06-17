@@ -49,6 +49,7 @@ interface ChatMessage {
   direction: 'incoming' | 'outgoing'
   messageType: string
   content: string
+  status?: string | null
   createdAt: string
 }
 
@@ -90,6 +91,7 @@ interface MessageLog {
   direction: 'incoming' | 'outgoing'
   messageType: string
   content: string
+  status?: string | null
   createdAt: string
 }
 
@@ -103,38 +105,40 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   const [sending, setSending] = useState(false)
   const [messages, setMessages] = useState<MessageLog[]>([])
   const [loadingMessages, setLoadingMessages] = useState(true)
+  const [sendError, setSendError] = useState('')
+
+  const loadMessages = useCallback(async () => {
+    try {
+      const res = await fetchApi<{ success: boolean; data: MessageLog[] }>(
+        `/api/friends/${friendId}/messages`
+      )
+      if (res.success) setMessages(res.data)
+    } catch { /* silent */ }
+  }, [friendId])
 
   useEffect(() => {
-    const loadMessages = async () => {
-      setLoadingMessages(true)
-      try {
-        const res = await fetchApi<{ success: boolean; data: MessageLog[] }>(
-          `/api/friends/${friendId}/messages`
-        )
-        if (res.success) setMessages(res.data)
-      } catch { /* silent */ }
-      setLoadingMessages(false)
-    }
-    loadMessages()
-  }, [friendId])
+    setLoadingMessages(true)
+    loadMessages().finally(() => setLoadingMessages(false))
+  }, [loadMessages])
 
   const handleSend = async () => {
     if (!message.trim() || sending) return
     setSending(true)
+    setSendError('')
+    const text = message
     try {
       await fetchApi(`/api/friends/${friendId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ content: message, messageType: 'text' }),
+        body: JSON.stringify({ content: text, messageType: 'text' }),
       })
-      setMessages((prev) => [...prev, {
-        id: crypto.randomUUID(),
-        direction: 'outgoing',
-        messageType: 'text',
-        content: message,
-        createdAt: new Date().toISOString(),
-      }])
       setMessage('')
-    } catch { /* silent */ }
+      await loadMessages() // 送信済み行を取り込む（楽観追加はせず正本を反映）
+    } catch {
+      // 未フォロー(422)/LINE送信失敗(502) 等。messages_log に status='failed' が記録されるため
+      // 再読込して「⚠ 送信失敗（未達）」バッジを反映しつつ、明示的なエラー文言も表示する。
+      setSendError('送信に失敗しました（友だち未追加・ブロック中などで未達の可能性があります）')
+      await loadMessages()
+    }
     setSending(false)
   }
 
@@ -168,6 +172,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         )}
       </div>
       <div className="px-4 py-3 border-t border-gray-200">
+        {sendError && <p className="text-xs text-red-500 mb-2">{sendError}</p>}
         <div className="flex items-stretch gap-2">
           <textarea
             value={message}

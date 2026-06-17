@@ -26,6 +26,7 @@ import {
 import { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { sendAdConversions } from './ad-conversion.js';
+import { logFailedOutgoing } from './message-log.boxiv.js';
 import type { Env } from '../index.js';
 
 export interface EventPayload {
@@ -264,9 +265,9 @@ async function executeAction(
     case 'send_message': {
       if (!lineAccessToken || !friendId) break;
       const friend = await db
-        .prepare('SELECT line_user_id FROM friends WHERE id = ?')
+        .prepare('SELECT line_user_id, is_following FROM friends WHERE id = ?')
         .bind(friendId)
-        .first<{ line_user_id: string }>();
+        .first<{ line_user_id: string; is_following: number }>();
       if (!friend) break;
       const lineClient = new LineClient(lineAccessToken);
       const msgType = action.params.messageType || 'text';
@@ -298,6 +299,12 @@ async function executeAction(
           }
         }
       } else {
+        // push 経路: 未フォロー（友だち未追加/ブロック中）には届かないため、
+        // 送信失敗として記録してスキップする（黙って成功扱いにしない）。
+        if (!friend.is_following) {
+          await logFailedOutgoing(db, friendId, msgType, action.params.content);
+          break;
+        }
         await lineClient.pushMessage(friend.line_user_id, [msg]);
         deliveryType = 'push';
       }

@@ -15,6 +15,7 @@ const MULTICAST_BATCH_SIZE = 500;
 interface FriendRow {
   id: string;
   line_user_id: string;
+  is_following: number;
 }
 
 export async function processSegmentSend(
@@ -44,7 +45,9 @@ export async function processSegmentSend(
       .bind(...bindings)
       .all<FriendRow>();
 
-    const friends = queryResult.results ?? [];
+    // 未フォロー（友だち未追加/ブロック中）は LINE 上で受信できないため配信対象から除外する。
+    // セグメントのルールに is_following を明示していなくても、ここで必ず除外する（不達の握りつぶし防止）。
+    const friends = (queryResult.results ?? []).filter((f) => f.is_following);
     totalCount = friends.length;
 
     const now = jstNow();
