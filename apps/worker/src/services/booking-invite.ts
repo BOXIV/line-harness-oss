@@ -113,18 +113,24 @@ export async function createAndSendBookingInvite(
   env: Env['Bindings'],
   input: BookingInviteInput,
 ): Promise<BookingInviteResult> {
+  // ── Step 0: friendId しか無い場合でも Notion 照合できるよう、先に friend を解決して
+  //   lineUserId を補完する（オペレーターのチャットや send_booking_invite automation は
+  //   friendId のみで呼ぶため。これが無いと「prefecture is required」で必ず失敗する）。 ──
+  let friend = input.friendId ? await getFriendById(env.DB, input.friendId) : null;
+  const lookupLineUserId = input.lineUserId ?? friend?.line_user_id ?? null;
+
   // ── Step 1: Notion から顧客情報を取得（任意・可能なら） ──
   let notionCustomer = null;
   if (input.notionPageId) {
     notionCustomer = await getCustomerByPageId(input.notionPageId, env);
-  } else if (input.lineUserId) {
-    notionCustomer = await queryCustomerByLineUserId(input.lineUserId, env);
+  } else if (lookupLineUserId) {
+    notionCustomer = await queryCustomerByLineUserId(lookupLineUserId, env);
   }
 
   // ── Step 2: 値をマージ（input > Notion） ──
   const customerName = input.customerName ?? notionCustomer?.customerName ?? null;
   const prefecture = input.prefecture ?? notionCustomer?.prefecture ?? null;
-  const lineUserId = input.lineUserId ?? notionCustomer?.lineUserId ?? null;
+  const lineUserId = lookupLineUserId ?? notionCustomer?.lineUserId ?? null;
   const notionPageId = input.notionPageId ?? notionCustomer?.pageId ?? null;
 
   if (!prefecture) {
@@ -138,8 +144,7 @@ export async function createAndSendBookingInvite(
     return { ok: false, status: 400, error: 'lineUserId or friendId is required' };
   }
 
-  // ── Step 3: friend 解決 ──
-  let friend = input.friendId ? await getFriendById(env.DB, input.friendId) : null;
+  // ── Step 3: friend 解決（Step 0 で未解決なら lineUserId で補完） ──
   if (!friend && lineUserId) {
     friend = await getFriendByLineUserId(env.DB, lineUserId);
   }
