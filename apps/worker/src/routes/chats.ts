@@ -223,6 +223,7 @@ chats.get('/api/chats/:id', async (c) => {
         friendId: item.friend_id,
         friendName: friend?.display_name || '名前なし',
         managedName: friend?.managed_name ?? null,
+        lineUserId: friend?.line_user_id ?? null,
         friendPictureUrl: friend?.picture_url || null,
         notion: parseFriendNotion(friend?.metadata ?? null),
         operatorId: item.operator_id,
