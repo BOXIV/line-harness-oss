@@ -59,7 +59,15 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
       ...options?.headers,
     },
   })
-  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  if (!res.ok) {
+    // API の { error } 本文を拾って原因を出す（従来は status のみで「API error: 400」と原因不明だった）
+    let detail = ''
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body?.error) detail = `: ${body.error}`
+    } catch { /* non-JSON body */ }
+    throw new Error(`API error: ${res.status}${detail}`)
+  }
   return res.json() as Promise<T>
 }
 

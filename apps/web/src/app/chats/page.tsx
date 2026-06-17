@@ -708,10 +708,25 @@ export default function ChatsPage() {
                     onClick={async () => {
                       if (!chatDetail) return
                       if (!window.confirm('この友だちに撮影日程調整の招待を送信し、日程調整フローを開始しますか？')) return
+                      const friendId = chatDetail.friendId
                       setSendingSchedule(true)
                       setNotionMessage('')
                       try {
-                        const res = await api.bookingInvites.send(chatDetail.friendId)
+                        let res
+                        try {
+                          // まずは friendId のみ（顧客名・都道府県は Notion から補完）
+                          res = await api.bookingInvites.send(friendId)
+                        } catch (e1) {
+                          const msg = e1 instanceof Error ? e1.message : ''
+                          // Notion に都道府県が無い場合は手入力で続行（エリア判定に必須）
+                          if (!/prefecture/i.test(msg)) throw e1
+                          const pref = window.prompt('Notion に都道府県が見つかりません。\n相手の都道府県を入力してください（例: 東京都）', '')
+                          if (!pref || !pref.trim()) {
+                            setNotionMessage('日程調整送信をキャンセルしました（都道府県が未入力）')
+                            return
+                          }
+                          res = await api.bookingInvites.create({ friendId, prefecture: pref.trim(), sendLineMessage: true })
+                        }
                         if (res.success) {
                           const d = res.data
                           setNotionMessage(`✓ 日程調整の招待を送信しました${d?.customerName ? `: ${d.customerName} 様` : ''}${d?.area ? `（エリア: ${d.area}）` : ''}`)
@@ -723,7 +738,7 @@ export default function ChatsPage() {
                         setNotionMessage(`日程調整送信に失敗: ${e instanceof Error ? e.message : 'unknown'}`)
                       } finally {
                         setSendingSchedule(false)
-                        setTimeout(() => setNotionMessage(''), 6000)
+                        setTimeout(() => setNotionMessage(''), 8000)
                       }
                     }}
                     disabled={sendingSchedule}
