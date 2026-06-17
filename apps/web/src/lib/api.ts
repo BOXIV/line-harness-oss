@@ -655,6 +655,12 @@ export const api = {
         '/api/booking-invites',
         { method: 'POST', body: JSON.stringify(data) },
       ),
+    /** friendId だけで送信（顧客名/都道府県は Notion から補完）。オペレーターチャットの日程調整フロー開始用。 */
+    send: (friendId: string) =>
+      fetchApi<ApiResponse<{ id: string; token: string; url: string; area: string; customerName: string | null; prefecture: string | null; friendId: string }>>(
+        '/api/booking-invites',
+        { method: 'POST', body: JSON.stringify({ friendId, sendLineMessage: true }) },
+      ),
   },
   // チャット用メディアアップロード (BOXIV — image / video / PDF)
   media: {

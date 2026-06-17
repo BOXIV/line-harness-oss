@@ -212,6 +212,7 @@ export default function ChatsPage() {
   const [statusOptions, setStatusOptions] = useState<Array<{ id: string; name: string; color: string | null; source: 'seller' | 'buyer' }>>([])
   const [linkingNotion, setLinkingNotion] = useState(false)
   const [notionMessage, setNotionMessage] = useState('')
+  const [sendingSchedule, setSendingSchedule] = useState(false)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
@@ -703,6 +704,34 @@ export default function ChatsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      if (!chatDetail) return
+                      if (!window.confirm('この友だちに撮影日程調整の招待を送信し、日程調整フローを開始しますか？')) return
+                      setSendingSchedule(true)
+                      setNotionMessage('')
+                      try {
+                        const res = await api.bookingInvites.send(chatDetail.friendId)
+                        if (res.success) {
+                          const d = res.data
+                          setNotionMessage(`✓ 日程調整の招待を送信しました${d?.customerName ? `: ${d.customerName} 様` : ''}${d?.area ? `（エリア: ${d.area}）` : ''}`)
+                          loadChatDetail(chatDetail.id)
+                        } else {
+                          setNotionMessage(`日程調整送信に失敗: ${res.error}`)
+                        }
+                      } catch (e) {
+                        setNotionMessage(`日程調整送信に失敗: ${e instanceof Error ? e.message : 'unknown'}`)
+                      } finally {
+                        setSendingSchedule(false)
+                        setTimeout(() => setNotionMessage(''), 6000)
+                      }
+                    }}
+                    disabled={sendingSchedule}
+                    className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 rounded-md transition-colors"
+                    title="撮影日程調整の招待を LINE で送信（日程調整フロー開始）。住所/都道府県は Notion から補完"
+                  >
+                    {sendingSchedule ? '⏳' : '🗓️'} 日程調整送信
+                  </button>
                   <button
                     onClick={async () => {
                       if (!chatDetail) return
