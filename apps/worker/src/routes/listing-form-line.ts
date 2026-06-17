@@ -5,7 +5,7 @@
 //   2. STUDIO posts form fields to Slack #pj-lightning-sell (existing — handled by STUDIO)
 //   3. Page shows "LINEで連携" button that redirects to:
 //        GET /listing-form/start?form_id=XXX&return_to=YYY[&display_name=ZZZ]
-//   4. We redirect to LINE Login OAuth with bot_prompt=normal (asks user to add the OA as friend)
+//   4. We redirect to LINE Login OAuth with bot_prompt=aggressive (always shows the friend-add prompt; user must tap to add)
 //   5. LINE redirects back to /listing-form/callback?code=&state=
 //   6. We exchange code → access_token → profile (LINE userId, displayName)
 //   7. We post a notification to Slack #pj-lightning-sell (configurable channel)
@@ -26,6 +26,8 @@
 
 import { Hono } from 'hono';
 import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
+import { checkFollowing } from '../services/friendship.boxiv.js';
 import { fireEvent } from '../services/event-bus.js';
 import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
@@ -135,7 +137,7 @@ interface ListingStateV1 {
  * GET /listing-form/start
  *
  * Entry point from lightning.boxiv.co.jp's "LINEで連携" button.
- * Redirects user to LINE Login OAuth with bot_prompt=normal so the user is
+ * Redirects user to LINE Login OAuth with bot_prompt=aggressive so the user is
  * asked to add the BOXIV official LINE account as friend during login.
  *
  * Query params:
@@ -199,7 +201,7 @@ listingFormLine.get('/r/:key', (c) => {
   const key = c.req.param('key');
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(key)) return c.text('not found', 404);
   const base = (c.env.WORKER_URL || new URL(c.req.url).origin).replace(/\/+$/, '');
-  const returnTo = 'https://lightning.boxiv.co.jp/thanks';
+  const returnTo = 'https://lightning.boxiv.co.jp/car/sell/thanks';
   const start = `${base}/listing-form/start?form_id=${encodeURIComponent(key)}&return_to=${encodeURIComponent(returnTo)}`;
   const liffUrl = c.env.LIFF_URL || '';
   const target = /liff\.line\.me\/[0-9]+-[A-Za-z0-9]+/.test(liffUrl)
@@ -379,12 +381,21 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     pictureUrl?: string;
   };
 
+  // 実フォロー状態を Messaging API で判定する。bot_prompt=aggressive でも友だち追加は任意で、
+  // ユーザーがスキップすれば「連携済みだが未フォロー（=配信不達）」になる。LINE Login の
+  // profile は友だち状態と無関係なので、Messaging API の /v2/bot/profile で実態を確認する。
+  const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+  const followStatus = await checkFollowing(lineClient, profile.userId); // true=友だち / false=未追加 / null=判定不能
+
   // 友だちを D1 に upsert: 既に友だちで follow webhook が発火しないケースでも friend を確実に登録する。
   // これで突合ボットの friend↔Notion 連携が lineUserId で friend を見つけられる。非致命。
+  // 実フォロー判定値を渡し、未追加で連携しただけのユーザーを is_following=1 と誤検知させない
+  // （null=判定不能のときは既存値を維持）。
   await upsertFriend(c.env.DB, {
     lineUserId: profile.userId,
     displayName: profile.displayName,
     pictureUrl: profile.pictureUrl ?? null,
+    isFollowing: followStatus === null ? undefined : followStatus,
   }).catch((err) => {
     console.error(`listing-form callback: upsertFriend failed (form_id=${ctx.form_id})`, err);
   });
@@ -417,7 +428,7 @@ listingFormLine.get('/listing-form/callback', async (c) => {
 
   // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
   // 何を送るかは管理UIの automation 側で決める。非致命 — 失敗してもリダイレクトは完了。
-  await fireListingLinkCompleted(c.env, profile, ctx).catch((err) => {
+  await fireListingLinkCompleted(c.env, profile, ctx, followStatus).catch((err) => {
     console.error('listing-form callback: listing_link_completed fire threw', err);
   });
 
@@ -434,6 +445,14 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     await slackPost(c.env, lines.join('\n'), { threadTs: slackThreadTs });
   } catch (err) {
     console.error(`listing-form callback: slack post threw (form_id=${ctx.form_id})`, err);
+  }
+
+  // 未フォロー（友だち追加を断った/まだ追加していない）の場合は、サンクスページではなく
+  // 友だち追加ページを表示する。連携（match_key↔lineUserId、Notion 起票）は完了しているが、
+  // 友だち追加が無いとメッセージが届かないため。追加後は follow webhook が受信を有効化する。
+  if (followStatus === false) {
+    const basicId = await fetchBotBasicId(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    return c.html(renderFriendAddPage(profile.displayName, basicId));
   }
 
   // Redirect to return_to (with ?linked=1) or render success page.
@@ -456,7 +475,7 @@ listingFormLine.get('/listing-form/callback', async (c) => {
  * 自動連携 完了時に `listing_link_completed` イベントを発火する。
  *
  * event-bus の send_message アクションは friends 行（line_user_id）を要求するため、
- * 先に friend を upsert して存在を保証する。follow webhook（bot_prompt=normal で
+ * 先に friend を upsert して存在を保証する。follow webhook（bot_prompt=aggressive で
  * 友だち追加されると非同期で届く）より callback が先行することがあるため、
  * ここで作っておく。同時実行の競合に備え、INSERT 失敗時は再取得でフォールバックする。
  *
@@ -467,6 +486,7 @@ async function fireListingLinkCompleted(
   env: Env['Bindings'],
   profile: { userId: string; displayName: string; pictureUrl?: string },
   ctx: ListingStateV1,
+  followStatus: boolean | null,
 ) {
   let friend;
   try {
@@ -474,6 +494,7 @@ async function fireListingLinkCompleted(
       lineUserId: profile.userId,
       displayName: profile.displayName ?? null,
       pictureUrl: profile.pictureUrl ?? null,
+      isFollowing: followStatus === null ? undefined : followStatus,
     });
   } catch {
     // 競合（follow webhook と同時 INSERT）等 → 既存を取り直す
@@ -543,6 +564,55 @@ async function postSlackLinkNotification(
   if (!body.ok) {
     console.error('listing-form callback: slack chat.postMessage failed', body.error);
   }
+}
+
+/** Messaging API の /v2/bot/info から OA の basicId（@xxxx）を取得。友だち追加URLの組み立てに使う。 */
+async function fetchBotBasicId(channelAccessToken: string): Promise<string> {
+  try {
+    const res = await fetch('https://api.line.me/v2/bot/info', {
+      headers: { Authorization: `Bearer ${channelAccessToken}` },
+    });
+    if (res.ok) {
+      const bot = (await res.json()) as { basicId?: string };
+      return bot.basicId || '';
+    }
+  } catch {
+    // ignore — basicId 無しでもページは表示する
+  }
+  return '';
+}
+
+/**
+ * 連携は完了したが OA を友だち追加していない出品者に、友だち追加を促すページ。
+ * 追加しないと撮影日程調整などの連絡が届かないため、サンクスページではなくこの画面を出す。
+ */
+function renderFriendAddPage(displayName: string, basicId: string): string {
+  const addUrl = basicId ? `https://line.me/R/ti/p/${escapeHtml(basicId)}` : '';
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>あと少しで完了</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{text-align:center;max-width:420px;width:90%;padding:48px 24px}
+h1{font-size:24px;font-weight:800;margin-bottom:12px}
+p{color:rgba(255,255,255,0.78);line-height:1.7;font-size:15px}
+.btn{display:block;margin-top:28px;padding:16px;border-radius:10px;font-size:16px;font-weight:700;text-decoration:none;background:#06C755;color:#fff}
+.note{font-size:12px;color:rgba(255,255,255,0.45);margin-top:20px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>あと少しで完了です</h1>
+<p>${escapeHtml(displayName)} さん、連携ありがとうございます。<br>担当者からのご連絡をお届けするには<br><b>友だち追加</b>が必要です。</p>
+${addUrl ? `<a href="${addUrl}" class="btn">LINEで友だち追加する</a>` : `<p class="note">お手数ですが LINE 公式アカウントを検索して友だち追加してください。</p>`}
+<p class="note">追加後、メッセージが届くようになります。<br>このページは閉じていただいて構いません。</p>
+</div>
+</body>
+</html>`;
 }
 
 function renderSuccessPage(displayName: string): string {
