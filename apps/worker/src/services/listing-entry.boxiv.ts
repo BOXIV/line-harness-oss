@@ -186,3 +186,31 @@ export async function setSlackThreadTs(db: D1Database, matchKey: string, ts: str
     .bind(ts, matchKey)
     .run();
 }
+
+/**
+ * lineUserId で「連携済み(status='linked')」の出品台帳行を返す（友だち追加完了時の連携済み判定用）。
+ * 同一 lineUserId で複数 match_key が連携されている場合は最新の連携を返す。未連携なら null。
+ */
+export async function getLinkedEntryByLineUserId(db: D1Database, lineUserId: string): Promise<ListingEntry | null> {
+  return db
+    .prepare(`SELECT * FROM listing_entries WHERE line_user_id = ? AND status = 'linked' ORDER BY linked_at DESC LIMIT 1`)
+    .bind(lineUserId)
+    .first<ListingEntry>();
+}
+
+/** 出品価格お知らせ(listing_link_completed)を既に送信済みか（friend.metadata フラグ）。二重送信防止。 */
+export async function hasListingPriceNotified(db: D1Database, friendId: string): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT json_extract(metadata, '$.listing_price_notified') AS f FROM friends WHERE id = ?`)
+    .bind(friendId)
+    .first<{ f: unknown }>();
+  return !!(row && row.f);
+}
+
+/** 出品価格お知らせ送信済みフラグを friend.metadata に立てる。 */
+export async function markListingPriceNotified(db: D1Database, friendId: string): Promise<void> {
+  await db
+    .prepare(`UPDATE friends SET metadata = json_set(COALESCE(metadata, '{}'), '$.listing_price_notified', json('true')) WHERE id = ?`)
+    .bind(friendId)
+    .run();
+}

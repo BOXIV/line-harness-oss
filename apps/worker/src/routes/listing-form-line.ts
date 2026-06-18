@@ -29,7 +29,7 @@ import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
 import { LineClient } from '@line-crm/line-sdk';
 import { checkFollowing } from '../services/friendship.boxiv.js';
 import { fireEvent } from '../services/event-bus.js';
-import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs } from '../services/listing-entry.boxiv.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost } from '../services/slack.boxiv.js';
@@ -505,6 +505,14 @@ async function fireListingLinkCompleted(
     return;
   }
 
+  // フォロー済みのときだけ価格お知らせ(listing_link_completed)を発火する。
+  // 未フォロー（友だち追加を後回し/ブロック）の場合は送れないのでここでは発火せず、
+  // 後で友だち追加が完了した際に follow webhook 側が連携済みを検知して発火する（救済フロー）。
+  if (followStatus !== true) {
+    console.log(`listing-form callback: 未フォローのため listing_link_completed を保留（follow 時に送信） form_id=${ctx.form_id}`);
+    return;
+  }
+
   await fireEvent(
     env.DB,
     'listing_link_completed',
@@ -517,6 +525,10 @@ async function fireListingLinkCompleted(
       },
     },
     env.LINE_CHANNEL_ACCESS_TOKEN,
+  );
+  // 二重送信防止: 送信済みフラグを立てる（follow webhook 側はこれを見て再送しない）。
+  await markListingPriceNotified(env.DB, friend.id).catch((err) =>
+    console.error('listing-form callback: markListingPriceNotified failed', err),
   );
 }
 

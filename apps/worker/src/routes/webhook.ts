@@ -18,6 +18,7 @@ import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import { enqueueBurstNotify } from '../services/slack-burst-notify.boxiv.js';
+import { getLinkedEntryByLineUserId, hasListingPriceNotified, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -159,6 +160,32 @@ async function handleEvent(
     if (lineAccountId) {
       await db.prepare('UPDATE friends SET line_account_id = ? WHERE id = ? AND line_account_id IS NULL')
         .bind(lineAccountId, friend.id).run();
+    }
+
+    // BOXIV: 友だち追加完了フロー — 出品フォーム連携済みかで分岐する。
+    //   連携済み(listing_entries.status='linked') → 出品価格お知らせ(listing_link_completed)を送信。
+    //     OAuth 時に未フォロー/ブロックで送れなかった分の救済になり、後から友だち追加した人にも届く。
+    //     二重送信は friend.metadata フラグ(listing_price_notified)で防止。連携済みは挨拶(friend_add)を送らない。
+    //   未連携(ふつうのユーザ: フォーム未入力/広告登録のみ) → 既存の friend_add シナリオ（挨拶）。
+    const linkedEntry = await getLinkedEntryByLineUserId(db, userId);
+    if (linkedEntry) {
+      if (!(await hasListingPriceNotified(db, friend.id))) {
+        await fireEvent(
+          db,
+          'listing_link_completed',
+          {
+            friendId: friend.id,
+            eventData: { formId: linkedEntry.match_key, displayName: friend.display_name, formInputName: linkedEntry.name ?? null },
+          },
+          lineAccessToken,
+          lineAccountId,
+        );
+        await markListingPriceNotified(db, friend.id);
+        console.log(`follow: 連携済み出品ユーザへ listing_link_completed を送信 friend=${friend.id} match_key=${linkedEntry.match_key}`);
+      } else {
+        console.log(`follow: 連携済みだが価格お知らせ送信済み — スキップ friend=${friend.id}`);
+      }
+      return; // 連携済みは friend_add（挨拶/イベント）を送らず終了
     }
 
     // friend_add シナリオに登録（このアカウントのシナリオのみ）
