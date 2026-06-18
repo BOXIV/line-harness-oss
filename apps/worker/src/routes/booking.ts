@@ -130,6 +130,25 @@ ${renderHeader('エラー')}
   });
 }
 
+/** 既に予約申請済み（pending/approved）の友好的な表示。二重送信や「戻る」での再到達時に、
+ *  エラーではなくこの受付済みページを返す（誤って「既に申請済み」エラーに見せない）。 */
+function renderAlreadyBooked(status: string): Response {
+  const label = status === 'approved' ? '承認済み' : '確認中';
+  const body = `
+${renderHeader('予約済み')}
+<main class="max-w-md mx-auto px-5 py-10">
+  <div class="bg-white rounded-2xl p-6 shadow-sm">
+    <div class="text-3xl mb-3">✅</div>
+    <h1 class="text-base font-bold text-gray-900 mb-2">予約申請を受け付けています</h1>
+    <p class="text-sm text-gray-600">現在のステータス: <span class="font-bold">${label}</span></p>
+    <p class="text-xs text-gray-500 mt-3">変更はLINEで担当者にご連絡ください。</p>
+  </div>
+</main>`;
+  return new Response(htmlLayout('予約済み', body), {
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0', 'Pragma': 'no-cache', 'Expires': '0' },
+  });
+}
+
 function renderAuthRequired(token: string, c: { env: Env['Bindings']; req: { url: string } }): Response {
   // LINE Login OAuth に直接リダイレクト（/auth/line はモバイル時に LIFF URL へ飛ばしてしまうためバイパス）
   // state に redirect を埋め込み、/auth/callback で /booking?token=xxx に戻す
@@ -363,6 +382,11 @@ booking.get('/booking/confirm', async (c) => {
 
   const record = await getBookingRequestByToken(c.env.DB, token);
   if (!record) return renderError('予約リンクが見つかりません');
+  // 既に申請済み（pending/approved）なら確認フォームを再表示せず受付済みページを返す
+  // （申請後に「戻る」で確認フォームへ再到達→再申請で「既に申請済み」エラーになるのを防ぐ）。
+  if (record.status === 'approved' || record.status === 'pending') {
+    return renderAlreadyBooked(record.status);
+  }
 
   const session = c.get('bookingUser');
   if (!session) return renderAuthRequired(token, c);
@@ -479,6 +503,9 @@ ${renderHeader('STEP 3 / 3 ・確認')}
       setSummaryError('ナンバープレートは4桁の数字で入力してください。');
       return;
     }
+    // 二重送信防止: バリデーション通過後は送信ボタンを無効化（LIFF/モバイルの連打対策）
+    const submitBtn = document.querySelector('#bookingForm button[type="submit"]');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '送信中…'; submitBtn.classList.add('opacity-60'); }
   });
 </script>`;
 
@@ -512,7 +539,9 @@ booking.post('/booking/submit', async (c) => {
     if (!session) return renderAuthRequired(token, c);
 
     if (record.status !== 'pending_invite') {
-      return renderError('この予約は既に申請済みです');
+      // 二重送信・「戻る」での再申請は、エラーではなく受付済みページを返す（status=確認中/承認済み）。
+      if (record.status === 'pending' || record.status === 'approved') return renderAlreadyBooked(record.status);
+      return renderError('この予約は受付できません', 'お手数ですが担当者へLINEでご連絡ください');
     }
 
     // スタッフ自動アサイン
@@ -763,6 +792,10 @@ ${renderHeader('日程希望を3つ入力してください')}
     if (!valid) {
       e.preventDefault();
       setSummaryError(firstError + '。各項目をご確認ください。');
+    } else {
+      // 二重送信防止: バリデーション通過後は送信ボタンを無効化（LIFF/モバイルの連打対策）
+      const submitBtn = document.querySelector('#otherForm button[type="submit"]');
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = '送信中…'; submitBtn.classList.add('opacity-60'); }
     }
   });
 </script>`;
@@ -790,7 +823,9 @@ booking.post('/booking/other/submit', async (c) => {
     if (!session) return renderAuthRequired(token, c);
 
     if (record.status !== 'pending_invite') {
-      return renderError('この予約は既に申請済みです');
+      // 二重送信・「戻る」での再申請は、エラーではなく受付済みページを返す（status=確認中/承認済み）。
+      if (record.status === 'pending' || record.status === 'approved') return renderAlreadyBooked(record.status);
+      return renderError('この予約は受付できません', 'お手数ですが担当者へLINEでご連絡ください');
     }
 
     // 7日後を最低日付として算出（JST基準）
