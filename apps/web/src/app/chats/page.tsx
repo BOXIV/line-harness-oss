@@ -474,8 +474,10 @@ export default function ChatsPage() {
     setMarkingRead(true)
     try {
       await api.chats.markRead(selectedChatId)
-      loadChats()          // 一覧の未読バッジを更新
-      loadChatDetail(selectedChatId)
+      // 赤い未読バッジ（①②）だけを消す。loadChats/loadChatDetail で再フェッチすると
+      // トーク画面がトップへスクロールし、一覧のフォーカスも外れるため使わず、
+      // 該当チャットの unreadCount をローカルで 0 にするだけにする（他は一切動かさない）。
+      setChats((prev) => prev.map((c) => (c.id === selectedChatId ? { ...c, unreadCount: 0 } : c)))
     } catch {
       setError('既読への更新に失敗しました。')
     } finally {
