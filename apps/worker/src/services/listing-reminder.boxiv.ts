@@ -13,14 +13,14 @@
 import { listFormOnlyForReminder, markStepSent, markEscalated } from './listing-entry.boxiv.js';
 import { sendEmail } from './sendgrid.boxiv.js';
 import { sendSms, twilioConfigured } from './sms-twilio.boxiv.js';
-import { slackPost } from './slack.boxiv.js';
+import { slackPost, slackWebhookPost, escapeSlackText } from './slack.boxiv.js';
 import { buildReminderEmail, buildReminderSms } from './listing-email.boxiv.js';
 import type { ListingEntry } from './listing-entry.boxiv.js';
 import type { SendGridEnv } from './sendgrid.boxiv.js';
 import type { TwilioEnv } from './sms-twilio.boxiv.js';
-import type { SlackEnv } from './slack.boxiv.js';
+import type { SlackEnv, SlackWebhookEnv } from './slack.boxiv.js';
 
-export interface ReminderEnv extends SendGridEnv, TwilioEnv, SlackEnv {
+export interface ReminderEnv extends SendGridEnv, TwilioEnv, SlackEnv, SlackWebhookEnv {
   DB: D1Database;
   WORKER_URL?: string;
   LIFF_URL?: string;
@@ -59,6 +59,42 @@ function buildSmsLink(env: ReminderEnv, entry: ListingEntry): string {
   return `${base}/r/${encodeURIComponent(entry.match_key)}`;
 }
 
+/** 催促ステップ間隔(分)を人間可読に（10→「10分後」, 1440→「24時間後」）。 */
+function stepHuman(min: number): string {
+  return min < 60 ? `${min}分後` : `${Math.round(min / 60)}時間後`;
+}
+
+/** 監視用 Slack Webhook に流す本文（種類・宛先・内容 + 補助情報）を組み立てる。 */
+function buildMirrorText(
+  kind: 'メール' | 'SMS',
+  to: string,
+  content: string,
+  entry: ListingEntry,
+  stepIdx: number,
+  steps: number[],
+): string {
+  const icon = kind === 'メール' ? '📧' : '📱';
+  const when = steps[stepIdx] != null ? stepHuman(steps[stepIdx]) : '—';
+  // 宛先(メール/電話)と氏名はフォーム入力＝ユーザー制御。Slack mrkdwn インジェクション防止にエスケープ。
+  return [
+    `${icon} *${kind}リマインド送信*（提出から${when} / ${stepIdx + 1}通目）`,
+    `• 宛先: ${escapeSlackText(to)}`,
+    `• お名前: ${escapeSlackText(entry.name) || '—'}`,
+    `• match_key: \`${entry.match_key}\``,
+    '• 内容:',
+    '```',
+    content,
+    '```',
+  ].join('\n');
+}
+
+/** 送信ミラーを監視 Webhook に投稿（best-effort・非致命）。 */
+async function mirrorSend(env: ReminderEnv, text: string): Promise<void> {
+  if (!env.SLACK_REMINDER_WEBHOOK_URL) return;
+  const r = await slackWebhookPost(env.SLACK_REMINDER_WEBHOOK_URL, text);
+  if (!r.ok) console.error(`listing reminder: slack webhook mirror failed: ${r.error}`);
+}
+
 export async function processListingFormReminders(env: ReminderEnv): Promise<void> {
   const haveEmail = !!(env.SENDGRID_API_KEY && env.SENDGRID_FROM_EMAIL);
   const haveSms = twilioConfigured(env);
@@ -91,8 +127,8 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
     if (haveSlack && elapsedMin >= escalateMin && !e.escalated_at) {
       const lines = [
         '⚠️ <!channel> 出品フォーム送信から72時間 *LINE未連携* です。フォローをお願いします。',
-        `• お名前: ${e.name || '—'}`,
-        `• 連絡先: ${[e.phone, e.email].filter(Boolean).join(' / ') || '—'}`,
+        `• お名前: ${escapeSlackText(e.name) || '—'}`,
+        `• 連絡先: ${[e.phone, e.email].filter(Boolean).map(escapeSlackText).join(' / ') || '—'}`,
         `• match_key: \`${e.match_key}\``,
       ];
       const r = await slackPost(env, lines.join('\n'), { threadTs: e.slack_thread_ts });
@@ -111,12 +147,15 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
           const { subject, text, html } = buildReminderEmail(buildLink(env, e)); // メールはLIFFラップ(ボタン裏)
           const r = await sendEmail(env, e.email, subject, { text, html });
           sentEmail = r.ok;
-          if (!r.ok) console.error(`listing reminder: email failed ${e.match_key} ${r.error}`);
+          if (r.ok) await mirrorSend(env, buildMirrorText('メール', e.email, `件名: ${subject}\n\n${text}`, e, e.reminder_count, steps));
+          else console.error(`listing reminder: email failed ${e.match_key} ${r.error}`);
         }
         if (haveSms && e.phone) {
-          const r = await sendSms(env, e.phone, buildReminderSms(buildSmsLink(env, e))); // SMSは短縮リンク
+          const smsBody = buildReminderSms(buildSmsLink(env, e)); // SMSは短縮リンク
+          const r = await sendSms(env, e.phone, smsBody);
           sentSms = r.ok;
-          if (!r.ok && !r.skipped) console.error(`listing reminder: sms failed ${e.match_key} ${r.error}`);
+          if (r.ok) await mirrorSend(env, buildMirrorText('SMS', e.phone, smsBody, e, e.reminder_count, steps));
+          else if (!r.skipped) console.error(`listing reminder: sms failed ${e.match_key} ${r.error}`);
         }
         if (sentEmail || sentSms) {
           await markStepSent(env.DB, e.match_key, { email: sentEmail, sms: sentSms });
