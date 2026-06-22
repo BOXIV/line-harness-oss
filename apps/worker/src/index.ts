@@ -90,6 +90,7 @@ export type Env = {
     // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用 (claude-sellentry bot)
     SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;
+    SLACK_REMINDER_WEBHOOK_URL?: string;   // BOXIV: 催促メール/SMS の送信状況を流す監視用 Slack Incoming Webhook（未設定なら無効）
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;
     NOTION_BUYER_DB_ID?: string;
