@@ -13,7 +13,7 @@
 import { listFormOnlyForReminder, markStepSent, markEscalated } from './listing-entry.boxiv.js';
 import { sendEmail } from './sendgrid.boxiv.js';
 import { sendSms, twilioConfigured } from './sms-twilio.boxiv.js';
-import { slackPost, slackWebhookPost, escapeSlackText } from './slack.boxiv.js';
+import { slackPost, buildSlackCard, escapeSlackText } from './slack.boxiv.js';
 import { buildReminderEmail, buildReminderSms } from './listing-email.boxiv.js';
 import type { ListingEntry } from './listing-entry.boxiv.js';
 import type { SendGridEnv } from './sendgrid.boxiv.js';
@@ -64,35 +64,59 @@ function stepHuman(min: number): string {
   return min < 60 ? `${min}分後` : `${Math.round(min / 60)}時間後`;
 }
 
-/** 監視用 Slack Webhook に流す本文（種類・宛先・内容 + 補助情報）を組み立てる。 */
-function buildMirrorText(
+/** ミラー見出しのコンパクト attachment（color サイドバー + 太字タイトル + フィールド）を組み立てる。
+ *  本文は別途スレッド返信に入れるため、ここには含めない（チャンネルのタイムラインを圧迫しない）。 */
+function buildMirrorAttachment(
   kind: 'メール' | 'SMS',
   to: string,
-  content: string,
   entry: ListingEntry,
   stepIdx: number,
   steps: number[],
-): string {
+): Record<string, unknown> {
   const icon = kind === 'メール' ? '📧' : '📱';
+  const color = kind === 'メール' ? '#2eb67d' : '#4a9fe0';
   const when = steps[stepIdx] != null ? stepHuman(steps[stepIdx]) : '—';
   // 宛先(メール/電話)と氏名はフォーム入力＝ユーザー制御。Slack mrkdwn インジェクション防止にエスケープ。
-  return [
-    `${icon} *${kind}リマインド送信*（提出から${when} / ${stepIdx + 1}通目）`,
-    `• 宛先: ${escapeSlackText(to)}`,
-    `• お名前: ${escapeSlackText(entry.name) || '—'}`,
-    `• match_key: \`${entry.match_key}\``,
-    '• 内容:',
-    '```',
-    content,
-    '```',
-  ].join('\n');
+  return buildSlackCard({
+    title: `${icon} ${kind}リマインドを送信しました`,
+    color,
+    fields: [
+      { label: 'タイミング', value: `提出から${when} / ${stepIdx + 1}通目` },
+      { label: '宛先', value: escapeSlackText(to) },
+      { label: 'お名前', value: escapeSlackText(entry.name) || '—' },
+      { label: 'match_key', value: `\`${entry.match_key}\`` },
+    ],
+  });
 }
 
-/** 送信ミラーを監視 Webhook に投稿（best-effort・非致命）。 */
-async function mirrorSend(env: ReminderEnv, text: string): Promise<void> {
-  if (!env.SLACK_REMINDER_WEBHOOK_URL) return;
-  const r = await slackWebhookPost(env.SLACK_REMINDER_WEBHOOK_URL, text);
-  if (!r.ok) console.error(`listing reminder: slack webhook mirror failed: ${r.error}`);
+/**
+ * 送信ミラーを Slack に投稿（best-effort・非致命）。
+ * 見出しはコンパクト attachment、本文(メール件名+本文 / SMS本文)は同じスレッドへ別投稿し、
+ * チャンネルのタイムラインには本文を出さない。フォーム通知スレッド(slack_thread_ts)があれば
+ * その中へ、無ければ見出し自身をスレッド親にして本文をぶら下げる。
+ */
+async function mirror(
+  env: ReminderEnv,
+  kind: 'メール' | 'SMS',
+  to: string,
+  body: string,
+  entry: ListingEntry,
+  stepIdx: number,
+  steps: number[],
+): Promise<void> {
+  const attachment = buildMirrorAttachment(kind, to, entry, stepIdx, steps);
+  const head = await slackPost(env, attachment.fallback as string, {
+    threadTs: entry.slack_thread_ts,
+    attachments: [attachment],
+  });
+  if (!head.ok) {
+    console.error(`listing reminder: slack mirror head failed: ${head.error}`);
+    return;
+  }
+  // 本文はスレッド内へ（フォーム通知スレッド優先、無ければ見出しの ts をスレッド親に）。
+  const parent = entry.slack_thread_ts ?? head.ts ?? null;
+  const r = await slackPost(env, `\`\`\`\n${body}\n\`\`\``, { threadTs: parent });
+  if (!r.ok) console.error(`listing reminder: slack mirror body failed: ${r.error}`);
 }
 
 export async function processListingFormReminders(env: ReminderEnv): Promise<void> {
@@ -125,13 +149,20 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
 
     // 72h エスカレ（Slack・内部通知なので夜間も送る。フォーム通知スレッドに返信）
     if (haveSlack && elapsedMin >= escalateMin && !e.escalated_at) {
-      const lines = [
-        '⚠️ <!channel> 出品フォーム送信から72時間 *LINE未連携* です。フォローをお願いします。',
-        `• お名前: ${escapeSlackText(e.name) || '—'}`,
-        `• 連絡先: ${[e.phone, e.email].filter(Boolean).map(escapeSlackText).join(' / ') || '—'}`,
-        `• match_key: \`${e.match_key}\``,
-      ];
-      const r = await slackPost(env, lines.join('\n'), { threadTs: e.slack_thread_ts });
+      // <!channel> メンションは attachment 内だと通知されないため本体 text に置く。詳細はカードに。
+      const card = buildSlackCard({
+        title: '⚠️ 72時間 LINE未連携です。フォローをお願いします',
+        color: '#e01e5a', // 赤: 要対応
+        fields: [
+          { label: 'お名前', value: escapeSlackText(e.name) || '—' },
+          { label: '連絡先', value: [e.phone, e.email].filter(Boolean).map(escapeSlackText).join(' / ') || '—' },
+          { label: 'match_key', value: `\`${e.match_key}\`` },
+        ],
+      });
+      const r = await slackPost(env, '⚠️ <!channel> 出品フォーム送信から72時間 LINE未連携です。', {
+        threadTs: e.slack_thread_ts,
+        attachments: [card],
+      });
       if (r.ok) await markEscalated(env.DB, e.match_key);
     }
 
@@ -147,14 +178,14 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
           const { subject, text, html } = buildReminderEmail(buildLink(env, e)); // メールはLIFFラップ(ボタン裏)
           const r = await sendEmail(env, e.email, subject, { text, html });
           sentEmail = r.ok;
-          if (r.ok) await mirrorSend(env, buildMirrorText('メール', e.email, `件名: ${subject}\n\n${text}`, e, e.reminder_count, steps));
+          if (r.ok) await mirror(env, 'メール', e.email, `件名: ${subject}\n\n${text}`, e, e.reminder_count, steps);
           else console.error(`listing reminder: email failed ${e.match_key} ${r.error}`);
         }
         if (haveSms && e.phone) {
           const smsBody = buildReminderSms(buildSmsLink(env, e)); // SMSは短縮リンク
           const r = await sendSms(env, e.phone, smsBody);
           sentSms = r.ok;
-          if (r.ok) await mirrorSend(env, buildMirrorText('SMS', e.phone, smsBody, e, e.reminder_count, steps));
+          if (r.ok) await mirror(env, 'SMS', e.phone, smsBody, e, e.reminder_count, steps);
           else if (!r.skipped) console.error(`listing reminder: sms failed ${e.match_key} ${r.error}`);
         }
         if (sentEmail || sentSms) {
