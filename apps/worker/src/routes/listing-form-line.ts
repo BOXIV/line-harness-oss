@@ -32,7 +32,7 @@ import { fireEvent } from '../services/event-bus.js';
 import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
-import { slackPost } from '../services/slack.boxiv.js';
+import { slackPost, slackUpdate, buildSlackCard, escapeSlackText } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
@@ -292,15 +292,9 @@ listingFormLine.post('/listing-form/submit', async (c) => {
 
   // 4) Slack #pj-lightning-sell へフォーム通知を投稿し ts を保存（連携完了/72hエスカレのスレッド親）— 非致命
   try {
-    const carModel = pick('メーカー/車種') || pick('車種');
-    const lines = [
-      '🆕 *出品フォーム送信*（LINE連携待ち）',
-      `• お名前: ${name || '—'}`,
-      `• 連絡先: ${[phone, email].filter(Boolean).join(' / ') || '—'}`,
-      ...(carModel ? [`• 車種: ${carModel}`] : []),
-      `• match_key: \`${matchKey}\``,
-    ];
-    const r = await slackPost(c.env, lines.join('\n'));
+    const carModel = pick('メーカー/車種') || pick('車種') || null;
+    const card = buildListingFormCard({ name, phone, email, carModel, matchKey, linked: false });
+    const r = await slackPost(c.env, card.fallback as string, { attachments: [card] });
     if (r.ok && r.ts) await setSlackThreadTs(c.env.DB, matchKey, r.ts);
   } catch (e) {
     console.error('listing-form submit: Slack 通知 failed', e);
@@ -404,11 +398,13 @@ listingFormLine.get('/listing-form/callback', async (c) => {
   // フォーム送信時に submit で起票済みの行へ lineUserId を追記。form_submit が無い直リンクは orphan 行を作る。非致命。
   let notionPageId: string | null = null;
   let slackThreadTs: string | null = null;
+  let linkedEntry: Awaited<ReturnType<typeof markLinked>> = null;
   try {
     const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
     if (!entry) {
       await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
     } else {
+      linkedEntry = entry;
       notionPageId = entry.notion_page_id;
       slackThreadTs = entry.slack_thread_ts;
     }
@@ -432,17 +428,37 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     console.error('listing-form callback: listing_link_completed fire threw', err);
   });
 
+  // Slack: トップのフォーム送信通知を「（LINE連携待ち）」→「（LINE連携済み）」に更新（親メッセージを書換）。非致命。
+  if (slackThreadTs && linkedEntry) {
+    try {
+      const updated = buildListingFormCard({
+        name: linkedEntry.name,
+        phone: linkedEntry.phone,
+        email: linkedEntry.email,
+        carModel: pickCarModel(linkedEntry.form_data),
+        matchKey: ctx.form_id,
+        linked: true,
+      });
+      await slackUpdate(c.env, slackThreadTs, updated.fallback as string, { attachments: [updated] });
+    } catch (err) {
+      console.error(`listing-form callback: slack update (連携済み) threw (form_id=${ctx.form_id})`, err);
+    }
+  }
+
   // Slack: フォーム通知スレッドに「連携完了」を返信（thread_ts があればスレッド、無ければ単発）。非致命。
   try {
     const notionUrl = notionPageId ? `https://www.notion.so/${notionPageId.replace(/-/g, '')}` : null;
-    const lines = [
-      '✅ *LINE連携が完了しました*',
-      `• 表示名: ${profile.displayName || '—'}`,
-      `• LINE userId: \`${profile.userId}\``,
-      ...(notionUrl ? [`• Notion: <${notionUrl}|出品者リストを開く>`] : []),
-      `• match_key: \`${ctx.form_id}\``,
-    ];
-    await slackPost(c.env, lines.join('\n'), { threadTs: slackThreadTs });
+    const card = buildSlackCard({
+      title: '✅ LINE連携が完了しました',
+      color: '#2eb67d', // 緑: 完了
+      fields: [
+        { label: '表示名', value: escapeSlackText(profile.displayName) || '—' },
+        { label: 'LINE userId', value: `\`${profile.userId}\`` },
+        { label: 'Notion', value: notionUrl ? `<${notionUrl}|出品者リストを開く>` : null },
+        { label: 'match_key', value: `\`${ctx.form_id}\`` },
+      ],
+    });
+    await slackPost(c.env, card.fallback as string, { threadTs: slackThreadTs, attachments: [card] });
   } catch (err) {
     console.error(`listing-form callback: slack post threw (form_id=${ctx.form_id})`, err);
   }
@@ -468,6 +484,41 @@ listingFormLine.get('/listing-form/callback', async (c) => {
   }
   return c.html(renderSuccessPage(profile.displayName));
 });
+
+// ─── Slack カードヘルパー ─────────────────────────────────────
+
+/** form_data(JSON) から車種を抽出（「メーカー/車種」優先、無ければ「車種」）。 */
+function pickCarModel(formDataJson: string | null | undefined): string | null {
+  if (!formDataJson) return null;
+  try {
+    const o = JSON.parse(formDataJson) as Record<string, unknown>;
+    const v = o['メーカー/車種'] ?? o['車種'];
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 出品フォーム送信通知カード。連携前(待ち=黄)と連携完了後(済み=緑)でタイトル・色だけ切り替える。 */
+function buildListingFormCard(opts: {
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  carModel: string | null;
+  matchKey: string;
+  linked: boolean;
+}): Record<string, unknown> {
+  return buildSlackCard({
+    title: `🆕 出品フォーム送信（${opts.linked ? 'LINE連携済み' : 'LINE連携待ち'}）`,
+    color: opts.linked ? '#2eb67d' : '#ECB22E', // 緑=連携済み / 黄=連携待ち
+    fields: [
+      { label: 'お名前', value: escapeSlackText(opts.name) || '—' },
+      { label: '連絡先', value: [opts.phone, opts.email].filter(Boolean).map(escapeSlackText).join(' / ') || '—' },
+      { label: '車種', value: opts.carModel ? escapeSlackText(opts.carModel) : null },
+      { label: 'match_key', value: `\`${opts.matchKey}\`` },
+    ],
+  });
+}
 
 // ─── helpers ─────────────────────────────────────────────────
 

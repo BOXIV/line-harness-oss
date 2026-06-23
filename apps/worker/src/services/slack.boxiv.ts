@@ -28,26 +28,85 @@ export function escapeSlackText(s: string | null | undefined): string {
 }
 
 /**
+ * コンパクトな Slack カード attachment を組み立てる（color サイドバー + 太字タイトル + 2列フィールド）。
+ * 箇条書き(•)や生の `*` を使わず、見出しは太字レンダリング、各項目はラベル太字＋値の2列で表示する。
+ * 値は呼び出し側で escapeSlackText 済みを渡す（mrkdwn インジェクション防止）。空値の項目は除外する。
+ * 本体テキストが長い場合は本文を渡さず、呼び出し側でスレッド返信に分ける（タイムラインを圧迫しない）。
+ */
+export function buildSlackCard(opts: {
+  title: string;
+  color: string;
+  fields: Array<{ label: string; value: string | null | undefined }>;
+}): Record<string, unknown> {
+  const fields = opts.fields
+    .filter((f) => f.value != null && String(f.value).trim() !== '')
+    .map((f) => ({ type: 'mrkdwn', text: `*${f.label}*\n${f.value}` }));
+  const blocks: Record<string, unknown>[] = [
+    { type: 'section', text: { type: 'mrkdwn', text: `*${opts.title}*` } },
+  ];
+  if (fields.length > 0) blocks.push({ type: 'section', fields });
+  return { color: opts.color, fallback: opts.title, blocks };
+}
+
+/**
  * #pj-lightning-sell へ投稿。threadTs を渡すとそのスレッドへ返信。
  * 未設定なら ok=false（呼び出し側はログのみ・非致命）。throw しない。
  */
 export async function slackPost(
   env: SlackEnv,
   text: string,
-  opts: { threadTs?: string | null } = {},
+  opts: { threadTs?: string | null; attachments?: unknown[] } = {},
 ): Promise<SlackPostResult> {
   if (!env.SELLENTRY_SLACK_BOT_TOKEN || !env.SLACK_LISTING_LINK_CHANNEL_ID) {
     return { ok: false, error: 'slack not configured' };
   }
   const body: Record<string, unknown> = {
     channel: env.SLACK_LISTING_LINK_CHANNEL_ID,
-    text,
+    text, // attachments 指定時も通知用フォールバックとして必須
     unfurl_links: false,
     unfurl_media: false,
   };
   if (opts.threadTs) body.thread_ts = opts.threadTs;
+  if (opts.attachments && opts.attachments.length > 0) body.attachments = opts.attachments;
   try {
     const res = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify(body),
+    });
+    const j = (await res.json()) as { ok?: boolean; ts?: string; error?: string };
+    if (!j.ok) return { ok: false, error: j.error || `http ${res.status}` };
+    return { ok: true, ts: j.ts };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * 既存メッセージ(ts)を chat.update で書き換える。
+ * フォーム送信通知の「（LINE連携待ち）」を連携完了時に「（LINE連携済み）」へ更新する用途。
+ * ts/token/channel いずれか未設定なら ok=false（呼び出し側はログのみ・非致命）。throw しない。
+ */
+export async function slackUpdate(
+  env: SlackEnv,
+  ts: string | null | undefined,
+  text: string,
+  opts: { attachments?: unknown[] } = {},
+): Promise<SlackPostResult> {
+  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !env.SLACK_LISTING_LINK_CHANNEL_ID || !ts) {
+    return { ok: false, error: 'slack update not configured (token/channel/ts)' };
+  }
+  const body: Record<string, unknown> = {
+    channel: env.SLACK_LISTING_LINK_CHANNEL_ID,
+    ts,
+    text,
+  };
+  if (opts.attachments && opts.attachments.length > 0) body.attachments = opts.attachments;
+  try {
+    const res = await fetch('https://slack.com/api/chat.update', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
