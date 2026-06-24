@@ -382,9 +382,13 @@ booking.get('/booking/confirm', async (c) => {
 
   const record = await getBookingRequestByToken(c.env.DB, token);
   if (!record) return renderError('予約リンクが見つかりません');
-  // 既に申請済み（pending/approved）なら確認フォームを再表示せず受付済みページを返す
-  // （申請後に「戻る」で確認フォームへ再到達→再申請で「既に申請済み」エラーになるのを防ぐ）。
-  if (record.status === 'approved' || record.status === 'pending') {
+  // 既に申請済みなら確認フォームを再表示しない（申請後に「戻る」で確認フォームへ再到達
+  // →再申請で「既に申請済み」エラーになるのを防ぐ）。pending は完了画面（予約完了）へ、
+  // approved は受付済みページへ。
+  if (record.status === 'pending') {
+    return c.redirect(`/booking/complete?token=${encodeURIComponent(token)}`);
+  }
+  if (record.status === 'approved') {
     return renderAlreadyBooked(record.status);
   }
 
@@ -539,8 +543,12 @@ booking.post('/booking/submit', async (c) => {
     if (!session) return renderAuthRequired(token, c);
 
     if (record.status !== 'pending_invite') {
-      // 二重送信・「戻る」での再申請は、エラーではなく受付済みページを返す（status=確認中/承認済み）。
-      if (record.status === 'pending' || record.status === 'approved') return renderAlreadyBooked(record.status);
+      // 二重送信・「戻る」での再到達。申請は既に成立しているので、エラーや中間ページではなく
+      // 完了画面（予約完了）を見せる。LINE アプリ内ブラウザが POST を二重送信しても、
+      // どちらのリクエストも /booking/complete に着地するため必ず完了画面になる。
+      // 承認済みは「確認をお待ちください」文言が不適切なので受付済みページにする。
+      if (record.status === 'pending') return c.redirect(`/booking/complete?token=${encodeURIComponent(token)}`);
+      if (record.status === 'approved') return renderAlreadyBooked(record.status);
       return renderError('この予約は受付できません', 'お手数ですが担当者へLINEでご連絡ください');
     }
 
@@ -823,8 +831,12 @@ booking.post('/booking/other/submit', async (c) => {
     if (!session) return renderAuthRequired(token, c);
 
     if (record.status !== 'pending_invite') {
-      // 二重送信・「戻る」での再申請は、エラーではなく受付済みページを返す（status=確認中/承認済み）。
-      if (record.status === 'pending' || record.status === 'approved') return renderAlreadyBooked(record.status);
+      // 二重送信・「戻る」での再到達。申請は既に成立しているので、エラーや中間ページではなく
+      // 完了画面（予約完了）を見せる。LINE アプリ内ブラウザが POST を二重送信しても、
+      // どちらのリクエストも /booking/complete に着地するため必ず完了画面になる。
+      // 承認済みは「確認をお待ちください」文言が不適切なので受付済みページにする。
+      if (record.status === 'pending') return c.redirect(`/booking/complete?token=${encodeURIComponent(token)}`);
+      if (record.status === 'approved') return renderAlreadyBooked(record.status);
       return renderError('この予約は受付できません', 'お手数ですが担当者へLINEでご連絡ください');
     }
 
