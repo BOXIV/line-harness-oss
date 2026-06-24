@@ -24,6 +24,7 @@ export * from './ad-platforms';
 export * from './staff';
 export * from './staff-availability';
 export * from './booking-requests';
+export * from './audit-log';
 
 /**
  * Thin wrapper around D1Database.
