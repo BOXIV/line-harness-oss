@@ -7,6 +7,8 @@ export interface StaffMember {
   role: 'owner' | 'admin' | 'manager' | 'staff';
   api_key: string;
   is_active: number;
+  /** 撮影スタッフの稼働エリア（エリアID）。NULL=未設定。migration 912。 */
+  work_area: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -15,6 +17,7 @@ export interface CreateStaffInput {
   name: string;
   email?: string | null;
   role: 'owner' | 'admin' | 'manager' | 'staff';
+  workArea?: string | null;
 }
 
 export interface UpdateStaffInput {
@@ -22,6 +25,7 @@ export interface UpdateStaffInput {
   email?: string | null;
   role?: 'owner' | 'admin' | 'manager' | 'staff';
   is_active?: number;
+  workArea?: string | null;
 }
 
 function generateApiKey(): string {
@@ -68,10 +72,10 @@ export async function createStaffMember(
 
   await db
     .prepare(
-      `INSERT INTO staff_members (id, name, email, role, api_key, is_active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+      `INSERT INTO staff_members (id, name, email, role, api_key, is_active, work_area, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
     )
-    .bind(id, input.name, input.email ?? null, input.role, apiKey, now, now)
+    .bind(id, input.name, input.email ?? null, input.role, apiKey, input.workArea ?? null, now, now)
     .run();
 
   return (await db
@@ -93,6 +97,7 @@ export async function updateStaffMember(
   if (input.email !== undefined) { sets.push('email = ?'); values.push(input.email ?? null); }
   if (input.role !== undefined) { sets.push('role = ?'); values.push(input.role); }
   if (input.is_active !== undefined) { sets.push('is_active = ?'); values.push(input.is_active); }
+  if (input.workArea !== undefined) { sets.push('work_area = ?'); values.push(input.workArea ?? null); }
 
   values.push(id);
   await db

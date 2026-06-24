@@ -25,6 +25,7 @@ function serializeStaff(row: StaffMember, masked = true) {
     role: row.role,
     apiKey: masked ? maskApiKey(row.api_key) : row.api_key,
     isActive: Boolean(row.is_active),
+    workArea: row.work_area ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -60,6 +61,7 @@ staff.get('/api/staff/me', async (c) => {
         name: member.name,
         role: member.role,
         email: member.email,
+        workArea: member.work_area ?? null,
       },
     });
   } catch (err) {
@@ -108,7 +110,7 @@ staff.get('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
 // manager cannot create owner role (would be self-elevation).
 staff.post('/api/staff', requireRole('owner', 'manager'), async (c) => {
   try {
-    const body = await c.req.json<{ name: string; email?: string; role: string }>();
+    const body = await c.req.json<{ name: string; email?: string; role: string; workArea?: string | null }>();
     const currentStaff = c.get('staff');
 
     if (!body.name) {
@@ -129,6 +131,8 @@ staff.post('/api/staff', requireRole('owner', 'manager'), async (c) => {
       name: body.name,
       email: body.email ?? null,
       role: body.role as 'owner' | 'admin' | 'manager' | 'staff',
+      // 稼働エリアは撮影スタッフのみ意味を持つ（他ロールは無視して null）。
+      workArea: body.role === 'staff' ? (body.workArea ?? null) : null,
     });
 
     // Return full (unmasked) API key one-time
@@ -150,6 +154,7 @@ staff.patch('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
       email?: string | null;
       role?: string;
       isActive?: boolean;
+      workArea?: string | null;
     }>();
 
     const validRoles = ['owner', 'admin', 'manager', 'staff'] as const;
@@ -189,6 +194,7 @@ staff.patch('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
       email: body.email,
       role: body.role as 'owner' | 'admin' | 'manager' | 'staff' | undefined,
       is_active: body.isActive !== undefined ? (body.isActive ? 1 : 0) : undefined,
+      workArea: body.workArea,
     });
 
     if (!updated) {
