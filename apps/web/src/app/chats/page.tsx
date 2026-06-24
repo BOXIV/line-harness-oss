@@ -383,6 +383,19 @@ export default function ChatsPage() {
     return () => { window.clearTimeout(t1); window.clearTimeout(t2); window.clearTimeout(t3) }
   }, [chatDetail?.id, chatDetail?.messages?.length])
 
+  // 引用プレビューのクリック → 引用元メッセージへスクロール＋一瞬ハイライト。
+  // 引用元が読み込み済み（直近200件）にあれば DOM に存在しジャンプできる。範囲外なら何もしない。
+  const scrollToMessage = useCallback((originalMessageId: string) => {
+    const el = document.getElementById(`chat-msg-${originalMessageId}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.remove('quote-flash')
+    // reflow してアニメーションを再起動（連続クリック対応）
+    void el.offsetWidth
+    el.classList.add('quote-flash')
+    window.setTimeout(() => el.classList.remove('quote-flash'), 1600)
+  }, [])
+
   const handleSelectChat = (chatId: string) => {
     setSelectedChatId(chatId)
     setMessageContent('')
@@ -844,6 +857,8 @@ export default function ChatsPage() {
                       key={msg.id}
                       message={msg}
                       friendPictureUrl={chatDetail.friendPictureUrl}
+                      domId={`chat-msg-${msg.id}`}
+                      onQuoteJump={scrollToMessage}
                     />
                   ))
                 )}

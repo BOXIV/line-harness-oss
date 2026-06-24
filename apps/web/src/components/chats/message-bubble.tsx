@@ -1,6 +1,6 @@
 'use client'
 
-import type { CSSProperties } from 'react'
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import FlexPreview from '@/components/flex-preview'
 
 /** 引用元メッセージのプレビュー（quoted_message_id を messages_log で解決したもの）。 */
@@ -31,6 +31,10 @@ interface MessageBubbleProps {
   friendPictureUrl?: string | null
   /** Hide avatars / formatting overrides for compact rendering (DM panel etc.). */
   variant?: 'chat' | 'compact'
+  /** DOM id set on the message root so a quote can scroll to it. */
+  domId?: string
+  /** 引用プレビューをクリックしたとき、引用元メッセージ(messages_log の id)へジャンプするコールバック。 */
+  onQuoteJump?: (originalMessageId: string) => void
 }
 
 function MediaContent({ messageType, content }: { messageType: string; content: string }) {
@@ -148,10 +152,13 @@ function QuotedBubble({
   quotedMessageId,
   quotedMessage,
   tone,
+  onJump,
 }: {
   quotedMessageId?: string | null
   quotedMessage?: QuotedMessagePreview | null
   tone: 'onDark' | 'onLight'
+  /** 引用元へジャンプ。解決済みかつ提供されたときだけクリック可能になる。 */
+  onJump?: (originalMessageId: string) => void
 }) {
   // 引用が無いメッセージ（quotedMessageId 未設定）は何も描画しない。
   if (!quotedMessageId) return null
@@ -161,7 +168,7 @@ function QuotedBubble({
   const labelCls = onDark ? 'text-white/70' : 'text-gray-500'
   const bodyCls = onDark ? 'text-white/80' : 'text-gray-600'
 
-  // 引用元を解決できなかった場合（旧データ等）はプレースホルダを出す。
+  // 引用元を解決できなかった場合（旧データ等）はプレースホルダを出す（クリック不可）。
   if (!quotedMessage) {
     return (
       <div className={`mb-1 max-w-[300px] rounded-lg border-l-4 border-gray-300 ${boxBg} px-2.5 py-1.5 text-xs italic ${onDark ? 'text-white/60' : 'text-gray-400'}`}>
@@ -172,8 +179,26 @@ function QuotedBubble({
 
   const label = quotedMessage.direction === 'outgoing' ? '自分' : '相手'
   const p = quotePreviewParts(quotedMessage.messageType, quotedMessage.content)
+  const clickable = Boolean(onJump)
+  const handleJump = () => onJump?.(quotedMessage.id)
   return (
-    <div className={`mb-1 max-w-[300px] rounded-lg border-l-4 border-emerald-400 ${boxBg} px-2.5 py-1.5`}>
+    <div
+      className={`mb-1 max-w-[300px] rounded-lg border-l-4 border-emerald-400 ${boxBg} px-2.5 py-1.5 ${clickable ? 'cursor-pointer transition hover:brightness-110' : ''}`}
+      {...(clickable
+        ? {
+            role: 'button' as const,
+            tabIndex: 0,
+            title: '引用元のメッセージへ移動',
+            onClick: handleJump,
+            onKeyDown: (e: ReactKeyboardEvent) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                handleJump()
+              }
+            },
+          }
+        : {})}
+    >
       <div className={`mb-0.5 text-[11px] font-semibold ${labelCls}`}>{label}</div>
       <div className={`flex items-center gap-1.5 text-xs ${bodyCls}`}>
         {p.thumb ? (
@@ -187,7 +212,7 @@ function QuotedBubble({
   )
 }
 
-export default function MessageBubble({ message, friendPictureUrl, variant = 'chat' }: MessageBubbleProps) {
+export default function MessageBubble({ message, friendPictureUrl, variant = 'chat', domId, onQuoteJump }: MessageBubbleProps) {
   const isOutgoing = message.direction === 'outgoing'
   const isRich = RICH_TYPES.has(message.messageType)
   const isFailed = isOutgoing && message.status === 'failed'
@@ -195,8 +220,8 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
   if (variant === 'compact') {
     // Tailwind-light variant for the DM panel that doesn't share the LINE-style background.
     return (
-      <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
-        <QuotedBubble quotedMessageId={message.quotedMessageId} quotedMessage={message.quotedMessage} tone="onLight" />
+      <div id={domId} className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
+        <QuotedBubble quotedMessageId={message.quotedMessageId} quotedMessage={message.quotedMessage} tone="onLight" onJump={onQuoteJump} />
         <div
           className={
             isRich
@@ -219,7 +244,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
   }
 
   return (
-    <div className={`flex items-end gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'}`}>
+    <div id={domId} className={`flex items-end gap-2 ${isOutgoing ? 'justify-end' : 'justify-start'}`}>
       {!isOutgoing && (
         friendPictureUrl ? (
           <img src={friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0 mb-1" />
@@ -229,7 +254,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
       )}
 
       <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
-        <QuotedBubble quotedMessageId={message.quotedMessageId} quotedMessage={message.quotedMessage} tone="onDark" />
+        <QuotedBubble quotedMessageId={message.quotedMessageId} quotedMessage={message.quotedMessage} tone="onDark" onJump={onQuoteJump} />
         {isRich ? (
           // Rich content renders its own frame (LINE-style card / video player / file card).
           // No outer bubble — keeps the chat background visible around it.
