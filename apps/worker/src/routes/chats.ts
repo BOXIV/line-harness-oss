@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { buildMessage } from '../services/step-delivery.js';
 import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
+import { buildQuoteIndex, type QuotableRow } from '../utils/quote.js';
 import {
   getOperators,
   getOperatorById,
@@ -212,9 +213,13 @@ chats.get('/api/chats/:id', async (c) => {
 
     // チャットに関連するメッセージログも取得
     const messages = await c.env.DB
-      .prepare(`SELECT id, friend_id, direction, message_type, content, status, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
+      .prepare(`SELECT id, friend_id, direction, message_type, content, status, line_message_id, quoted_message_id, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
       .bind(item.friend_id)
       .all();
+
+    // 引用返信の引用元を解決（quoted_message_id → 引用元メッセージのプレビュー）
+    const rows = messages.results as unknown as Array<QuotableRow & { status: string | null; created_at: string }>;
+    const quoteIndex = await buildQuoteIndex(c.env.DB, item.friend_id, rows);
 
     return c.json({
       success: true,
@@ -231,13 +236,16 @@ chats.get('/api/chats/:id', async (c) => {
         notes: item.notes,
         lastMessageAt: item.last_message_at,
         createdAt: item.created_at,
-        messages: (messages.results as Record<string, unknown>[]).map((m) => ({
+        messages: rows.map((m) => ({
           id: m.id,
           direction: m.direction,
           messageType: m.message_type,
           content: m.content,
           status: m.status,
           createdAt: m.created_at,
+          // 引用返信: quotedMessageId が非NULL = 引用元あり。解決できた場合のみ quotedMessage を返す。
+          quotedMessageId: m.quoted_message_id ?? null,
+          quotedMessage: m.quoted_message_id ? quoteIndex.get(m.quoted_message_id) ?? null : null,
         })),
       },
     });

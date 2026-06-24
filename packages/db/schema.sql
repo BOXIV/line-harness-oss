@@ -125,12 +125,18 @@ CREATE TABLE IF NOT EXISTS messages_log (
   slack_notified_at TEXT,
   -- NULL/'sent'=送信成功, 'failed'=送信失敗（未フォロー宛/LINE APIエラーで不達）。migration 908。
   status           TEXT,
+  -- 引用機能。migration 911。
+  --   line_message_id   = LINE プラットフォーム上のメッセージID（受信メッセージに付与。引用解決のキー）
+  --   quoted_message_id = この受信メッセージが引用した元メッセージの line_message_id（非引用時は NULL）
+  line_message_id   TEXT,
+  quoted_message_id TEXT,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_log_friend_id ON messages_log (friend_id);
 CREATE INDEX IF NOT EXISTS idx_messages_log_created_at ON messages_log (created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_log_status ON messages_log (status);
+CREATE INDEX IF NOT EXISTS idx_messages_log_line_message_id ON messages_log (friend_id, line_message_id);
 
 -- BOXIV: Slack 受信通知のバースト集約状態（friend 単位, notify_after=最終受信+30秒）。
 CREATE TABLE IF NOT EXISTS slack_notify_buffers (

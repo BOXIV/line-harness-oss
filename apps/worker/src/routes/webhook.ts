@@ -299,13 +299,18 @@ async function handleEvent(
     const now = jstNow();
     const logId = crypto.randomUUID();
 
-    // 受信メッセージをログに記録
+    // 引用返信のとき LINE は quotedMessageId（引用元の messageId）を付ける。
+    // line-sdk の型には未定義のためローカルキャストで読む。引用解決のキーは line_message_id。
+    const lineMessageId = textMessage.id ?? null;
+    const quotedMessageId = (event.message as { quotedMessageId?: string }).quotedMessageId ?? null;
+
+    // 受信メッセージをログに記録（line_message_id / quoted_message_id を保存 → ダッシュボードで引用元を復元）
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
-         VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, quoted_message_id, created_at)
+         VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, ?, ?, ?)`,
       )
-      .bind(logId, friend.id, incomingText, now)
+      .bind(logId, friend.id, incomingText, lineMessageId, quotedMessageId, now)
       .run();
 
     // BOXIV: Slack 通知の対象に記録（webhook 側で塊にまとめて1通に）
@@ -486,6 +491,8 @@ async function handleEvent(
 
     const kind = event.message.type;
     const messageId = event.message.id;
+    // 引用返信のとき LINE は quotedMessageId（引用元の messageId）を付ける。line-sdk の型には未定義。
+    const quotedMessageId = (event.message as { quotedMessageId?: string }).quotedMessageId ?? null;
     if (!mediaBucket) {
       console.error(`webhook: media bucket not configured — skipping ${kind}`);
       return;
@@ -509,10 +516,10 @@ async function handleEvent(
       // Still log a stub so the chat doesn't show a hole
       await db
         .prepare(
-          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
-           VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?)`,
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, quoted_message_id, created_at)
+           VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?, ?, ?)`,
         )
-        .bind(crypto.randomUUID(), friend.id, kind, JSON.stringify({ error: 'ingest failed', messageId }), jstNow())
+        .bind(crypto.randomUUID(), friend.id, kind, JSON.stringify({ error: 'ingest failed', messageId }), messageId, quotedMessageId, jstNow())
         .run();
       await upsertChatOnMessage(db, friend.id);
       return;
@@ -521,10 +528,10 @@ async function handleEvent(
     const mediaLogId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
-         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, quoted_message_id, created_at)
+         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, ?, ?, ?)`,
       )
-      .bind(mediaLogId, friend.id, kind, JSON.stringify(info), jstNow())
+      .bind(mediaLogId, friend.id, kind, JSON.stringify(info), messageId, quotedMessageId, jstNow())
       .run();
     await upsertChatOnMessage(db, friend.id);
     onIncoming?.(friend.id, mediaLogId);
