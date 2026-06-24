@@ -63,6 +63,9 @@ import { friendImport } from './routes/friend-import.boxiv.js';
 import { schemaReconcile } from './routes/schema-reconcile.boxiv.js';
 import { notionWebhook } from './routes/notion-webhook.boxiv.js';
 import { reconcileNotionStatuses } from './services/notion-status-sync.boxiv.js';
+// 監査ログ（管理操作の変更証跡, BOXIV）
+import { auditLogMiddleware } from './middleware/audit-log.boxiv.js';
+import { auditLogs } from './routes/audit-logs.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -151,6 +154,9 @@ app.use('*', rateLimitMiddleware);
 // Auth middleware — skips /webhook and /docs automatically
 app.use('*', authMiddleware);
 
+// 監査ログ — 認証直後に挟む（c.get('staff') が解決済み）。成功した admin 変更のみ記録。
+app.use('*', auditLogMiddleware);
+
 // Mount route groups — MVP & Round 2
 app.route('/', webhook);
 app.route('/', friends);
@@ -211,6 +217,8 @@ app.route('/', friendImport);
 app.route('/', schemaReconcile);
 // 顧客ステータス Notion 連携の受信口 (BOXIV, PR6 / 案2 automation Send webhook)
 app.route('/', notionWebhook);
+// 監査ログ閲覧 (BOXIV)
+app.route('/', auditLogs);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
