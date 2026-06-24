@@ -8,3 +8,14 @@ html {
 body {
   overflow-x: hidden;
 }
+
+/* 引用プレビューのクリックで引用元へジャンプした際の一瞬のハイライト。
+   message-bubble の行ルートに JS で .quote-flash を付与する（chats/page.tsx の scrollToMessage）。 */
+@keyframes quote-flash {
+  0%   { background-color: rgba(251, 191, 36, 0.45); }  /* amber-400 */
+  100% { background-color: transparent; }
+}
+.quote-flash {
+  animation: quote-flash 1.5s ease-out;
+  border-radius: 0.5rem;
+}
