@@ -286,10 +286,10 @@ export default function BookingsPage() {
                         <td className="px-4 py-3">
                           <button
                             onClick={() => openDetail(row.id)}
-                            className="text-xs text-brand hover:underline"
-                            style={{ color: '#0f172a' }}
+                            className="inline-flex items-center px-3 py-1.5 text-xs font-bold rounded-lg text-white transition-opacity hover:opacity-90 whitespace-nowrap"
+                            style={{ backgroundColor: '#0f172a' }}
                           >
-                            詳細
+                            確認
                           </button>
                         </td>
                       </tr>
