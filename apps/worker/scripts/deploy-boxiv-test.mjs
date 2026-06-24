@@ -75,6 +75,14 @@ try {
   copyFileSync(wranglerBoxiv, wranglerToml);
   swapped = true;
 
+  // line-sdk は dist 解決（vite は再ビルドしない）。src 変更を確実に反映するため
+  // deploy 前に必ず dist を再ビルドする（怠ると古い dist が bundle される）。
+  console.log('▶ build @line-crm/line-sdk (dist 再ビルド)');
+  execSync('pnpm --filter @line-crm/line-sdk build', {
+    cwd: workerDir,
+    stdio: 'inherit',
+  });
+
   console.log('▶ vite build (VITE_LIFF_ID=' + VITE_LIFF_ID + ')');
   execSync('pnpm exec vite build', {
     cwd: workerDir,

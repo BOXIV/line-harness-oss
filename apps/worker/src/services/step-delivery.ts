@@ -10,6 +10,7 @@ import {
 import type { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { jitterDeliveryTime, addJitter, sleep } from './stealth.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 /**
  * Replace template variables in message content.
@@ -174,16 +175,16 @@ async function processSingleDelivery(
     trackedContent = tracked.content;
   }
   const message = buildMessage(trackedType, trackedContent);
-  await lineClient.pushMessage(friend.line_user_id, [message]);
+  const sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [message]));
 
-  // Log outgoing message
+  // Log outgoing message。line_message_id=友だちの引用解決用。
   const logId = crypto.randomUUID();
   await db
     .prepare(
-      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
-       VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, ?)`,
+      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, created_at)
+       VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, ?, ?)`,
     )
-    .bind(logId, friend.id, currentStep.message_type, currentStep.message_content, currentStep.id, jstNow())
+    .bind(logId, friend.id, currentStep.message_type, currentStep.message_content, currentStep.id, sentLineId, jstNow())
     .run();
 
   // Determine next step (find the step after currentStep in the sorted list)

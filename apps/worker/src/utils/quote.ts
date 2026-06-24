@@ -17,6 +17,17 @@ export interface QuotedPreview {
   content: string;
 }
 
+/**
+ * push/reply のレスポンスから送信済みメッセージの LINE messageId を取り出す。
+ * これを outgoing 行の line_message_id に保存しておくと、友だちが後でその
+ * メッセージを引用返信した際に引用元として解決できる（複数送信時も引用対象は先頭1件）。
+ * LINE が空ボディを返した場合は undefined になり得るので防御的に扱う。
+ */
+export function firstSentMessageId(res: unknown): string | null {
+  const id = (res as { sentMessages?: Array<{ id?: unknown }> } | null | undefined)?.sentMessages?.[0]?.id;
+  return typeof id === 'string' && id ? id : null;
+}
+
 /** メッセージ行から LINE メッセージID を取り出す。line_message_id が無いメディアは R2 key から復元。 */
 export function resolveLineMessageId(row: {
   message_type: string;

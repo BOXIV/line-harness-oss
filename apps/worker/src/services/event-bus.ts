@@ -28,6 +28,7 @@ import type { Message } from '@line-crm/line-sdk';
 import { sendAdConversions } from './ad-conversion.js';
 import { logFailedOutgoing } from './message-log.boxiv.js';
 import type { Env } from '../index.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 export interface EventPayload {
   friendId?: string;
@@ -280,9 +281,10 @@ async function executeAction(
       }
       // Prefer replyMessage (free) when replyToken is available
       let deliveryType: 'reply' | 'push' = 'push';
+      let sentLineId: string | null = null;
       if (payload.replyToken) {
         try {
-          await lineClient.replyMessage(payload.replyToken, [msg]);
+          sentLineId = firstSentMessageId(await lineClient.replyMessage(payload.replyToken, [msg]));
           deliveryType = 'reply';
           // replyToken is single-use, clear it so subsequent actions fall back to push
           payload.replyToken = undefined;
@@ -292,7 +294,7 @@ async function executeAction(
           const errMsg = err instanceof Error ? err.message : String(err);
           const isTokenError = errMsg.includes('400') || errMsg.includes('Invalid reply token');
           if (isTokenError) {
-            await lineClient.pushMessage(friend.line_user_id, [msg]);
+            sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [msg]));
             deliveryType = 'push';
           } else {
             throw err;
@@ -305,18 +307,19 @@ async function executeAction(
           await logFailedOutgoing(db, friendId, msgType, action.params.content);
           break;
         }
-        await lineClient.pushMessage(friend.line_user_id, [msg]);
+        sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [msg]));
         deliveryType = 'push';
       }
-      // BOXIV: automation 送信を messages_log にも残し、個別チャット画面に反映する
+      // BOXIV: automation 送信を messages_log にも残し、個別チャット画面に反映する。
+      // line_message_id=友だちがこの自動送信メッセージを引用した際の解決用。
       try {
         const logId = crypto.randomUUID();
         await db
           .prepare(
-            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
-             VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?)`,
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
+             VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?, ?)`,
           )
-          .bind(logId, friendId, msgType, action.params.content, deliveryType, jstNow())
+          .bind(logId, friendId, msgType, action.params.content, sentLineId, deliveryType, jstNow())
           .run();
       } catch (logErr) {
         console.error('event-bus send_message: failed to log to messages_log', logErr);

@@ -19,6 +19,7 @@ import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import { enqueueBurstNotify } from '../services/slack-burst-notify.boxiv.js';
 import { getLinkedEntryByLineUserId, hasListingPriceNotified, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
+import { firstSentMessageId } from '../utils/quote.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -209,17 +210,17 @@ async function handleEvent(
               try {
                 const expandedContent = expandVariables(firstStep.message_content, friend as { id: string; display_name: string | null; user_id: string | null });
                 const message = buildMessage(firstStep.message_type, expandedContent);
-                await lineClient.replyMessage(event.replyToken, [message]);
+                const sentLineId = firstSentMessageId(await lineClient.replyMessage(event.replyToken, [message]));
                 console.log(`Immediate delivery: sent step ${firstStep.id} to ${userId}`);
 
-                // Log outgoing message (replyMessage = 無料)
+                // Log outgoing message (replyMessage = 無料)。line_message_id=友だちの引用解決用。
                 const logId = crypto.randomUUID();
                 await db
                   .prepare(
-                    `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
-                     VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, 'reply', ?)`,
+                    `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
+                     VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, ?, 'reply', ?)`,
                   )
-                  .bind(logId, friend.id, firstStep.message_type, firstStep.message_content, firstStep.id, jstNow())
+                  .bind(logId, friend.id, firstStep.message_type, firstStep.message_content, firstStep.id, sentLineId, jstNow())
                   .run();
 
                 // Advance or complete the friend_scenario
@@ -444,17 +445,17 @@ async function handleEvent(
           // Expand template variables ({{name}}, {{uid}}, {{auth_url:CHANNEL_ID}})
           const expandedContent = expandVariables(rule.response_content, friend as { id: string; display_name: string | null; user_id: string | null }, workerUrl);
           const replyMsg = buildMessage(rule.response_type, expandedContent);
-          await lineClient.replyMessage(event.replyToken, [replyMsg]);
+          const sentLineId = firstSentMessageId(await lineClient.replyMessage(event.replyToken, [replyMsg]));
           replyTokenConsumed = true;
 
-          // 送信ログ（replyMessage = 無料）
+          // 送信ログ（replyMessage = 無料）。line_message_id=友だちの引用解決用。
           const outLogId = crypto.randomUUID();
           await db
             .prepare(
-              `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
-               VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', ?)`,
+              `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
+               VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, 'reply', ?)`,
             )
-            .bind(outLogId, friend.id, rule.response_type, rule.response_content, jstNow())
+            .bind(outLogId, friend.id, rule.response_type, rule.response_content, sentLineId, jstNow())
             .run();
         } catch (err) {
           console.error('Failed to send auto-reply', err);

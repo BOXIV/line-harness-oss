@@ -286,3 +286,18 @@ export interface ReplyMessageRequest {
   replyToken: string;
   messages: Message[];
 }
+
+// ─── Send responses ─────────────────────────────────────────────────────────
+
+/** push / reply のレスポンスに含まれる、送信済みメッセージ1件分の識別子。 */
+export interface SentMessage {
+  /** LINE プラットフォーム上のメッセージID。後でこのメッセージが引用された際の照合キーになる。 */
+  id: string;
+  /** このメッセージを引用するためのトークン。 */
+  quoteToken?: string;
+}
+
+/** /message/push・/message/reply の 200 レスポンス本文。 */
+export interface MessageSendResponse {
+  sentMessages?: SentMessage[];
+}

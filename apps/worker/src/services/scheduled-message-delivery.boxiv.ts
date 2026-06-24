@@ -5,6 +5,7 @@ import type { LineClient, Message } from '@line-crm/line-sdk';
 import { getFriendById, getLineAccountById, jstNow } from '@line-crm/db';
 import { extractFlexAltText } from '../utils/flex-alt-text.js';
 import { addJitter, sleep } from './stealth.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 interface ScheduledMessageRow {
   id: string;
@@ -80,17 +81,17 @@ export async function processScheduledMessages(
 
       const lineClient = new LineClientCtor(accessToken);
       const message = buildMessage(sm.message_type, sm.content);
-      await lineClient.pushMessage(friend.line_user_id, [message]);
+      const sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [message]));
 
-      // ログ + ステータス更新を1ターンで
+      // ログ + ステータス更新を1ターンで。line_message_id=友だちの引用解決用。
       const sentAt = jstNow();
       await db.batch([
         db
           .prepare(
-            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, created_at)
-             VALUES (?, ?, 'outgoing', ?, ?, ?)`,
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, created_at)
+             VALUES (?, ?, 'outgoing', ?, ?, ?, ?)`,
           )
-          .bind(crypto.randomUUID(), friend.id, sm.message_type, sm.content, sentAt),
+          .bind(crypto.randomUUID(), friend.id, sm.message_type, sm.content, sentLineId, sentAt),
         db
           .prepare(
             `UPDATE scheduled_messages SET status='sent', sent_at=?, updated_at=? WHERE id=?`,

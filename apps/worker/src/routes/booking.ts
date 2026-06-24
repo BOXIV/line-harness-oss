@@ -36,6 +36,7 @@ import {
 } from '../utils/staff-assignment.js';
 import { bookingAuthMiddleware } from '../middleware/booking-auth.js';
 import type { Env } from '../index.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 const booking = new Hono<Env>();
 
@@ -1061,15 +1062,15 @@ async function sendBookingReceivedNotification(
   }
   const { LineClient } = await import('@line-crm/line-sdk');
   const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
-  await client.pushMessage(friend.line_user_id, [
+  const sentLineId = firstSentMessageId(await client.pushMessage(friend.line_user_id, [
     {
       type: 'flex',
       altText: '予約申請を受け付けました',
       contents: flex,
     },
-  ]);
+  ]));
   // BOXIV: messages_log に記録して個別チャット画面に表示
-  await logOutgoingBookingMessage(env.DB, friend.id, flex);
+  await logOutgoingBookingMessage(env.DB, friend.id, flex, sentLineId);
 }
 
 // 「その他の県」申請受付通知
@@ -1154,15 +1155,15 @@ async function sendOtherReceivedNotification(
   }
   const { LineClient } = await import('@line-crm/line-sdk');
   const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
-  await client.pushMessage(friend.line_user_id, [
+  const sentLineId = firstSentMessageId(await client.pushMessage(friend.line_user_id, [
     {
       type: 'flex',
       altText: '希望日程を受け付けました',
       contents: flex,
     },
-  ]);
+  ]));
   // BOXIV: messages_log に記録して個別チャット画面に表示
-  await logOutgoingBookingMessage(env.DB, friend.id, flex);
+  await logOutgoingBookingMessage(env.DB, friend.id, flex, sentLineId);
 }
 
 // BOXIV: shared helper — log a booking-related outgoing flex message to messages_log
@@ -1171,15 +1172,16 @@ async function logOutgoingBookingMessage(
   db: D1Database,
   friendId: string,
   flex: unknown,
+  lineMessageId: string | null = null,
 ): Promise<void> {
   try {
     const { jstNow } = await import('@line-crm/db');
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
-         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'push', ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, ?, 'push', ?)`,
       )
-      .bind(crypto.randomUUID(), friendId, JSON.stringify(flex), jstNow())
+      .bind(crypto.randomUUID(), friendId, JSON.stringify(flex), lineMessageId, jstNow())
       .run();
   } catch (err) {
     console.error('logOutgoingBookingMessage failed (non-blocking):', err);

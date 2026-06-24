@@ -2,6 +2,7 @@ import type {
   BroadcastRequest,
   FlexContainer,
   Message,
+  MessageSendResponse,
   MulticastRequest,
   PushMessageRequest,
   ReplyMessageRequest,
@@ -65,9 +66,16 @@ export class LineClient {
 
   // ─── Messaging ───────────────────────────────────────────────────────────
 
-  async pushMessage(to: string, messages: Message[]): Promise<void> {
+  /**
+   * Push messages. Returns LINE's response which includes `sentMessages`
+   * (each with `id` and `quoteToken`). The `id` is needed to later resolve
+   * a friend's quote-reply that quotes this outgoing message.
+   * Note: `request` yields `undefined` if LINE returns an empty body, so
+   * callers must treat the result as optional.
+   */
+  async pushMessage(to: string, messages: Message[]): Promise<MessageSendResponse> {
     const body: PushMessageRequest = { to, messages };
-    await this.request('/message/push', body);
+    return this.request<MessageSendResponse>('/message/push', body);
   }
 
   async multicast(to: string[], messages: Message[]): Promise<void> {
@@ -80,12 +88,13 @@ export class LineClient {
     await this.request('/message/broadcast', body);
   }
 
+  /** Reply messages. Returns LINE's response (`sentMessages` with `id`/`quoteToken`). See pushMessage. */
   async replyMessage(
     replyToken: string,
     messages: Message[],
-  ): Promise<void> {
+  ): Promise<MessageSendResponse> {
     const body: ReplyMessageRequest = { replyToken, messages };
-    await this.request('/message/reply', body);
+    return this.request<MessageSendResponse>('/message/reply', body);
   }
 
   // ─── Rich Menu ────────────────────────────────────────────────────────────
