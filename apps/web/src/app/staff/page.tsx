@@ -2,8 +2,12 @@
 import { useState, useEffect } from 'react'
 import Header from '@/components/layout/header'
 import { fetchApi } from '@/lib/api'
+import { AREA_LABELS } from '@/lib/area-meta'
 import type { ApiResponse } from '@line-crm/shared'
 import type { StaffMember } from '@line-crm/shared'
+
+// shared の StaffMember はまだ workArea を持たないためローカルで拡張（撮影スタッフの稼働エリア）。
+type StaffRow = StaffMember & { workArea?: string | null }
 
 type NewApiKey = { apiKey: string; staffId: string }
 
@@ -37,7 +41,7 @@ function maskKey(key: string): string {
 }
 
 export default function StaffPage() {
-  const [members, setMembers] = useState<StaffMember[]>([])
+  const [members, setMembers] = useState<StaffRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -50,6 +54,7 @@ export default function StaffPage() {
   const [formName, setFormName] = useState('')
   const [formEmail, setFormEmail] = useState('')
   const [formRole, setFormRole] = useState<'owner' | 'admin' | 'manager' | 'staff'>('staff')
+  const [formWorkArea, setFormWorkArea] = useState<string>('shutoken')
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState('')
 
@@ -61,7 +66,7 @@ export default function StaffPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetchApi<ApiResponse<StaffMember[]>>('/api/staff')
+      const res = await fetchApi<ApiResponse<StaffRow[]>>('/api/staff')
       if (res.success) {
         setMembers(res.data)
       } else {
@@ -84,13 +89,15 @@ export default function StaffPage() {
     setFormLoading(true)
     setFormError('')
     try {
-      const body: { name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email?: string } = {
+      const body: { name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email?: string; workArea?: string } = {
         name: formName,
         role: formRole,
       }
       if (formEmail) body.email = formEmail
+      // 稼働エリアは撮影スタッフのみ設定
+      if (formRole === 'staff') body.workArea = formWorkArea
 
-      const res = await fetchApi<ApiResponse<StaffMember & { apiKey?: string }>>('/api/staff', {
+      const res = await fetchApi<ApiResponse<StaffRow & { apiKey?: string }>>('/api/staff', {
         method: 'POST',
         body: JSON.stringify(body),
       })
@@ -101,6 +108,7 @@ export default function StaffPage() {
         setFormName('')
         setFormEmail('')
         setFormRole('staff')
+        setFormWorkArea('shutoken')
         setShowForm(false)
         await loadMembers()
       } else {
@@ -122,6 +130,20 @@ export default function StaffPage() {
       await loadMembers()
     } catch {
       setError('更新に失敗しました')
+    }
+  }
+
+  const handleUpdateWorkArea = async (member: StaffRow, workArea: string) => {
+    // 楽観更新（即時反映）。失敗したら再読込で戻す。
+    setMembers((prev) => prev.map((m) => (m.id === member.id ? { ...m, workArea } : m)))
+    try {
+      await fetchApi<ApiResponse<StaffRow>>(`/api/staff/${member.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ workArea }),
+      })
+    } catch {
+      setError('稼働エリアの更新に失敗しました')
+      await loadMembers()
     }
   }
 
@@ -265,6 +287,21 @@ export default function StaffPage() {
                 )}
               </div>
             </div>
+            {formRole === 'staff' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">稼働エリア＊（撮影スタッフ）</label>
+                <select
+                  value={formWorkArea}
+                  onChange={(e) => setFormWorkArea(e.target.value)}
+                  className="w-full sm:max-w-xs px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  {Object.entries(AREA_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-gray-500">この撮影スタッフが稼働するエリア。シフトはこのエリアで登録されます（後から変更可）。</p>
+              </div>
+            )}
             {formError && (
               <p className="text-sm text-red-600">{formError}</p>
             )}
@@ -323,6 +360,7 @@ export default function StaffPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">名前</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">メール</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">ロール</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">稼働エリア</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">APIキー</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">状態</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">操作</th>
@@ -335,6 +373,22 @@ export default function StaffPage() {
                   <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{member.email ?? '—'}</td>
                   <td className="px-4 py-3">
                     <RoleBadge role={member.role} />
+                  </td>
+                  <td className="px-4 py-3">
+                    {member.role === 'staff' ? (
+                      <select
+                        value={member.workArea ?? ''}
+                        onChange={(e) => handleUpdateWorkArea(member, e.target.value)}
+                        className="text-xs border border-gray-300 rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-green-500"
+                      >
+                        <option value="">未設定</option>
+                        {Object.entries(AREA_LABELS).map(([k, v]) => (
+                          <option key={k} value={k}>{v}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-gray-300 text-xs">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden md:table-cell">
                     {maskKey(member.apiKey ?? '')}

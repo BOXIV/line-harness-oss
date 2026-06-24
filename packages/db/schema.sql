@@ -573,6 +573,8 @@ CREATE TABLE IF NOT EXISTS staff_members (
   role       TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'staff')),
   api_key    TEXT UNIQUE NOT NULL,
   is_active  INTEGER NOT NULL DEFAULT 1,
+  -- 撮影スタッフの稼働エリア（migration 912）。エリアID or NULL。スタッフのシフトはこのエリアに固定。
+  work_area  TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );

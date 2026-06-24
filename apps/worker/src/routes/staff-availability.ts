@@ -13,6 +13,7 @@ import {
   updateStaffAvailability,
   deleteStaffAvailability,
   getStaffMembers,
+  getStaffById,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
 
@@ -104,12 +105,21 @@ staffAvailability.post('/api/staff-availability', async (c) => {
       area: string;
     }>();
 
-    if (!body.staffId || !body.date || !body.startTime || !body.endTime || !body.area) {
-      return c.json({ success: false, error: 'staffId, date, startTime, endTime, area are required' }, 400);
+    // 撮影スタッフは自分のシフトのみ。エリアは選べず、自分の稼働エリア(work_area)を強制する。
+    if (currentStaff?.role === 'staff') {
+      if (body.staffId && body.staffId !== currentStaff.id) {
+        return c.json({ success: false, error: 'Forbidden: cannot create shift for another staff' }, 403);
+      }
+      body.staffId = currentStaff.id;
+      const me = await getStaffById(c.env.DB, currentStaff.id);
+      if (!me?.work_area) {
+        return c.json({ success: false, error: '稼働エリアが未設定です。マネージャーに稼働エリアの設定を依頼してください。' }, 400);
+      }
+      body.area = me.work_area;
     }
 
-    if (currentStaff?.role === 'staff' && body.staffId !== currentStaff.id) {
-      return c.json({ success: false, error: 'Forbidden: cannot create shift for another staff' }, 403);
+    if (!body.staffId || !body.date || !body.startTime || !body.endTime || !body.area) {
+      return c.json({ success: false, error: 'staffId, date, startTime, endTime, area are required' }, 400);
     }
 
     const targetErr = await checkShiftTarget(c.env.DB, body.staffId);
@@ -137,12 +147,21 @@ staffAvailability.post('/api/staff-availability/bulk', async (c) => {
       slots: { startTime: string; endTime: string }[];
     }>();
 
-    if (!body.staffId || !body.area || !Array.isArray(body.dates) || !Array.isArray(body.slots)) {
-      return c.json({ success: false, error: 'Invalid bulk input' }, 400);
+    // 撮影スタッフは自分のシフトのみ。エリアは自分の稼働エリア(work_area)を強制する。
+    if (currentStaff?.role === 'staff') {
+      if (body.staffId && body.staffId !== currentStaff.id) {
+        return c.json({ success: false, error: 'Forbidden: cannot create shifts for another staff' }, 403);
+      }
+      body.staffId = currentStaff.id;
+      const me = await getStaffById(c.env.DB, currentStaff.id);
+      if (!me?.work_area) {
+        return c.json({ success: false, error: '稼働エリアが未設定です。マネージャーに稼働エリアの設定を依頼してください。' }, 400);
+      }
+      body.area = me.work_area;
     }
 
-    if (currentStaff?.role === 'staff' && body.staffId !== currentStaff.id) {
-      return c.json({ success: false, error: 'Forbidden: cannot create shifts for another staff' }, 403);
+    if (!body.staffId || !body.area || !Array.isArray(body.dates) || !Array.isArray(body.slots)) {
+      return c.json({ success: false, error: 'Invalid bulk input' }, 400);
     }
 
     const targetErr = await checkShiftTarget(c.env.DB, body.staffId);

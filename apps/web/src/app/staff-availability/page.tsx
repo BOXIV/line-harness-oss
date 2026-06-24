@@ -18,6 +18,7 @@ interface StaffMember {
   name: string
   email: string | null
   role: string
+  workArea?: string | null
 }
 
 interface AvailabilityRow {
@@ -78,6 +79,7 @@ export default function StaffAvailabilityPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [currentRole, setCurrentRole] = useState<string>('')
   const [currentStaffId, setCurrentStaffId] = useState<string>('')
+  const [currentWorkArea, setCurrentWorkArea] = useState<string>('')
   const [createForm, setCreateForm] = useState({
     staffId: '',
     area: 'shutoken',
@@ -97,7 +99,11 @@ export default function StaffAvailabilityPage() {
         setCurrentRole(res.data.role)
         setCurrentStaffId(res.data.id)
         if (res.data.role === 'staff') {
-          setCreateForm((prev) => ({ ...prev, staffId: res.data.id }))
+          // 撮影スタッフはエリアを選べない。自分の稼働エリア(work_area)を全面適用する。
+          const wa = res.data.workArea || ''
+          setCurrentWorkArea(wa)
+          setCreateForm((prev) => ({ ...prev, staffId: res.data.id, area: wa || prev.area }))
+          if (wa) setGanttArea(wa)
         }
       }
     }).catch(() => {})
@@ -229,10 +235,18 @@ export default function StaffAvailabilityPage() {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-4">
         <div className="px-5 py-4 border-b border-gray-200 flex items-center gap-3 flex-wrap">
-          {!isStaffRole && (
+          {!isStaffRole ? (
             <div className="flex items-start gap-2 w-full">
               <label className="text-xs text-gray-500 mt-2 shrink-0">エリア</label>
               <AreaTabs value={ganttArea} onChange={(v) => setGanttArea(v as AreaId)} />
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 w-full">
+              <label className="text-xs text-gray-500 shrink-0">稼働エリア</label>
+              <span className="text-sm font-medium text-gray-800">
+                {currentWorkArea ? (AREA_LABELS[currentWorkArea] || currentWorkArea) : '未設定'}
+              </span>
+              <span className="text-[11px] text-gray-400">（マネージャーが設定）</span>
             </div>
           )}
           <div className="flex items-center gap-2">
@@ -269,6 +283,10 @@ export default function StaffAvailabilityPage() {
 
         {loading ? (
           <div className="py-12 text-center text-gray-500">読み込み中...</div>
+        ) : isStaffRole && !currentWorkArea ? (
+          <div className="py-12 text-center text-gray-500 text-sm">
+            稼働エリアが未設定です。マネージャーに稼働エリアの設定を依頼してください。
+          </div>
         ) : displayStaff.length === 0 ? (
           <div className="py-12 text-center text-gray-500">スタッフが登録されていません</div>
         ) : (
@@ -610,16 +628,24 @@ export default function StaffAvailabilityPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">エリア</label>
-                  <select
-                    value={createForm.area}
-                    onChange={(e) => setCreateForm({ ...createForm, area: e.target.value })}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                  >
-                    {Object.entries(AREA_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">この日はこのエリアでのみ予約を受けます（1日1エリア）</p>
+                  {isStaffRole ? (
+                    <div className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-700">
+                      {currentWorkArea ? (AREA_LABELS[currentWorkArea] || currentWorkArea) : '未設定（マネージャーに設定を依頼してください）'}
+                    </div>
+                  ) : (
+                    <select
+                      value={createForm.area}
+                      onChange={(e) => setCreateForm({ ...createForm, area: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2"
+                    >
+                      {Object.entries(AREA_LABELS).map(([k, v]) => (
+                        <option key={k} value={k}>{v}</option>
+                      ))}
+                    </select>
+                  )}
+                  <p className="text-xs text-gray-500 mt-1">
+                    {isStaffRole ? '稼働エリアはマネージャーが「スタッフ管理」で設定します。' : 'この日はこのエリアでのみ予約を受けます（1日1エリア）'}
+                  </p>
                 </div>
 
                 <div>

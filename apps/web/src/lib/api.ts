@@ -563,7 +563,7 @@ export const api = {
     get: (id: string) =>
       fetchApi<ApiResponse<StaffMember>>(`/api/staff/${id}`),
     me: () =>
-      fetchApi<ApiResponse<{ id: string; name: string; role: string; email: string | null }>>('/api/staff/me'),
+      fetchApi<ApiResponse<{ id: string; name: string; role: string; email: string | null; workArea: string | null }>>('/api/staff/me'),
     create: (data: { name: string; email?: string; role: 'admin' | 'staff' }) =>
       fetchApi<ApiResponse<StaffMember>>('/api/staff', {
         method: 'POST',
