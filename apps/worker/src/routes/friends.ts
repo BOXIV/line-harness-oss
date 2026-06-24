@@ -15,6 +15,7 @@ import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
+import { buildQuoteIndex, type QuotableRow } from '../utils/quote.js';
 import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
@@ -363,12 +364,26 @@ friends.get('/api/friends/:id/messages', async (c) => {
     const friendId = c.req.param('id');
     const result = await c.env.DB
       .prepare(
-        `SELECT id, direction, message_type as messageType, content, status, created_at as createdAt
+        `SELECT id, direction, message_type, content, status, line_message_id, quoted_message_id, created_at
          FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`,
       )
       .bind(friendId)
-      .all<{ id: string; direction: string; messageType: string; content: string; status: string | null; createdAt: string }>();
-    return c.json({ success: true, data: result.results });
+      .all<QuotableRow & { status: string | null; created_at: string }>();
+
+    // 引用返信の引用元を解決して quotedMessage として返す
+    const rows = result.results;
+    const quoteIndex = await buildQuoteIndex(c.env.DB, friendId, rows);
+    const data = rows.map((m) => ({
+      id: m.id,
+      direction: m.direction,
+      messageType: m.message_type,
+      content: m.content,
+      status: m.status,
+      createdAt: m.created_at,
+      quotedMessageId: m.quoted_message_id ?? null,
+      quotedMessage: m.quoted_message_id ? quoteIndex.get(m.quoted_message_id) ?? null : null,
+    }));
+    return c.json({ success: true, data });
   } catch (err) {
     console.error('GET /api/friends/:id/messages error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);

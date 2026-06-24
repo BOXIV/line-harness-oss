@@ -45,6 +45,13 @@ interface Chat {
   updatedAt: string
 }
 
+interface QuotedMessagePreview {
+  id: string
+  direction: 'incoming' | 'outgoing'
+  messageType: string
+  content: string
+}
+
 interface ChatMessage {
   id: string
   direction: 'incoming' | 'outgoing'
@@ -52,6 +59,8 @@ interface ChatMessage {
   content: string
   status?: string | null
   createdAt: string
+  quotedMessageId?: string | null
+  quotedMessage?: QuotedMessagePreview | null
 }
 
 interface ChatDetail extends Chat {
@@ -95,6 +104,8 @@ interface MessageLog {
   content: string
   status?: string | null
   createdAt: string
+  quotedMessageId?: string | null
+  quotedMessage?: QuotedMessagePreview | null
 }
 
 function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
