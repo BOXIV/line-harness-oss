@@ -53,7 +53,10 @@ export default function BookingsPage() {
     }).catch(() => {})
   }, [])
 
-  const canApprove = currentRole === 'admin' || currentRole === 'owner'
+  // 承認/否認は manager も可。削除は owner/admin のみ。
+  const canApproveReject =
+    currentRole === 'admin' || currentRole === 'owner' || currentRole === 'manager'
+  const canDelete = currentRole === 'admin' || currentRole === 'owner'
   const [detail, setDetail] = useState<{
     id: string
     status: string
@@ -396,7 +399,7 @@ export default function BookingsPage() {
                 )}
 
                 <div className="flex gap-2 pt-2">
-                  {detail.status === 'pending' && canApprove && (
+                  {detail.status === 'pending' && canApproveReject && (
                     <>
                       <button
                         onClick={() => approve(detail.id)}
@@ -413,7 +416,7 @@ export default function BookingsPage() {
                       </button>
                     </>
                   )}
-                  {canApprove && (
+                  {canDelete && (
                     <button
                       onClick={() => deleteBooking(detail.id)}
                       className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-lg"
