@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { buildMessage } from '../services/step-delivery.js';
 import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
-import { buildQuoteIndex, type QuotableRow } from '../utils/quote.js';
+import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
 import {
   getOperators,
   getOperatorById,
@@ -385,8 +385,11 @@ chats.post('/api/chats/:id/send', async (c) => {
     const { LineClient } = await import('@line-crm/line-sdk');
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
     const lineMessage = buildMessage(messageType, body.content);
+    // 送信レスポンスの sentMessages[].id を line_message_id に保存 → 友だちがこのメッセージを
+    // 引用返信した際に引用元として解決できるようにする。
+    let sentLineId: string | null = null;
     try {
-      await lineClient.pushMessage(friend.line_user_id, [lineMessage]);
+      sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [lineMessage]));
     } catch (err) {
       await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content);
       console.error('POST /api/chats/:id/send: LINE push failed', err);
@@ -396,8 +399,8 @@ chats.post('/api/chats/:id/send', async (c) => {
     // メッセージログに記録
     const logId = crypto.randomUUID();
     await c.env.DB
-      .prepare(`INSERT INTO messages_log (id, friend_id, direction, message_type, content, created_at) VALUES (?, ?, 'outgoing', ?, ?, ?)`)
-      .bind(logId, friend.id, messageType, body.content, jstNow())
+      .prepare(`INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, created_at) VALUES (?, ?, 'outgoing', ?, ?, ?, ?)`)
+      .bind(logId, friend.id, messageType, body.content, sentLineId, jstNow())
       .run();
 
     // チャットの最終メッセージ日時を更新。返信＝既読とみなし last_read_at も now にして未読数を 0 に戻す。

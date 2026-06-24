@@ -16,6 +16,7 @@ import {
 } from '@line-crm/db';
 import type { LineClient, Message } from '@line-crm/line-sdk';
 import { addJitter, sleep } from './stealth.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 export async function processReminderDeliveries(
   db: D1Database,
@@ -40,16 +41,16 @@ export async function processReminderDeliveries(
 
       for (const step of fr.steps) {
         const message = buildMessage(step.message_type, step.message_content);
-        await lineClient.pushMessage(friend.line_user_id, [message]);
+        const sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [message]));
 
-        // メッセージログに記録
+        // メッセージログに記録。line_message_id=友だちの引用解決用。
         const logId = crypto.randomUUID();
         await db
           .prepare(
-            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, created_at)
-             VALUES (?, ?, 'outgoing', ?, ?, ?)`,
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, created_at)
+             VALUES (?, ?, 'outgoing', ?, ?, ?, ?)`,
           )
-          .bind(logId, friend.id, step.message_type, step.message_content, jstNow())
+          .bind(logId, friend.id, step.message_type, step.message_content, sentLineId, jstNow())
           .run();
 
         // 配信済みを記録

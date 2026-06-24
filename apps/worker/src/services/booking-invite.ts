@@ -17,6 +17,7 @@ import { prefectureToArea, generateInviteToken } from '../utils/area.js';
 import { queryCustomerByLineUserId, getCustomerByPageId } from './notion.js';
 import { logFailedOutgoing } from './message-log.boxiv.js';
 import type { Env } from '../index.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 export interface BookingInviteInput {
   lineUserId?: string;
@@ -195,15 +196,15 @@ export async function createAndSendBookingInvite(
     } else {
       try {
         const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
-        await client.pushMessage(friend.line_user_id, [
+        const sentLineId = firstSentMessageId(await client.pushMessage(friend.line_user_id, [
           { type: 'flex', altText: '撮影日程のご予約', contents: flex },
-        ]);
-        // 個別チャット画面に反映するため messages_log にも残す
+        ]));
+        // 個別チャット画面に反映するため messages_log にも残す。line_message_id=友だちの引用解決用。
         await env.DB.prepare(
-          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
-           VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'push', ?)`,
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
+           VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, ?, 'push', ?)`,
         )
-          .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), jstNow())
+          .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), sentLineId, jstNow())
           .run();
       } catch (err) {
         // 失敗を握りつぶさず messages_log に記録（個別チャットに「送信失敗」として表示）

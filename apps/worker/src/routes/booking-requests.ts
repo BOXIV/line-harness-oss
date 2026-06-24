@@ -21,6 +21,7 @@ import {
   findAvailableStaffForSlot,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { firstSentMessageId } from '../utils/quote.js';
 
 const bookingRequests = new Hono<Env>();
 
@@ -446,22 +447,22 @@ async function sendBookingStatusNotification(
   }
   const { LineClient } = await import('@line-crm/line-sdk');
   const client = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
-  await client.pushMessage(friend.line_user_id, [
+  const sentLineId = firstSentMessageId(await client.pushMessage(friend.line_user_id, [
     {
       type: 'flex',
       altText: isApproved ? '撮影日が確定しました' : 'ご予約日程について',
       contents: flex,
     },
-  ]);
-  // BOXIV: messages_log に記録して個別チャット画面に表示
+  ]));
+  // BOXIV: messages_log に記録して個別チャット画面に表示。line_message_id=友だちの引用解決用。
   try {
     const { jstNow } = await import('@line-crm/db');
     await env.DB
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, created_at)
-         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, 'push', ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
+         VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, ?, 'push', ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), jstNow())
+      .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), sentLineId, jstNow())
       .run();
   } catch (err) {
     console.error('booking-requests log to messages_log failed (non-blocking):', err);

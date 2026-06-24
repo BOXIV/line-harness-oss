@@ -15,7 +15,7 @@ import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
-import { buildQuoteIndex, type QuotableRow } from '../utils/quote.js';
+import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
 import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
@@ -437,8 +437,10 @@ friends.post('/api/friends/:id/messages', async (c) => {
     );
 
     const message = buildMessage(tracked.messageType, tracked.content, body.altText);
+    // 送信メッセージの LINE messageId を保存 → 友だちの引用返信の解決に使う。
+    let sentLineId: string | null = null;
     try {
-      await lineClient.pushMessage(friend.line_user_id, [message]);
+      sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [message]));
     } catch (err) {
       await logFailedOutgoing(db, friend.id, messageType, body.content);
       console.error('POST /api/friends/:id/messages: LINE push failed', err);
@@ -449,10 +451,10 @@ friends.post('/api/friends/:id/messages', async (c) => {
     const logId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, created_at)
-         VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?)`,
       )
-      .bind(logId, friend.id, messageType, body.content, jstNow())
+      .bind(logId, friend.id, messageType, body.content, sentLineId, jstNow())
       .run();
 
     return c.json({ success: true, data: { messageId: logId } });
