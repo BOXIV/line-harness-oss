@@ -68,9 +68,19 @@ staff.get('/api/staff/me', async (c) => {
   }
 });
 
-// GET /api/staff — owner/manager. List all staff with masked API keys.
-staff.get('/api/staff', requireRole('owner', 'manager'), async (c) => {
+// GET /api/staff — owner/manager は全件。撮影スタッフ(staff)は自分のレコードのみ。
+//   撮影スタッフがシフト管理画面で「自分の行」を描画して自己シフトを登録できるようにするため、
+//   staff ロールには自分1件だけ返す（全スタッフ閲覧は従来どおり owner/manager のみ）。
+staff.get('/api/staff', async (c) => {
   try {
+    const cur = c.get('staff');
+    if (cur?.role === 'staff') {
+      const me = await getStaffById(c.env.DB, cur.id);
+      return c.json({ success: true, data: me ? [serializeStaff(me, true)] : [] });
+    }
+    if (cur?.role !== 'owner' && cur?.role !== 'manager') {
+      return c.json({ success: false, error: 'この操作にはowner権限が必要です' }, 403);
+    }
     const members = await getStaffMembers(c.env.DB);
     return c.json({ success: true, data: members.map((m) => serializeStaff(m, true)) });
   } catch (err) {
