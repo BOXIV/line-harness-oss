@@ -176,7 +176,7 @@ bookingRequests.put('/api/booking-requests/:id', async (c) => {
         return c.json({ success: false, error: 'Forbidden: cannot reassign booking' }, 403);
       }
       if (body.status && ['approved', 'rejected'].includes(body.status)) {
-        return c.json({ success: false, error: 'Forbidden: only admin/owner can change status' }, 403);
+        return c.json({ success: false, error: 'Forbidden: only owner/admin/manager can change status' }, 403);
       }
     }
 
@@ -208,9 +208,9 @@ bookingRequests.put('/api/booking-requests/:id/approve', async (c) => {
     const staff = c.get('staff');
     if (!staff) return c.json({ success: false, error: 'Unauthorized' }, 401);
 
-    // 権限: admin/owner のみ承認可能
-    if (staff.role !== 'admin' && staff.role !== 'owner') {
-      return c.json({ success: false, error: 'Forbidden: admin/owner only' }, 403);
+    // 権限: owner/admin/manager が承認可能
+    if (staff.role !== 'admin' && staff.role !== 'owner' && staff.role !== 'manager') {
+      return c.json({ success: false, error: 'Forbidden: owner/admin/manager only' }, 403);
     }
 
     // body に selectedCandidate が含まれる場合は保存
@@ -242,14 +242,14 @@ bookingRequests.put('/api/booking-requests/:id/approve', async (c) => {
   }
 });
 
-/** PUT /api/booking-requests/:id/reject — 却下 + LINE通知（admin/owner のみ） */
+/** PUT /api/booking-requests/:id/reject — 却下 + LINE通知（owner/admin/manager） */
 bookingRequests.put('/api/booking-requests/:id/reject', async (c) => {
   try {
     const id = c.req.param('id');
     const staff = c.get('staff');
     if (!staff) return c.json({ success: false, error: 'Unauthorized' }, 401);
-    if (staff.role !== 'admin' && staff.role !== 'owner') {
-      return c.json({ success: false, error: 'Forbidden: admin/owner only' }, 403);
+    if (staff.role !== 'admin' && staff.role !== 'owner' && staff.role !== 'manager') {
+      return c.json({ success: false, error: 'Forbidden: owner/admin/manager only' }, 403);
     }
 
     const body = await c.req.json<{ notes?: string }>().catch(() => ({} as { notes?: string }));
