@@ -139,3 +139,22 @@ export async function upsertChatOnMessage(db: D1Database, friendId: string): Pro
   }
   return createChat(db, { friendId });
 }
+
+/**
+ * 送信(outgoing)時にチャットを作成/更新。
+ * inbound と違いオペレーター起点なので未読(unread)にはしない。
+ * - 既存: last_message_at を now に更新（チャット一覧の最上部に出す）。read 状態は維持。
+ * - 新規: 作成し status=in_progress / last_read_at=now（既読扱い）にする。
+ * これにより CLI/管理画面からの送信もオペレーターチャットに即時表示される。
+ */
+export async function upsertChatOnOutgoing(db: D1Database, friendId: string): Promise<ChatRow> {
+  const existing = await getChatByFriendId(db, friendId);
+  const now = jstNow();
+  if (existing) {
+    await updateChat(db, existing.id, { lastMessageAt: now });
+    return (await getChatById(db, existing.id))!;
+  }
+  const created = await createChat(db, { friendId });
+  await updateChat(db, created.id, { status: 'in_progress', lastReadAt: now });
+  return (await getChatById(db, created.id))!;
+}
