@@ -9,6 +9,7 @@ import {
   getFriendTags,
   getScenarios,
   enrollFriendInScenario,
+  upsertChatOnOutgoing,
   jstNow,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
@@ -456,6 +457,10 @@ friends.post('/api/friends/:id/messages', async (c) => {
       )
       .bind(logId, friend.id, messageType, body.content, sentLineId, jstNow())
       .run();
+
+    // オペレーターチャットに表示されるよう、送信時にもチャットを作成/更新する
+    // （inbound が来るまで一覧に出ない問題を解消。CLI/管理画面からの送信も対象）。
+    await upsertChatOnOutgoing(db, friend.id);
 
     return c.json({ success: true, data: { messageId: logId } });
   } catch (err) {
