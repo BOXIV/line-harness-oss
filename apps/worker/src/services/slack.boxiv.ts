@@ -37,13 +37,19 @@ export function buildSlackCard(opts: {
   title: string;
   color: string;
   fields: Array<{ label: string; value: string | null | undefined }>;
+  // true の場合、attachment 内のタイトル section を出さない。
+  // 本体 text（= fallback = title）にタイトルを出す呼び出しで、attachment 内と二重に
+  // 表示されるのを防ぐ用途。fallback は通知用フォールバックとして title のまま保持する。
+  omitTitleBlock?: boolean;
 }): Record<string, unknown> {
   const fields = opts.fields
     .filter((f) => f.value != null && String(f.value).trim() !== '')
     .map((f) => ({ type: 'mrkdwn', text: `*${f.label}*\n${f.value}` }));
-  const blocks: Record<string, unknown>[] = [
-    { type: 'section', text: { type: 'mrkdwn', text: `*${opts.title}*` } },
-  ];
+  const blocks: Record<string, unknown>[] = [];
+  // omitTitleBlock でも fields が空なら空 attachment を避けるためタイトルを残す。
+  if (!opts.omitTitleBlock || fields.length === 0) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `*${opts.title}*` } });
+  }
   if (fields.length > 0) blocks.push({ type: 'section', fields });
   return { color: opts.color, fallback: opts.title, blocks };
 }

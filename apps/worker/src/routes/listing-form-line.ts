@@ -451,6 +451,7 @@ listingFormLine.get('/listing-form/callback', async (c) => {
     const card = buildSlackCard({
       title: '✅ LINE連携が完了しました',
       color: '#2eb67d', // 緑: 完了
+      omitTitleBlock: true, // 本体 text と重複するため attachment 内のタイトルは出さない
       fields: [
         { label: '表示名', value: escapeSlackText(profile.displayName) || '—' },
         { label: 'LINE userId', value: `\`${profile.userId}\`` },
@@ -511,6 +512,7 @@ function buildListingFormCard(opts: {
   return buildSlackCard({
     title: `🆕 出品フォーム送信（${opts.linked ? 'LINE連携済み' : 'LINE連携待ち'}）`,
     color: opts.linked ? '#2eb67d' : '#ECB22E', // 緑=連携済み / 黄=連携待ち
+    omitTitleBlock: true, // 本体 text と重複するため attachment 内のタイトルは出さない
     fields: [
       { label: 'お名前', value: escapeSlackText(opts.name) || '—' },
       { label: '連絡先', value: [opts.phone, opts.email].filter(Boolean).map(escapeSlackText).join(' / ') || '—' },
