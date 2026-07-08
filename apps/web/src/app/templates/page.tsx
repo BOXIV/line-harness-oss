@@ -6,6 +6,7 @@ import Header from '@/components/layout/header'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
 import TemplateEditModal from '@/components/templates/template-edit-modal'
 import type { EditingTemplate } from '@/components/templates/template-edit-modal'
+import ReorderModal from '@/components/templates/reorder-modal'
 
 interface Template {
   id: string
@@ -55,6 +56,21 @@ export default function TemplatesPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [editing, setEditing] = useState<EditingTemplate | null>(null)
+  const [categories, setCategories] = useState<{ id: string; name: string; sortOrder: number }[]>([])
+  const [reordering, setReordering] = useState<'categories' | 'templates' | null>(null)
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await api.templateCategories.list()
+      if (res.success) setCategories(res.data)
+    } catch {
+      // カテゴリ取得失敗はチップバー非表示に留める（一覧自体は表示できる）
+    }
+  }, [])
+
+  useEffect(() => {
+    loadCategories()
+  }, [loadCategories])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -78,10 +94,6 @@ export default function TemplatesPage() {
   useEffect(() => {
     load()
   }, [load])
-
-  const categories = Array.from(
-    new Set(templates.map((t) => t.category).filter(Boolean))
-  )
 
   const handleCreate = async () => {
     if (!form.name.trim()) {
@@ -109,6 +121,7 @@ export default function TemplatesPage() {
         setShowCreate(false)
         setForm({ name: '', category: '', messageType: 'text', messageContent: '' })
         load()
+        loadCategories()
       } else {
         setFormError(res.error)
       }
@@ -124,6 +137,7 @@ export default function TemplatesPage() {
     try {
       await api.templates.delete(id)
       load()
+      loadCategories()
     } catch {
       setError('削除に失敗しました')
     }
@@ -152,8 +166,8 @@ export default function TemplatesPage() {
       )}
 
       {/* Category filter */}
-      {!loading && categories.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-2">
+      {categories.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2 items-center">
           <button
             onClick={() => setSelectedCategory('all')}
             className={`px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-full transition-colors ${
@@ -167,18 +181,38 @@ export default function TemplatesPage() {
           </button>
           {categories.map((cat) => (
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
+              key={cat.name}
+              onClick={() => setSelectedCategory(cat.name)}
               className={`px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-full transition-colors ${
-                selectedCategory === cat
+                selectedCategory === cat.name
                   ? 'text-white'
                   : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
               }`}
-              style={selectedCategory === cat ? { backgroundColor: '#0f172a' } : undefined}
+              style={selectedCategory === cat.name ? { backgroundColor: '#0f172a' } : undefined}
             >
-              {cat}
+              {cat.name}
             </button>
           ))}
+          {categories.length >= 2 && (
+            <button
+              onClick={() => setReordering('categories')}
+              className="px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-full border border-dashed border-gray-300 text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors"
+            >
+              ⇅ カテゴリ並び替え
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Template reorder (カテゴリ選択時のみ) */}
+      {!loading && selectedCategory !== 'all' && templates.length >= 2 && (
+        <div className="mb-3 flex justify-end">
+          <button
+            onClick={() => setReordering('templates')}
+            className="px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            ⇅ このカテゴリ内を並び替え
+          </button>
         </div>
       )}
 
@@ -363,7 +397,54 @@ export default function TemplatesPage() {
         isOpen={editing !== null}
         template={editing}
         onClose={() => setEditing(null)}
-        onSaved={() => load()}
+        onSaved={() => { load(); loadCategories() }}
+      />
+
+      {/* カテゴリ並び替え */}
+      <ReorderModal
+        isOpen={reordering === 'categories'}
+        title="カテゴリの並び替え"
+        items={categories.map((c) => ({ key: c.name, label: c.name }))}
+        onClose={() => setReordering(null)}
+        onSave={async (names) => {
+          try {
+            const res = await api.templateCategories.reorder(names)
+            if (res.success) {
+              setCategories(res.data)
+              setReordering(null)
+              load()
+            } else {
+              setError(res.error)
+            }
+          } catch {
+            setError('並び順の保存に失敗しました')
+          }
+        }}
+      />
+
+      {/* カテゴリ内テンプレ並び替え */}
+      <ReorderModal
+        isOpen={reordering === 'templates'}
+        title={`「${selectedCategory}」内の並び替え`}
+        items={templates.map((t) => ({
+          key: t.id,
+          label: t.name,
+          sub: t.messageContent.slice(0, 40),
+        }))}
+        onClose={() => setReordering(null)}
+        onSave={async (ids) => {
+          try {
+            const res = await api.templates.reorder(ids)
+            if (res.success) {
+              setReordering(null)
+              load()
+            } else {
+              setError(res.error)
+            }
+          } catch {
+            setError('並び順の保存に失敗しました')
+          }
+        }}
       />
     </div>
   )
