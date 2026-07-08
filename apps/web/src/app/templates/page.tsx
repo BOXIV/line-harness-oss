@@ -56,7 +56,7 @@ export default function TemplatesPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [editing, setEditing] = useState<EditingTemplate | null>(null)
-  const [categories, setCategories] = useState<{ id: string; name: string; sortOrder: number }[]>([])
+  const [categories, setCategories] = useState<{ id: string | null; name: string; sortOrder: number }[]>([])
   const [reordering, setReordering] = useState<'categories' | 'templates' | null>(null)
 
   const loadCategories = useCallback(async () => {
@@ -71,6 +71,19 @@ export default function TemplatesPage() {
   useEffect(() => {
     loadCategories()
   }, [loadCategories])
+
+  // 選択中カテゴリの最後のテンプレを削除/別カテゴリへ移動すると、そのカテゴリは
+  // API から消える。selectedCategory を放置するとどのチップも選択状態にならず、
+  // 一覧が空のまま理由が分からなくなるので「全て」に戻す。
+  useEffect(() => {
+    if (
+      selectedCategory !== 'all' &&
+      categories.length > 0 &&
+      !categories.some((c) => c.name === selectedCategory)
+    ) {
+      setSelectedCategory('all')
+    }
+  }, [categories, selectedCategory])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -400,25 +413,18 @@ export default function TemplatesPage() {
         onSaved={() => { load(); loadCategories() }}
       />
 
-      {/* カテゴリ並び替え */}
+      {/* カテゴリ並び替え（失敗時は throw してモーダル内にエラー表示。並びは保持される） */}
       <ReorderModal
         isOpen={reordering === 'categories'}
         title="カテゴリの並び替え"
         items={categories.map((c) => ({ key: c.name, label: c.name }))}
         onClose={() => setReordering(null)}
         onSave={async (names) => {
-          try {
-            const res = await api.templateCategories.reorder(names)
-            if (res.success) {
-              setCategories(res.data)
-              setReordering(null)
-              load()
-            } else {
-              setError(res.error)
-            }
-          } catch {
-            setError('並び順の保存に失敗しました')
-          }
+          const res = await api.templateCategories.reorder(names)
+          if (!res.success) throw new Error(res.error)
+          setCategories(res.data)
+          setReordering(null)
+          load()
         }}
       />
 
@@ -433,17 +439,10 @@ export default function TemplatesPage() {
         }))}
         onClose={() => setReordering(null)}
         onSave={async (ids) => {
-          try {
-            const res = await api.templates.reorder(ids)
-            if (res.success) {
-              setReordering(null)
-              load()
-            } else {
-              setError(res.error)
-            }
-          } catch {
-            setError('並び順の保存に失敗しました')
-          }
+          const res = await api.templates.reorder(ids)
+          if (!res.success) throw new Error(res.error)
+          setReordering(null)
+          load()
         }}
       />
     </div>

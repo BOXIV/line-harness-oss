@@ -13,11 +13,12 @@ export interface TemplateRow {
 }
 
 export interface TemplateCategoryRow {
-  id: string;
+  /** 順序行がまだ無い（未並び替え）カテゴリでは null。 */
+  id: string | null;
   name: string;
   sort_order: number;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 // sort_order 0 = 未並び替え。並び替え保存後は 1..n が入るので、
@@ -38,38 +39,43 @@ export async function getTemplates(db: D1Database, category?: string): Promise<T
   return result.results;
 }
 
-/** テンプレに存在するカテゴリを template_categories に遅延生成しつつ、順序付きで返す（空カテゴリは返さない）。 */
+/**
+ * 実際にテンプレが存在するカテゴリを表示順で返す。
+ * 副作用なし（GET から D1 への書込を起こさない ＝ promote-data の dry-run が prod を触らない）。
+ * 順序行が無いカテゴリは sort_order=999999 相当で名前順の末尾に付き、id は null。
+ */
 export async function getTemplateCategories(db: D1Database): Promise<TemplateCategoryRow[]> {
-  const missing = await db.prepare(
-    `SELECT DISTINCT category AS name FROM templates
-     WHERE category IS NOT NULL AND category != ''
-       AND category NOT IN (SELECT name FROM template_categories)`
-  ).all<{ name: string }>();
-  if (missing.results.length > 0) {
-    const now = jstNow();
-    await db.batch(missing.results.map((m) =>
-      db.prepare(`INSERT OR IGNORE INTO template_categories (id, name, sort_order, created_at, updated_at) VALUES (?, ?, 999999, ?, ?)`)
-        .bind(crypto.randomUUID(), m.name, now, now)
-    ));
-  }
   const result = await db.prepare(
-    `SELECT c.* FROM template_categories c
-     WHERE EXISTS (SELECT 1 FROM templates t WHERE t.category = c.name)
-     ORDER BY c.sort_order ASC, c.name ASC`
+    `SELECT c.id AS id, t.category AS name,
+            COALESCE(c.sort_order, 999999) AS sort_order,
+            c.created_at AS created_at, c.updated_at AS updated_at
+     FROM (SELECT DISTINCT category FROM templates WHERE category IS NOT NULL AND category != '') t
+     LEFT JOIN template_categories c ON c.name = t.category
+     ORDER BY COALESCE(c.sort_order, 999999) ASC, t.category ASC`
   ).all<TemplateCategoryRow>();
   return result.results;
 }
 
-/** カテゴリ表示順を names の並びで保存（1..n）。未登録名は行を生成して順序を付ける。 */
+/**
+ * カテゴリ表示順を names の並びで保存（1..n）。未登録名は行を生成する。
+ * names に無い既存行（テンプレを持たなくなった隠れカテゴリ等）は 999999 に押し出す。
+ * これをしないと、隠れ行が保持する古い連番が復活時に可視カテゴリの序数と衝突し、
+ * 意図しない位置に割り込む。
+ */
 export async function setTemplateCategoryOrder(db: D1Database, names: string[]): Promise<void> {
   if (names.length === 0) return;
   const now = jstNow();
-  await db.batch(names.map((name, i) =>
-    db.prepare(
-      `INSERT INTO template_categories (id, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(name) DO UPDATE SET sort_order = excluded.sort_order, updated_at = excluded.updated_at`
-    ).bind(crypto.randomUUID(), name, i + 1, now, now)
-  ));
+  const placeholders = names.map(() => '?').join(', ');
+  await db.batch([
+    db.prepare(`UPDATE template_categories SET sort_order = 999999, updated_at = ? WHERE name NOT IN (${placeholders})`)
+      .bind(now, ...names),
+    ...names.map((name, i) =>
+      db.prepare(
+        `INSERT INTO template_categories (id, name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET sort_order = excluded.sort_order, updated_at = excluded.updated_at`
+      ).bind(crypto.randomUUID(), name, i + 1, now, now)
+    ),
+  ]);
 }
 
 /** name で upsert（test→prod promote 用）。 */
@@ -121,7 +127,13 @@ export async function updateTemplate(
   const sets: string[] = [];
   const values: unknown[] = [];
   if (updates.name !== undefined) { sets.push('name = ?'); values.push(updates.name); }
-  if (updates.category !== undefined) { sets.push('category = ?'); values.push(updates.category); }
+  if (updates.category !== undefined) {
+    sets.push('category = ?'); values.push(updates.category);
+    // sort_order はカテゴリ内スコープ。別カテゴリへ移すと古い序数を持ち込んで
+    // 既存行と衝突する/末尾に沈むので、未並び替え(0)に戻す。
+    const current = await getTemplateById(db, id);
+    if (current && current.category !== updates.category) sets.push('sort_order = 0');
+  }
   if (updates.messageType !== undefined) { sets.push('message_type = ?'); values.push(updates.messageType); }
   if (updates.messageContent !== undefined) { sets.push('message_content = ?'); values.push(updates.messageContent); }
   if (sets.length === 0) return;

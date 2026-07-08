@@ -329,9 +329,9 @@ export const api = {
   },
   templateCategories: {
     list: () =>
-      fetchApi<ApiResponse<{ id: string; name: string; sortOrder: number }[]>>('/api/template-categories'),
+      fetchApi<ApiResponse<{ id: string | null; name: string; sortOrder: number }[]>>('/api/template-categories'),
     reorder: (names: string[]) =>
-      fetchApi<ApiResponse<{ id: string; name: string; sortOrder: number }[]>>('/api/template-categories/reorder', {
+      fetchApi<ApiResponse<{ id: string | null; name: string; sortOrder: number }[]>>('/api/template-categories/reorder', {
         method: 'PUT',
         body: JSON.stringify({ names }),
       }),

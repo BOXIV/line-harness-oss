@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export interface ReorderItem {
   key: string
@@ -13,7 +13,7 @@ interface ReorderModalProps {
   title: string
   items: ReorderItem[]
   onClose: () => void
-  /** 新しい並び順の key 配列で呼ばれる。成功時は親側でモーダルを閉じる。 */
+  /** 新しい並び順の key 配列で呼ばれる。失敗時は throw すること（モーダルは開いたまま並びを保持する）。 */
   onSave: (keys: string[]) => Promise<void>
 }
 
@@ -23,14 +23,21 @@ interface ReorderModalProps {
  */
 export default function ReorderModal({ isOpen, title, items, onClose, onSave }: ReorderModalProps) {
   const [order, setOrder] = useState<ReorderItem[]>(items)
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [draggingKey, setDraggingKey] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const wasOpen = useRef(false)
 
+  // items は親で毎レンダー新配列になるため、開いた瞬間だけ seed する。
+  // 依存に items を入れて再 seed すると、保存失敗時の setError で親が再レンダーした
+  // だけでユーザーの並びが巻き戻る。
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpen.current) {
       setOrder(items)
-      setDragIndex(null)
+      setDraggingKey(null)
+      setSaveError('')
     }
+    wasOpen.current = isOpen
   }, [isOpen, items])
 
   useEffect(() => {
@@ -44,9 +51,26 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
 
   if (!isOpen) return null
 
-  const move = (from: number, to: number) => {
-    if (to < 0 || to >= order.length || from === to) return
+  /** key 基準で移動する。dragover は連続イベントで state コミットを待たないため、
+   *  index をクロージャから読むと stale になる。prev から都度引き直す。 */
+  const moveByKey = (fromKey: string, toKey: string) => {
+    if (fromKey === toKey) return
     setOrder((prev) => {
+      const from = prev.findIndex((o) => o.key === fromKey)
+      const to = prev.findIndex((o) => o.key === toKey)
+      if (from < 0 || to < 0 || from === to) return prev
+      const next = [...prev]
+      const [item] = next.splice(from, 1)
+      next.splice(to, 0, item)
+      return next
+    })
+  }
+
+  const moveBy = (key: string, delta: number) => {
+    setOrder((prev) => {
+      const from = prev.findIndex((o) => o.key === key)
+      const to = from + delta
+      if (from < 0 || to < 0 || to >= prev.length) return prev
       const next = [...prev]
       const [item] = next.splice(from, 1)
       next.splice(to, 0, item)
@@ -56,8 +80,11 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError('')
     try {
       await onSave(order.map((o) => o.key))
+    } catch (e) {
+      setSaveError(e instanceof Error && e.message ? e.message : '並び順の保存に失敗しました')
     } finally {
       setSaving(false)
     }
@@ -91,18 +118,15 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
             <li
               key={item.key}
               draggable={!saving}
-              onDragStart={() => setDragIndex(i)}
+              onDragStart={() => setDraggingKey(item.key)}
               onDragOver={(e) => {
                 e.preventDefault()
-                if (dragIndex !== null && dragIndex !== i) {
-                  move(dragIndex, i)
-                  setDragIndex(i)
-                }
+                if (draggingKey) moveByKey(draggingKey, item.key)
               }}
               onDrop={(e) => e.preventDefault()}
-              onDragEnd={() => setDragIndex(null)}
+              onDragEnd={() => setDraggingKey(null)}
               className={`flex items-center gap-2 p-2 rounded-lg border select-none ${
-                dragIndex === i
+                draggingKey === item.key
                   ? 'border-slate-900 bg-gray-50 opacity-70'
                   : 'border-gray-200 bg-white'
               }`}
@@ -117,7 +141,7 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
               </div>
               <div className="flex gap-1 shrink-0">
                 <button
-                  onClick={() => move(i, i - 1)}
+                  onClick={() => moveBy(item.key, -1)}
                   disabled={saving || i === 0}
                   className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-30"
                   aria-label="上へ"
@@ -127,7 +151,7 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
                   </svg>
                 </button>
                 <button
-                  onClick={() => move(i, i + 1)}
+                  onClick={() => moveBy(item.key, 1)}
                   disabled={saving || i === order.length - 1}
                   className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-30"
                   aria-label="下へ"
@@ -140,6 +164,12 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
             </li>
           ))}
         </ul>
+
+        {saveError && (
+          <div className="mx-5 mb-2 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+            {saveError}（並び順は保持しています。もう一度お試しください）
+          </div>
+        )}
 
         <div className="px-5 py-3 border-t border-gray-200 flex justify-end gap-2">
           <button
