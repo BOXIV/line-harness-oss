@@ -23,7 +23,13 @@ interface ReorderModalProps {
  */
 export default function ReorderModal({ isOpen, title, items, onClose, onSave }: ReorderModalProps) {
   const [order, setOrder] = useState<ReorderItem[]>(items)
-  const [draggingKey, setDraggingKey] = useState<string | null>(null)
+  // ドラッグ元は ref で持つ。dragover は state のコミットを待たずに連続発火するため、
+  // state から読むと stale な値（直後は null、その後は古い位置）になる。
+  const dragKey = useRef<string | null>(null)
+  // 同一ターゲットに対する dragover の再処理を抑止する。再描画前に2度目が来ると
+  // 更新済みの配列に対してもう一度入替えが走り、要素が行き来する（ジッタ）。
+  const lastOverKey = useRef<string | null>(null)
+  const [draggingKey, setDraggingKey] = useState<string | null>(null) // 表示（掴んでいる行の淡色化）専用
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const wasOpen = useRef(false)
@@ -35,6 +41,7 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
     if (isOpen && !wasOpen.current) {
       setOrder(items)
       setDraggingKey(null)
+      dragKey.current = null
       setSaveError('')
     }
     wasOpen.current = isOpen
@@ -118,13 +125,23 @@ export default function ReorderModal({ isOpen, title, items, onClose, onSave }: 
             <li
               key={item.key}
               draggable={!saving}
-              onDragStart={() => setDraggingKey(item.key)}
+              onDragStart={() => {
+                dragKey.current = item.key
+                lastOverKey.current = null
+                setDraggingKey(item.key)
+              }}
               onDragOver={(e) => {
                 e.preventDefault()
-                if (draggingKey) moveByKey(draggingKey, item.key)
+                if (!dragKey.current || lastOverKey.current === item.key) return
+                lastOverKey.current = item.key
+                moveByKey(dragKey.current, item.key)
               }}
               onDrop={(e) => e.preventDefault()}
-              onDragEnd={() => setDraggingKey(null)}
+              onDragEnd={() => {
+                dragKey.current = null
+                lastOverKey.current = null
+                setDraggingKey(null)
+              }}
               className={`flex items-center gap-2 p-2 rounded-lg border select-none ${
                 draggingKey === item.key
                   ? 'border-slate-900 bg-gray-50 opacity-70'
