@@ -173,7 +173,11 @@ export default function TemplatesPage() {
 
   const dragId = useRef<string | null>(null)
   const dragCat = useRef<string | null>(null)
-  const lastTargetId = useRef<string | null>(null)
+  // ドラッグ開始時の同カテゴリ各行の固定スロット（縦位置）。ドラッグ中は行が入れ替わっても
+  // スロット（位置の集合）は不変なので、これを基準に「ポインタが何番目のスロットにいるか」を
+  // 決める。FLIP アニメ中の getBoundingClientRect はアニメ位置を返して当てにならないため、
+  // ライブの rect で判定すると入替えを取りこぼす（＝「半分くらい動かせない」の原因）。
+  const dragSlots = useRef<{ mid: number }[]>([])
   const startIds = useRef<string[]>([]) // 変化が無ければ保存しない用のスナップショット
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [reorderSaving, setReorderSaving] = useState(false)
@@ -181,20 +185,15 @@ export default function TemplatesPage() {
   const catIds = (list: Template[], cat: string) =>
     list.filter((t) => t.category === cat).map((t) => t.id)
 
-  const moveInList = (list: Template[], fromId: string, toId: string) => {
-    const from = list.findIndex((x) => x.id === fromId)
-    const to = list.findIndex((x) => x.id === toId)
-    if (from < 0 || to < 0 || from === to) return list
-    const next = [...list]
-    const [moved] = next.splice(from, 1)
-    next.splice(to, 0, moved)
-    return next
-  }
-
   // FLIP: 前回レンダーからの縦位置差ぶんだけ旧位置→新位置へスライドさせる。
   // Web Animations API を使うのは、アニメ後にインライン style が残らない＝タブ非表示で
   // rAF が止まっても要素が変な位置に固定されないため（fill 既定 = none）。
   useLayoutEffect(() => {
+    // 並び替え起因のレンダーでは、計測前に前回のスライドを終端まで進めて実レイアウトを読む
+    // （アニメ途中の rect を基準にすると次のスライドがガタつく）。
+    if (animateNext.current) {
+      rowRefs.current.forEach((el) => el.getAnimations?.().forEach((a) => a.finish()))
+    }
     const nextTops = new Map<string, number>()
     rowRefs.current.forEach((el, id) => nextTops.set(id, el.getBoundingClientRect().top))
     if (animateNext.current) {
@@ -220,27 +219,47 @@ export default function TemplatesPage() {
     e.preventDefault()
     dragId.current = t.id
     dragCat.current = t.category
-    lastTargetId.current = t.id
     startIds.current = catIds(templatesRef.current, t.category)
     setDraggingId(t.id)
     document.body.style.userSelect = 'none'
 
+    // 同カテゴリ行の固定スロットをスナップショット（残アニメを終端させてから計測）。
+    dragSlots.current = templatesRef.current
+      .filter((x) => x.category === t.category)
+      .map((x) => rowRefs.current.get(x.id))
+      .filter((el): el is HTMLTableRowElement => !!el)
+      .map((el) => {
+        el.getAnimations?.().forEach((a) => a.finish())
+        const r = el.getBoundingClientRect()
+        return { top: r.top, mid: r.top + r.height / 2 }
+      })
+      .sort((a, b) => a.top - b.top)
+      .map(({ mid }) => ({ mid }))
+
     const onMove = (ev: PointerEvent) => {
       const did = dragId.current
-      if (!did) return
-      // ポインタ直下の行を rect から求める（elementFromPoint は overlay を拾うため使わない）
-      let targetId: string | null = null
-      rowRefs.current.forEach((el, id) => {
-        const r = el.getBoundingClientRect()
-        if (ev.clientY >= r.top && ev.clientY <= r.bottom) targetId = id
-      })
-      if (!targetId || targetId === did || targetId === lastTargetId.current) return
-      const tid = targetId as string
-      const targetCat = templatesRef.current.find((x) => x.id === tid)?.category
-      if (targetCat !== dragCat.current) return // 同一カテゴリ内のみ
-      lastTargetId.current = tid
+      const cat = dragCat.current
+      const slots = dragSlots.current
+      if (!did || !cat || slots.length === 0) return
+      // ポインタが何番目のスロット（＝カテゴリ内の何番目の位置）にいるか。固定値なので安定。
+      let to = slots.findIndex((s) => ev.clientY < s.mid)
+      if (to === -1) to = slots.length - 1
+      const catItems = templatesRef.current.filter((x) => x.category === cat)
+      const from = catItems.findIndex((x) => x.id === did)
+      const target = Math.max(0, Math.min(to, catItems.length - 1))
+      if (from < 0 || from === target) return // 位置が変わらないなら何もしない
       animateNext.current = true
-      setTemplates((prev) => moveInList(prev, did, tid))
+      setTemplates((prev) => {
+        const items = prev.filter((x) => x.category === cat)
+        const f = items.findIndex((x) => x.id === did)
+        const tg = Math.max(0, Math.min(to, items.length - 1))
+        if (f < 0 || f === tg) return prev
+        const reordered = [...items]
+        const [moved] = reordered.splice(f, 1)
+        reordered.splice(tg, 0, moved)
+        let k = 0
+        return prev.map((x) => (x.category === cat ? reordered[k++] : x)) // 該当カテゴリ位置だけ差し替え
+      })
     }
 
     const onUp = async () => {
@@ -249,7 +268,7 @@ export default function TemplatesPage() {
       const cat = dragCat.current
       dragId.current = null
       dragCat.current = null
-      lastTargetId.current = null
+      dragSlots.current = []
       setDraggingId(null)
       if (!cat) return
       const ids = catIds(templatesRef.current, cat)
