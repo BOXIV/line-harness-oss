@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
@@ -156,72 +156,119 @@ export default function TemplatesPage() {
     }
   }
 
-  // ── 行のインライン並び替え（ドラッグ&ドロップ）─────────────────────
-  // sort_order はカテゴリ内スコープ。行のドラッグは「同じカテゴリ内」でのみ入替える。
-  // 「全て」表示ではカテゴリを跨いだ移動は無視する（別カテゴリの行に重ねても動かない）。
-  // ドラッグ中は templates を直接 optimistic に並べ替え、確定時に該当カテゴリの
-  // id 順を保存する。失敗時のみ load() でサーバ順に戻す。
+  // ── 行のインライン並び替え（ポインタ操作 + FLIP アニメーション）──────────
+  // 以前は HTML5 の draggable を使っていたが、ドラッグ中に行を DOM 上で並べ替えると
+  // Chrome がドラッグを中断し「掴めるが並びが変わらない」状態になった。ポインタ
+  // イベントで自前に処理する（タッチ端末でも動く）。順序が変わった行は FLIP で
+  // スライド表示して入れ替わりが分かるようにする。
+  // sort_order はカテゴリ内スコープ＝入替えは「同じカテゴリ内」のみ。「全て」表示で
+  // カテゴリを跨いだ移動は無視する。確定時に該当カテゴリの id 順を保存し、失敗時のみ
+  // load() でサーバ順に戻す。
   const templatesRef = useRef<Template[]>([])
   useEffect(() => { templatesRef.current = templates }, [templates])
 
+  const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map())
+  const rowTops = useRef<Map<string, number>>(new Map()) // 直前レンダーの各行の縦位置（FLIP 用）
+  const animateNext = useRef(false)                       // 並び替え起因のレンダーだけアニメする
+
   const dragId = useRef<string | null>(null)
   const dragCat = useRef<string | null>(null)
-  const lastOverId = useRef<string | null>(null) // 同一ターゲットへの dragover 再処理を抑止
-  const startIds = useRef<string[]>([])           // 変化が無ければ保存しない用のスナップショット
+  const lastTargetId = useRef<string | null>(null)
+  const startIds = useRef<string[]>([]) // 変化が無ければ保存しない用のスナップショット
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [reorderSaving, setReorderSaving] = useState(false)
 
   const catIds = (list: Template[], cat: string) =>
     list.filter((t) => t.category === cat).map((t) => t.id)
 
-  const onRowDragStart = (e: React.DragEvent, t: Template) => {
-    dragId.current = t.id
-    dragCat.current = t.category
-    lastOverId.current = null
-    startIds.current = catIds(templatesRef.current, t.category)
-    setDraggingId(t.id)
-    try { e.dataTransfer.effectAllowed = 'move' } catch { /* jsdom 等 */ }
+  const moveInList = (list: Template[], fromId: string, toId: string) => {
+    const from = list.findIndex((x) => x.id === fromId)
+    const to = list.findIndex((x) => x.id === toId)
+    if (from < 0 || to < 0 || from === to) return list
+    const next = [...list]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    return next
   }
 
-  const onRowDragOver = (e: React.DragEvent, target: Template) => {
-    e.preventDefault()
-    // ドラッグ元は ref から読む。dragover は state コミットを待たず連続発火するため。
-    if (!dragId.current || dragCat.current !== target.category) return // 同一カテゴリ内のみ
-    if (target.id === dragId.current || lastOverId.current === target.id) return
-    lastOverId.current = target.id
-    setTemplates((prev) => {
-      const from = prev.findIndex((x) => x.id === dragId.current)
-      const to = prev.findIndex((x) => x.id === target.id)
-      if (from < 0 || to < 0 || from === to) return prev
-      const next = [...prev]
-      const [moved] = next.splice(from, 1)
-      next.splice(to, 0, moved)
-      return next
-    })
-  }
-
-  const onRowDragEnd = async () => {
-    const cat = dragCat.current
-    dragId.current = null
-    dragCat.current = null
-    lastOverId.current = null
-    setDraggingId(null)
-    if (!cat) return
-    const ids = catIds(templatesRef.current, cat)
-    if (ids.length < 2 || JSON.stringify(ids) === JSON.stringify(startIds.current)) return
-    setReorderSaving(true)
-    try {
-      const res = await api.templates.reorder(ids)
-      if (!res.success) { setError('並び順の保存に失敗しました'); load() }
-    } catch {
-      setError('並び順の保存に失敗しました')
-      load()
-    } finally {
-      setReorderSaving(false)
+  // FLIP: 前回レンダーからの縦位置差ぶんだけ旧位置→新位置へスライドさせる。
+  // Web Animations API を使うのは、アニメ後にインライン style が残らない＝タブ非表示で
+  // rAF が止まっても要素が変な位置に固定されないため（fill 既定 = none）。
+  useLayoutEffect(() => {
+    const nextTops = new Map<string, number>()
+    rowRefs.current.forEach((el, id) => nextTops.set(id, el.getBoundingClientRect().top))
+    if (animateNext.current) {
+      nextTops.forEach((top, id) => {
+        const prev = rowTops.current.get(id)
+        const el = rowRefs.current.get(id)
+        if (prev != null && el && Math.abs(prev - top) > 0.5 && typeof el.animate === 'function') {
+          el.animate(
+            [{ transform: `translateY(${prev - top}px)` }, { transform: 'translateY(0)' }],
+            { duration: 200, easing: 'ease' },
+          )
+        }
+      })
+      animateNext.current = false
     }
-  }
+    rowTops.current = nextTops
+  })
 
   const canDragRows = !loading && !reorderSaving && templates.length >= 2
+
+  const startRowDrag = (e: React.PointerEvent, t: Template) => {
+    if (!canDragRows || e.button !== 0) return
+    e.preventDefault()
+    dragId.current = t.id
+    dragCat.current = t.category
+    lastTargetId.current = t.id
+    startIds.current = catIds(templatesRef.current, t.category)
+    setDraggingId(t.id)
+    document.body.style.userSelect = 'none'
+
+    const onMove = (ev: PointerEvent) => {
+      const did = dragId.current
+      if (!did) return
+      // ポインタ直下の行を rect から求める（elementFromPoint は overlay を拾うため使わない）
+      let targetId: string | null = null
+      rowRefs.current.forEach((el, id) => {
+        const r = el.getBoundingClientRect()
+        if (ev.clientY >= r.top && ev.clientY <= r.bottom) targetId = id
+      })
+      if (!targetId || targetId === did || targetId === lastTargetId.current) return
+      const tid = targetId as string
+      const targetCat = templatesRef.current.find((x) => x.id === tid)?.category
+      if (targetCat !== dragCat.current) return // 同一カテゴリ内のみ
+      lastTargetId.current = tid
+      animateNext.current = true
+      setTemplates((prev) => moveInList(prev, did, tid))
+    }
+
+    const onUp = async () => {
+      document.removeEventListener('pointermove', onMove)
+      document.body.style.userSelect = ''
+      const cat = dragCat.current
+      dragId.current = null
+      dragCat.current = null
+      lastTargetId.current = null
+      setDraggingId(null)
+      if (!cat) return
+      const ids = catIds(templatesRef.current, cat)
+      if (ids.length < 2 || JSON.stringify(ids) === JSON.stringify(startIds.current)) return
+      setReorderSaving(true)
+      try {
+        const res = await api.templates.reorder(ids)
+        if (!res.success) { setError('並び順の保存に失敗しました'); load() }
+      } catch {
+        setError('並び順の保存に失敗しました')
+        load()
+      } finally {
+        setReorderSaving(false)
+      }
+    }
+
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp, { once: true })
+  }
 
   return (
     <div>
@@ -428,19 +475,26 @@ export default function TemplatesPage() {
               {templates.map((template) => (
                 <tr
                   key={template.id}
-                  draggable={canDragRows}
-                  onDragStart={(e) => onRowDragStart(e, template)}
-                  onDragOver={(e) => onRowDragOver(e, template)}
-                  onDrop={(e) => e.preventDefault()}
-                  onDragEnd={onRowDragEnd}
-                  className={`transition-colors ${
-                    draggingId === template.id ? 'opacity-40 bg-gray-50' : 'hover:bg-gray-50'
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(template.id, el)
+                    else rowRefs.current.delete(template.id)
+                  }}
+                  className={`${
+                    draggingId === template.id
+                      ? 'bg-blue-50 shadow-sm relative z-10'
+                      : 'hover:bg-gray-50 transition-colors'
                   }`}
                 >
                   {/* Drag handle */}
                   <td className="w-8 px-2 py-3">
                     <span
-                      className={`flex items-center justify-center text-gray-300 ${canDragRows ? 'cursor-grab hover:text-gray-500' : 'cursor-not-allowed'}`}
+                      onPointerDown={(e) => startRowDrag(e, template)}
+                      style={{ touchAction: 'none' }}
+                      className={`flex items-center justify-center ${
+                        canDragRows
+                          ? 'cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500'
+                          : 'cursor-not-allowed text-gray-200'
+                      }`}
                       title={canDragRows ? '同じカテゴリ内でドラッグして並び替え' : undefined}
                       aria-hidden="true"
                     >
