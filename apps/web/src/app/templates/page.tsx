@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
@@ -156,6 +156,73 @@ export default function TemplatesPage() {
     }
   }
 
+  // ── 行のインライン並び替え（ドラッグ&ドロップ）─────────────────────
+  // sort_order はカテゴリ内スコープ。行のドラッグは「同じカテゴリ内」でのみ入替える。
+  // 「全て」表示ではカテゴリを跨いだ移動は無視する（別カテゴリの行に重ねても動かない）。
+  // ドラッグ中は templates を直接 optimistic に並べ替え、確定時に該当カテゴリの
+  // id 順を保存する。失敗時のみ load() でサーバ順に戻す。
+  const templatesRef = useRef<Template[]>([])
+  useEffect(() => { templatesRef.current = templates }, [templates])
+
+  const dragId = useRef<string | null>(null)
+  const dragCat = useRef<string | null>(null)
+  const lastOverId = useRef<string | null>(null) // 同一ターゲットへの dragover 再処理を抑止
+  const startIds = useRef<string[]>([])           // 変化が無ければ保存しない用のスナップショット
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [reorderSaving, setReorderSaving] = useState(false)
+
+  const catIds = (list: Template[], cat: string) =>
+    list.filter((t) => t.category === cat).map((t) => t.id)
+
+  const onRowDragStart = (e: React.DragEvent, t: Template) => {
+    dragId.current = t.id
+    dragCat.current = t.category
+    lastOverId.current = null
+    startIds.current = catIds(templatesRef.current, t.category)
+    setDraggingId(t.id)
+    try { e.dataTransfer.effectAllowed = 'move' } catch { /* jsdom 等 */ }
+  }
+
+  const onRowDragOver = (e: React.DragEvent, target: Template) => {
+    e.preventDefault()
+    // ドラッグ元は ref から読む。dragover は state コミットを待たず連続発火するため。
+    if (!dragId.current || dragCat.current !== target.category) return // 同一カテゴリ内のみ
+    if (target.id === dragId.current || lastOverId.current === target.id) return
+    lastOverId.current = target.id
+    setTemplates((prev) => {
+      const from = prev.findIndex((x) => x.id === dragId.current)
+      const to = prev.findIndex((x) => x.id === target.id)
+      if (from < 0 || to < 0 || from === to) return prev
+      const next = [...prev]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+  }
+
+  const onRowDragEnd = async () => {
+    const cat = dragCat.current
+    dragId.current = null
+    dragCat.current = null
+    lastOverId.current = null
+    setDraggingId(null)
+    if (!cat) return
+    const ids = catIds(templatesRef.current, cat)
+    if (ids.length < 2 || JSON.stringify(ids) === JSON.stringify(startIds.current)) return
+    setReorderSaving(true)
+    try {
+      const res = await api.templates.reorder(ids)
+      if (!res.success) { setError('並び順の保存に失敗しました'); load() }
+    } catch {
+      setError('並び順の保存に失敗しました')
+      load()
+    } finally {
+      setReorderSaving(false)
+    }
+  }
+
+  const canDragRows = !loading && !reorderSaving && templates.length >= 2
+
   return (
     <div>
       <Header
@@ -217,15 +284,20 @@ export default function TemplatesPage() {
         </div>
       )}
 
-      {/* Template reorder (カテゴリ選択時のみ) */}
-      {!loading && selectedCategory !== 'all' && templates.length >= 2 && (
-        <div className="mb-3 flex justify-end">
-          <button
-            onClick={() => setReordering('templates')}
-            className="px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
-          >
-            ⇅ このカテゴリ内を並び替え
-          </button>
+      {/* Template reorder のヒント + タッチ端末向けモーダルボタン */}
+      {!loading && templates.length >= 2 && (
+        <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-xs text-gray-400">
+            行の左端 <span className="align-middle">⣿</span> をドラッグして並び替えできます（同じカテゴリ内）
+          </p>
+          {selectedCategory !== 'all' && (
+            <button
+              onClick={() => setReordering('templates')}
+              className="px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              ⇅ 一覧で並び替え
+            </button>
+          )}
         </div>
       )}
 
@@ -336,6 +408,7 @@ export default function TemplatesPage() {
           <table className="w-full min-w-[640px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="w-8 px-2 py-3" />
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   テンプレート名
                 </th>
@@ -353,7 +426,30 @@ export default function TemplatesPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {templates.map((template) => (
-                <tr key={template.id} className="hover:bg-gray-50 transition-colors">
+                <tr
+                  key={template.id}
+                  draggable={canDragRows}
+                  onDragStart={(e) => onRowDragStart(e, template)}
+                  onDragOver={(e) => onRowDragOver(e, template)}
+                  onDrop={(e) => e.preventDefault()}
+                  onDragEnd={onRowDragEnd}
+                  className={`transition-colors ${
+                    draggingId === template.id ? 'opacity-40 bg-gray-50' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  {/* Drag handle */}
+                  <td className="w-8 px-2 py-3">
+                    <span
+                      className={`flex items-center justify-center text-gray-300 ${canDragRows ? 'cursor-grab hover:text-gray-500' : 'cursor-not-allowed'}`}
+                      title={canDragRows ? '同じカテゴリ内でドラッグして並び替え' : undefined}
+                      aria-hidden="true"
+                    >
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M7 4a1 1 0 110-2 1 1 0 010 2zM7 8a1 1 0 110-2 1 1 0 010 2zM7 12a1 1 0 110-2 1 1 0 010 2zM7 16a1 1 0 110-2 1 1 0 010 2zM13 4a1 1 0 110-2 1 1 0 010 2zM13 8a1 1 0 110-2 1 1 0 010 2zM13 12a1 1 0 110-2 1 1 0 010 2zM13 16a1 1 0 110-2 1 1 0 010 2z" />
+                      </svg>
+                    </span>
+                  </td>
+
                   {/* Name */}
                   <td className="px-4 py-3">
                     <div>
