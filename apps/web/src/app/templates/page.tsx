@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, Fragment } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
@@ -29,6 +29,13 @@ interface CreateFormState {
   category: string
   messageType: string
   messageContent: string
+}
+
+// カテゴリ名から安定した色相を生成（ブロックごとの色分け用）。
+function catHue(name: string): number {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360
+  return h
 }
 
 function formatDate(iso: string): string {
@@ -173,11 +180,17 @@ export default function TemplatesPage() {
 
   const dragId = useRef<string | null>(null)
   const dragCat = useRef<string | null>(null)
-  // ドラッグ開始時の「全行」の固定スロット（縦位置）を id 付きで持つ。ドラッグ中は行が
-  // 入れ替わってもスロット（位置の集合）は不変なので、これを基準に「ポインタが上から何番目の
-  // スロットにいるか」で対象を決める。FLIP アニメ中の getBoundingClientRect はアニメ位置を
-  // 返して当てにならないため、ライブの rect で判定すると取りこぼす（＝以前の不具合の原因）。
-  const dragSlots = useRef<{ id: string; mid: number }[]>([])
+  // ドラッグ開始時に固定するジオメトリ。以降の並び順はこの固定値とポインタ Y の「純関数」で
+  // 決める。同じポインタ位置なら常に同じ並びになる＝ブロックが動いてもポインタ直下の行が
+  // 変わって逆方向に戻る…という発振（チャタリング）が起きない。
+  const dragGeom = useRef<{
+    baseOrder: Template[]
+    catOrder: string[]
+    dcSlots: number[] // dragged カテゴリ各行の mid（昇順・固定）
+    dcTop: number
+    dcBot: number
+    blockMid: Record<string, number> // カテゴリ → ブロック中央 Y（固定）
+  } | null>(null)
   // 保存判定用スナップショット（ドラッグ開始時のカテゴリ順とカテゴリ内 id 順）。
   const dragSnap = useRef<{ catOrder: string[]; catIds: Record<string, string[]> }>({ catOrder: [], catIds: {} })
   const [draggingId, setDraggingId] = useState<string | null>(null)
@@ -229,60 +242,66 @@ export default function TemplatesPage() {
     templatesRef.current.forEach((x) => { (snapCatIds[x.category] ??= []).push(x.id) })
     dragSnap.current = { catOrder: uniqueCats(templatesRef.current), catIds: snapCatIds }
 
-    // 全行の固定スロットを id 付きでスナップショット（残アニメを終端させてから計測）。
-    // 全行を対象にすることで「全て」表示でカテゴリを跨いだ移動も判定できる。
-    dragSlots.current = templatesRef.current
-      .map((x) => ({ id: x.id, el: rowRefs.current.get(x.id) }))
-      .filter((r): r is { id: string; el: HTMLTableRowElement } => !!r.el)
-      .map(({ id, el }) => {
-        el.getAnimations?.().forEach((a) => a.finish())
-        const r = el.getBoundingClientRect()
-        return { id, top: r.top, mid: r.top + r.height / 2 }
-      })
-      .sort((a, b) => a.top - b.top)
-      .map(({ id, mid }) => ({ id, mid }))
+    // 全行の rect を計測してジオメトリを固定（残アニメを終端させてから計測）。
+    const base = templatesRef.current
+    const rects: Record<string, { top: number; bottom: number; mid: number }> = {}
+    base.forEach((x) => {
+      const el = rowRefs.current.get(x.id)
+      if (!el) return
+      el.getAnimations?.().forEach((a) => a.finish())
+      const r = el.getBoundingClientRect()
+      rects[x.id] = { top: r.top, bottom: r.bottom, mid: r.top + r.height / 2 }
+    })
+    const cats = uniqueCats(base)
+    const dcRects = base.filter((x) => x.category === t.category).map((x) => rects[x.id]).filter(Boolean)
+    const blockMid: Record<string, number> = {}
+    cats.forEach((c) => {
+      const rs = base.filter((x) => x.category === c).map((x) => rects[x.id]).filter(Boolean)
+      if (rs.length) blockMid[c] = (Math.min(...rs.map((r) => r.top)) + Math.max(...rs.map((r) => r.bottom))) / 2
+    })
+    dragGeom.current = {
+      baseOrder: base,
+      catOrder: cats,
+      dcSlots: dcRects.map((r) => r.mid).sort((a, b) => a - b),
+      dcTop: dcRects.length ? Math.min(...dcRects.map((r) => r.top)) : -Infinity,
+      dcBot: dcRects.length ? Math.max(...dcRects.map((r) => r.bottom)) : Infinity,
+      blockMid,
+    }
 
+    // ポインタ Y から「あるべき並び」を純関数で求める（固定ジオメトリのみ参照＝発振しない）。
     const onMove = (ev: PointerEvent) => {
       const did = dragId.current
-      const cat = dragCat.current
-      const slots = dragSlots.current
-      if (!did || !cat || slots.length === 0) return
-      // ポインタ直下のスロット（固定値なので安定）→ 現在その位置に居る行＝ターゲット。
-      let si = slots.findIndex((s) => ev.clientY < s.mid)
-      if (si === -1) si = slots.length - 1
-      const cur = templatesRef.current
-      const target = cur[Math.max(0, Math.min(si, cur.length - 1))]
-      if (!target || target.id === did) return
+      const dc = dragCat.current
+      const g = dragGeom.current
+      if (!did || !dc || !g) return
+      const y = ev.clientY
 
-      if (target.category === cat) {
-        // 同一カテゴリ → カテゴリ内でターゲット位置へ入替え。
-        animateNext.current = true
-        setTemplates((prev) => {
-          const f = prev.findIndex((x) => x.id === did)
-          const tg = prev.findIndex((x) => x.id === target.id)
-          if (f < 0 || tg < 0 || f === tg) return prev
-          const next = [...prev]
-          const [moved] = next.splice(f, 1)
-          next.splice(tg, 0, moved)
-          return next
-        })
-      } else {
-        // 別カテゴリ領域 → ドラッグ中の行のカテゴリ「ブロックごと」ターゲットのカテゴリ位置へ移動
-        // （＝カテゴリ順の変更）。カテゴリ内順は維持する。
-        animateNext.current = true
-        setTemplates((prev) => {
-          const order = uniqueCats(prev)
-          const fc = order.indexOf(cat)
-          const tc = order.indexOf(target.category)
-          if (fc < 0 || tc < 0 || fc === tc) return prev
-          const newOrder = [...order]
-          const [movedCat] = newOrder.splice(fc, 1)
-          newOrder.splice(tc, 0, movedCat)
-          const groups: Record<string, Template[]> = {}
-          prev.forEach((x) => { (groups[x.category] ??= []).push(x) })
-          return newOrder.flatMap((c) => groups[c])
-        })
+      // 1) dragged カテゴリ内での dragged 行の位置（ポインタが自カテゴリの span 内のときだけ入替え）
+      const dcItems = g.baseOrder.filter((x) => x.category === dc)
+      let dcReordered = dcItems
+      if (y >= g.dcTop && y <= g.dcBot && dcItems.length > 1) {
+        const wi = Math.max(0, Math.min(g.dcSlots.filter((m) => m < y).length, dcItems.length - 1))
+        dcReordered = [...dcItems]
+        const di = dcReordered.findIndex((x) => x.id === did)
+        if (di >= 0) { const [m] = dcReordered.splice(di, 1); dcReordered.splice(wi, 0, m) }
       }
+
+      // 2) カテゴリ（ブロック）順。他カテゴリのブロック中央 Y に対する挿入位置＝純関数。
+      const otherCats = g.catOrder.filter((c) => c !== dc)
+      const bi = otherCats.filter((c) => g.blockMid[c] < y).length
+      const newCatOrder = [...otherCats.slice(0, bi), dc, ...otherCats.slice(bi)]
+
+      // 3) 組み立て（他カテゴリは元の内部順、dc は dcReordered）
+      const groups: Record<string, Template[]> = {}
+      g.baseOrder.forEach((x) => { (groups[x.category] ??= []).push(x) })
+      groups[dc] = dcReordered
+      const next = newCatOrder.flatMap((c) => groups[c])
+
+      // 変化が無ければ何もしない（同じ位置での再発火では並びが動かない＝発振防止）
+      const cur = templatesRef.current
+      if (cur.length === next.length && cur.every((x, i) => x.id === next[i].id)) return
+      animateNext.current = true
+      setTemplates(next)
     }
 
     const onUp = async () => {
@@ -292,7 +311,7 @@ export default function TemplatesPage() {
       const snap = dragSnap.current
       dragId.current = null
       dragCat.current = null
-      dragSlots.current = []
+      dragGeom.current = null
       setDraggingId(null)
       if (!cat) return
 
@@ -518,9 +537,11 @@ export default function TemplatesPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   テンプレート名
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  カテゴリ
-                </th>
+                {selectedCategory !== 'all' && (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    カテゴリ
+                  </th>
+                )}
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   メッセージタイプ
                 </th>
@@ -531,84 +552,115 @@ export default function TemplatesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {templates.map((template) => (
-                <tr
-                  key={template.id}
-                  ref={(el) => {
-                    if (el) rowRefs.current.set(template.id, el)
-                    else rowRefs.current.delete(template.id)
-                  }}
-                  className={`${
-                    draggingId === template.id
-                      ? 'bg-blue-50 shadow-sm relative z-10'
-                      : 'hover:bg-gray-50 transition-colors'
-                  }`}
-                >
-                  {/* Drag handle */}
-                  <td className="w-8 px-2 py-3">
-                    <span
-                      onPointerDown={(e) => startRowDrag(e, template)}
-                      style={{ touchAction: 'none' }}
-                      className={`flex items-center justify-center ${
-                        canDragRows
-                          ? 'cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500'
-                          : 'cursor-not-allowed text-gray-200'
+              {templates.map((template, idx) => {
+                // 「全て」表示はカテゴリごとにブロック見出しを差し込み、色分けして固まりを可視化。
+                const grouped = selectedCategory === 'all'
+                const isGroupStart = grouped && (idx === 0 || templates[idx - 1].category !== template.category)
+                const hue = catHue(template.category)
+                const count = grouped ? templates.filter((x) => x.category === template.category).length : 0
+                return (
+                  <Fragment key={template.id}>
+                    {isGroupStart && (
+                      <tr
+                        ref={(el) => {
+                          if (el) rowRefs.current.set(`hdr:${template.category}`, el)
+                          else rowRefs.current.delete(`hdr:${template.category}`)
+                        }}
+                        className="bg-slate-50"
+                      >
+                        <td colSpan={5} className="px-3 py-2 border-t-2 border-slate-200">
+                          <span className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                            <span className="w-1.5 h-4 rounded-sm" style={{ backgroundColor: `hsl(${hue} 55% 55%)` }} />
+                            {template.category}
+                            <span className="font-normal text-slate-400">{count}件</span>
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                    <tr
+                      ref={(el) => {
+                        if (el) rowRefs.current.set(template.id, el)
+                        else rowRefs.current.delete(template.id)
+                      }}
+                      className={`${
+                        draggingId === template.id
+                          ? 'bg-blue-50 relative z-10'
+                          : grouped
+                            ? 'hover:bg-slate-50/60 transition-colors'
+                            : 'hover:bg-gray-50 transition-colors'
                       }`}
-                      title={canDragRows ? '同じカテゴリ内でドラッグして並び替え' : undefined}
-                      aria-hidden="true"
+                      // グループの左端に色帯（inset）を敷いて「同じ色＝同じカテゴリのブロック」を伝える。
+                      style={grouped ? { boxShadow: `inset 3px 0 0 hsl(${hue} 55% 60%)` } : undefined}
                     >
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path d="M7 4a1 1 0 110-2 1 1 0 010 2zM7 8a1 1 0 110-2 1 1 0 010 2zM7 12a1 1 0 110-2 1 1 0 010 2zM7 16a1 1 0 110-2 1 1 0 010 2zM13 4a1 1 0 110-2 1 1 0 010 2zM13 8a1 1 0 110-2 1 1 0 010 2zM13 12a1 1 0 110-2 1 1 0 010 2zM13 16a1 1 0 110-2 1 1 0 010 2z" />
-                      </svg>
-                    </span>
-                  </td>
+                      {/* Drag handle */}
+                      <td className="w-8 px-2 py-3">
+                        <span
+                          onPointerDown={(e) => startRowDrag(e, template)}
+                          style={{ touchAction: 'none' }}
+                          className={`flex items-center justify-center ${
+                            canDragRows
+                              ? 'cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500'
+                              : 'cursor-not-allowed text-gray-200'
+                          }`}
+                          title={canDragRows ? 'ドラッグして並び替え' : undefined}
+                          aria-hidden="true"
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M7 4a1 1 0 110-2 1 1 0 010 2zM7 8a1 1 0 110-2 1 1 0 010 2zM7 12a1 1 0 110-2 1 1 0 010 2zM7 16a1 1 0 110-2 1 1 0 010 2zM13 4a1 1 0 110-2 1 1 0 010 2zM13 8a1 1 0 110-2 1 1 0 010 2zM13 12a1 1 0 110-2 1 1 0 010 2zM13 16a1 1 0 110-2 1 1 0 010 2z" />
+                          </svg>
+                        </span>
+                      </td>
 
-                  {/* Name */}
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{template.name}</p>
-                      <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
-                        {template.messageContent.slice(0, 50)}
-                        {template.messageContent.length > 50 ? '...' : ''}
-                      </p>
-                    </div>
-                  </td>
+                      {/* Name */}
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{template.name}</p>
+                          <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
+                            {template.messageContent.slice(0, 50)}
+                            {template.messageContent.length > 50 ? '...' : ''}
+                          </p>
+                        </div>
+                      </td>
 
-                  {/* Category */}
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                      {template.category}
-                    </span>
-                  </td>
+                      {/* Category（全て表示は見出しで示すので列ごと省略） */}
+                      {!grouped && (
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                            {template.category}
+                          </span>
+                        </td>
+                      )}
 
-                  {/* Message Type */}
-                  <td className="px-4 py-3 text-sm text-gray-600">
-                    {messageTypeLabels[template.messageType] || template.messageType}
-                  </td>
+                      {/* Message Type */}
+                      <td className="px-4 py-3 text-sm text-gray-600">
+                        {messageTypeLabels[template.messageType] || template.messageType}
+                      </td>
 
-                  {/* Created At */}
-                  <td className="px-4 py-3 text-sm text-gray-500">
-                    {formatDate(template.createdAt)}
-                  </td>
+                      {/* Created At */}
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {formatDate(template.createdAt)}
+                      </td>
 
-                  {/* Actions */}
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <button
-                      onClick={() => setEditing(template)}
-                      className="mr-2 px-3 py-1 text-xs font-medium text-white rounded-md transition-opacity hover:opacity-90"
-                      style={{ backgroundColor: '#0f172a' }}
-                    >
-                      編集
-                    </button>
-                    <button
-                      onClick={() => handleDelete(template.id)}
-                      className="px-3 py-1 text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                    >
-                      削除
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      {/* Actions */}
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => setEditing(template)}
+                          className="mr-2 px-3 py-1 text-xs font-medium text-white rounded-md transition-opacity hover:opacity-90"
+                          style={{ backgroundColor: '#0f172a' }}
+                        >
+                          編集
+                        </button>
+                        <button
+                          onClick={() => handleDelete(template.id)}
+                          className="px-3 py-1 text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                        >
+                          削除
+                        </button>
+                      </td>
+                    </tr>
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
           </div>
