@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, Fragment } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
 import TemplateEditModal from '@/components/templates/template-edit-modal'
 import type { EditingTemplate } from '@/components/templates/template-edit-modal'
+import ReorderModal from '@/components/templates/reorder-modal'
 
 interface Template {
   id: string
@@ -28,6 +29,13 @@ interface CreateFormState {
   category: string
   messageType: string
   messageContent: string
+}
+
+// カテゴリ名から安定した色相を生成（ブロックごとの色分け用）。
+function catHue(name: string): number {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360
+  return h
 }
 
 function formatDate(iso: string): string {
@@ -55,6 +63,34 @@ export default function TemplatesPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
   const [editing, setEditing] = useState<EditingTemplate | null>(null)
+  const [categories, setCategories] = useState<{ id: string | null; name: string; sortOrder: number }[]>([])
+  const [reordering, setReordering] = useState<'categories' | 'templates' | null>(null)
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await api.templateCategories.list()
+      if (res.success) setCategories(res.data)
+    } catch {
+      // カテゴリ取得失敗はチップバー非表示に留める（一覧自体は表示できる）
+    }
+  }, [])
+
+  useEffect(() => {
+    loadCategories()
+  }, [loadCategories])
+
+  // 選択中カテゴリの最後のテンプレを削除/別カテゴリへ移動すると、そのカテゴリは
+  // API から消える。selectedCategory を放置するとどのチップも選択状態にならず、
+  // 一覧が空のまま理由が分からなくなるので「全て」に戻す。
+  useEffect(() => {
+    if (
+      selectedCategory !== 'all' &&
+      categories.length > 0 &&
+      !categories.some((c) => c.name === selectedCategory)
+    ) {
+      setSelectedCategory('all')
+    }
+  }, [categories, selectedCategory])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -78,10 +114,6 @@ export default function TemplatesPage() {
   useEffect(() => {
     load()
   }, [load])
-
-  const categories = Array.from(
-    new Set(templates.map((t) => t.category).filter(Boolean))
-  )
 
   const handleCreate = async () => {
     if (!form.name.trim()) {
@@ -109,6 +141,7 @@ export default function TemplatesPage() {
         setShowCreate(false)
         setForm({ name: '', category: '', messageType: 'text', messageContent: '' })
         load()
+        loadCategories()
       } else {
         setFormError(res.error)
       }
@@ -124,9 +157,192 @@ export default function TemplatesPage() {
     try {
       await api.templates.delete(id)
       load()
+      loadCategories()
     } catch {
       setError('削除に失敗しました')
     }
+  }
+
+  // ── 行のインライン並び替え（ポインタ操作 + FLIP アニメーション）──────────
+  // 以前は HTML5 の draggable を使っていたが、ドラッグ中に行を DOM 上で並べ替えると
+  // Chrome がドラッグを中断し「掴めるが並びが変わらない」状態になった。ポインタ
+  // イベントで自前に処理する（タッチ端末でも動く）。順序が変わった行は FLIP で
+  // スライド表示して入れ替わりが分かるようにする。
+  // sort_order はカテゴリ内スコープ＝入替えは「同じカテゴリ内」のみ。「全て」表示で
+  // カテゴリを跨いだ移動は無視する。確定時に該当カテゴリの id 順を保存し、失敗時のみ
+  // load() でサーバ順に戻す。
+  const templatesRef = useRef<Template[]>([])
+  useEffect(() => { templatesRef.current = templates }, [templates])
+
+  const rowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map())
+  const rowTops = useRef<Map<string, number>>(new Map()) // 直前レンダーの各行の縦位置（FLIP 用）
+  const animateNext = useRef(false)                       // 並び替え起因のレンダーだけアニメする
+
+  const dragId = useRef<string | null>(null)
+  const dragCat = useRef<string | null>(null)
+  // ドラッグ開始時に固定するジオメトリ。以降の並び順はこの固定値とポインタ Y の「純関数」で
+  // 決める。同じポインタ位置なら常に同じ並びになる＝ブロックが動いてもポインタ直下の行が
+  // 変わって逆方向に戻る…という発振（チャタリング）が起きない。
+  const dragGeom = useRef<{
+    baseOrder: Template[]
+    catOrder: string[]
+    dcSlots: number[] // dragged カテゴリ各行の mid（昇順・固定）
+    dcTop: number
+    dcBot: number
+    blockMid: Record<string, number> // カテゴリ → ブロック中央 Y（固定）
+  } | null>(null)
+  // 保存判定用スナップショット（ドラッグ開始時のカテゴリ順とカテゴリ内 id 順）。
+  const dragSnap = useRef<{ catOrder: string[]; catIds: Record<string, string[]> }>({ catOrder: [], catIds: {} })
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [reorderSaving, setReorderSaving] = useState(false)
+
+  const catIds = (list: Template[], cat: string) =>
+    list.filter((t) => t.category === cat).map((t) => t.id)
+  const uniqueCats = (list: Template[]) => [...new Set(list.map((t) => t.category))]
+
+  // FLIP: 前回レンダーからの縦位置差ぶんだけ旧位置→新位置へスライドさせる。
+  // Web Animations API を使うのは、アニメ後にインライン style が残らない＝タブ非表示で
+  // rAF が止まっても要素が変な位置に固定されないため（fill 既定 = none）。
+  useLayoutEffect(() => {
+    // 並び替え起因のレンダーでは、計測前に前回のスライドを終端まで進めて実レイアウトを読む
+    // （アニメ途中の rect を基準にすると次のスライドがガタつく）。
+    if (animateNext.current) {
+      rowRefs.current.forEach((el) => el.getAnimations?.().forEach((a) => a.finish()))
+    }
+    const nextTops = new Map<string, number>()
+    rowRefs.current.forEach((el, id) => nextTops.set(id, el.getBoundingClientRect().top))
+    if (animateNext.current) {
+      nextTops.forEach((top, id) => {
+        const prev = rowTops.current.get(id)
+        const el = rowRefs.current.get(id)
+        if (prev != null && el && Math.abs(prev - top) > 0.5 && typeof el.animate === 'function') {
+          el.animate(
+            [{ transform: `translateY(${prev - top}px)` }, { transform: 'translateY(0)' }],
+            { duration: 200, easing: 'ease' },
+          )
+        }
+      })
+      animateNext.current = false
+    }
+    rowTops.current = nextTops
+  })
+
+  const canDragRows = !loading && !reorderSaving && templates.length >= 2
+
+  const startRowDrag = (e: React.PointerEvent, t: Template) => {
+    if (!canDragRows || e.button !== 0) return
+    e.preventDefault()
+    dragId.current = t.id
+    dragCat.current = t.category
+    setDraggingId(t.id)
+    document.body.style.userSelect = 'none'
+
+    // 開始時のカテゴリ順・カテゴリ内 id 順を保存（drop 時の差分＝保存要否の判定に使う）。
+    const snapCatIds: Record<string, string[]> = {}
+    templatesRef.current.forEach((x) => { (snapCatIds[x.category] ??= []).push(x.id) })
+    dragSnap.current = { catOrder: uniqueCats(templatesRef.current), catIds: snapCatIds }
+
+    // 全行の rect を計測してジオメトリを固定（残アニメを終端させてから計測）。
+    const base = templatesRef.current
+    const rects: Record<string, { top: number; bottom: number; mid: number }> = {}
+    base.forEach((x) => {
+      const el = rowRefs.current.get(x.id)
+      if (!el) return
+      el.getAnimations?.().forEach((a) => a.finish())
+      const r = el.getBoundingClientRect()
+      rects[x.id] = { top: r.top, bottom: r.bottom, mid: r.top + r.height / 2 }
+    })
+    const cats = uniqueCats(base)
+    const dcRects = base.filter((x) => x.category === t.category).map((x) => rects[x.id]).filter(Boolean)
+    const blockMid: Record<string, number> = {}
+    cats.forEach((c) => {
+      const rs = base.filter((x) => x.category === c).map((x) => rects[x.id]).filter(Boolean)
+      if (rs.length) blockMid[c] = (Math.min(...rs.map((r) => r.top)) + Math.max(...rs.map((r) => r.bottom))) / 2
+    })
+    dragGeom.current = {
+      baseOrder: base,
+      catOrder: cats,
+      dcSlots: dcRects.map((r) => r.mid).sort((a, b) => a - b),
+      dcTop: dcRects.length ? Math.min(...dcRects.map((r) => r.top)) : -Infinity,
+      dcBot: dcRects.length ? Math.max(...dcRects.map((r) => r.bottom)) : Infinity,
+      blockMid,
+    }
+
+    // ポインタ Y から「あるべき並び」を純関数で求める（固定ジオメトリのみ参照＝発振しない）。
+    const onMove = (ev: PointerEvent) => {
+      const did = dragId.current
+      const dc = dragCat.current
+      const g = dragGeom.current
+      if (!did || !dc || !g) return
+      const y = ev.clientY
+
+      // 1) dragged カテゴリ内での dragged 行の位置（ポインタが自カテゴリの span 内のときだけ入替え）
+      const dcItems = g.baseOrder.filter((x) => x.category === dc)
+      let dcReordered = dcItems
+      if (y >= g.dcTop && y <= g.dcBot && dcItems.length > 1) {
+        const wi = Math.max(0, Math.min(g.dcSlots.filter((m) => m < y).length, dcItems.length - 1))
+        dcReordered = [...dcItems]
+        const di = dcReordered.findIndex((x) => x.id === did)
+        if (di >= 0) { const [m] = dcReordered.splice(di, 1); dcReordered.splice(wi, 0, m) }
+      }
+
+      // 2) カテゴリ（ブロック）順。他カテゴリのブロック中央 Y に対する挿入位置＝純関数。
+      const otherCats = g.catOrder.filter((c) => c !== dc)
+      const bi = otherCats.filter((c) => g.blockMid[c] < y).length
+      const newCatOrder = [...otherCats.slice(0, bi), dc, ...otherCats.slice(bi)]
+
+      // 3) 組み立て（他カテゴリは元の内部順、dc は dcReordered）
+      const groups: Record<string, Template[]> = {}
+      g.baseOrder.forEach((x) => { (groups[x.category] ??= []).push(x) })
+      groups[dc] = dcReordered
+      const next = newCatOrder.flatMap((c) => groups[c])
+
+      // 変化が無ければ何もしない（同じ位置での再発火では並びが動かない＝発振防止）
+      const cur = templatesRef.current
+      if (cur.length === next.length && cur.every((x, i) => x.id === next[i].id)) return
+      animateNext.current = true
+      setTemplates(next)
+    }
+
+    const onUp = async () => {
+      document.removeEventListener('pointermove', onMove)
+      document.body.style.userSelect = ''
+      const cat = dragCat.current
+      const snap = dragSnap.current
+      dragId.current = null
+      dragCat.current = null
+      dragGeom.current = null
+      setDraggingId(null)
+      if (!cat) return
+
+      const cur = templatesRef.current
+      const newCatOrder = uniqueCats(cur)
+      const newDragCatIds = catIds(cur, cat)
+      const catOrderChanged = JSON.stringify(newCatOrder) !== JSON.stringify(snap.catOrder)
+      const tmplOrderChanged = JSON.stringify(newDragCatIds) !== JSON.stringify(snap.catIds[cat] || [])
+      if (!catOrderChanged && !tmplOrderChanged) return
+
+      setReorderSaving(true)
+      try {
+        if (catOrderChanged) {
+          const res = await api.templateCategories.reorder(newCatOrder)
+          if (!res.success) throw new Error(res.error)
+          setCategories(res.data) // チップバーの順序も更新
+        }
+        if (tmplOrderChanged && newDragCatIds.length >= 2) {
+          const res = await api.templates.reorder(newDragCatIds)
+          if (!res.success) throw new Error(res.error)
+        }
+      } catch {
+        setError('並び順の保存に失敗しました')
+        load()
+      } finally {
+        setReorderSaving(false)
+      }
+    }
+
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp, { once: true })
   }
 
   return (
@@ -152,8 +368,8 @@ export default function TemplatesPage() {
       )}
 
       {/* Category filter */}
-      {!loading && categories.length > 0 && (
-        <div className="mb-4 flex flex-wrap gap-2">
+      {categories.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2 items-center">
           <button
             onClick={() => setSelectedCategory('all')}
             className={`px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-full transition-colors ${
@@ -167,18 +383,46 @@ export default function TemplatesPage() {
           </button>
           {categories.map((cat) => (
             <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
+              key={cat.name}
+              onClick={() => setSelectedCategory(cat.name)}
               className={`px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-full transition-colors ${
-                selectedCategory === cat
+                selectedCategory === cat.name
                   ? 'text-white'
                   : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
               }`}
-              style={selectedCategory === cat ? { backgroundColor: '#0f172a' } : undefined}
+              style={selectedCategory === cat.name ? { backgroundColor: '#0f172a' } : undefined}
             >
-              {cat}
+              {cat.name}
             </button>
           ))}
+          {categories.length >= 2 && (
+            <button
+              onClick={() => setReordering('categories')}
+              className="px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-full border border-dashed border-gray-300 text-gray-500 hover:border-gray-400 hover:text-gray-700 transition-colors"
+            >
+              ⇅ カテゴリ並び替え
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Template reorder のヒント + タッチ端末向けモーダルボタン */}
+      {!loading && templates.length >= 2 && (
+        <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
+          <p className="text-xs text-gray-400">
+            行の左端 <span className="align-middle">⣿</span> をドラッグして並び替え
+            {selectedCategory === 'all'
+              ? '（同カテゴリ内で入替え／別カテゴリへ動かすとカテゴリ順が変わります）'
+              : '（カテゴリ内で入替え）'}
+          </p>
+          {selectedCategory !== 'all' && (
+            <button
+              onClick={() => setReordering('templates')}
+              className="px-3 py-1.5 min-h-[44px] text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              ⇅ 一覧で並び替え
+            </button>
+          )}
         </div>
       )}
 
@@ -289,12 +533,15 @@ export default function TemplatesPage() {
           <table className="w-full min-w-[640px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="w-8 px-2 py-3" />
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   テンプレート名
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  カテゴリ
-                </th>
+                {selectedCategory !== 'all' && (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    カテゴリ
+                  </th>
+                )}
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                   メッセージタイプ
                 </th>
@@ -305,54 +552,115 @@ export default function TemplatesPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {templates.map((template) => (
-                <tr key={template.id} className="hover:bg-gray-50 transition-colors">
-                  {/* Name */}
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{template.name}</p>
-                      <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
-                        {template.messageContent.slice(0, 50)}
-                        {template.messageContent.length > 50 ? '...' : ''}
-                      </p>
-                    </div>
-                  </td>
-
-                  {/* Category */}
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-                      {template.category}
-                    </span>
-                  </td>
-
-                  {/* Message Type */}
-                  <td className="px-4 py-3 text-sm text-gray-600">
-                    {messageTypeLabels[template.messageType] || template.messageType}
-                  </td>
-
-                  {/* Created At */}
-                  <td className="px-4 py-3 text-sm text-gray-500">
-                    {formatDate(template.createdAt)}
-                  </td>
-
-                  {/* Actions */}
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <button
-                      onClick={() => setEditing(template)}
-                      className="mr-2 px-3 py-1 text-xs font-medium text-white rounded-md transition-opacity hover:opacity-90"
-                      style={{ backgroundColor: '#0f172a' }}
+              {templates.map((template, idx) => {
+                // 「全て」表示はカテゴリごとにブロック見出しを差し込み、色分けして固まりを可視化。
+                const grouped = selectedCategory === 'all'
+                const isGroupStart = grouped && (idx === 0 || templates[idx - 1].category !== template.category)
+                const hue = catHue(template.category)
+                const count = grouped ? templates.filter((x) => x.category === template.category).length : 0
+                return (
+                  <Fragment key={template.id}>
+                    {isGroupStart && (
+                      <tr
+                        ref={(el) => {
+                          if (el) rowRefs.current.set(`hdr:${template.category}`, el)
+                          else rowRefs.current.delete(`hdr:${template.category}`)
+                        }}
+                        className="bg-slate-50"
+                      >
+                        <td colSpan={5} className="px-3 py-2 border-t-2 border-slate-200">
+                          <span className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
+                            <span className="w-1.5 h-4 rounded-sm" style={{ backgroundColor: `hsl(${hue} 55% 55%)` }} />
+                            {template.category}
+                            <span className="font-normal text-slate-400">{count}件</span>
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                    <tr
+                      ref={(el) => {
+                        if (el) rowRefs.current.set(template.id, el)
+                        else rowRefs.current.delete(template.id)
+                      }}
+                      className={`${
+                        draggingId === template.id
+                          ? 'bg-blue-50 relative z-10'
+                          : grouped
+                            ? 'hover:bg-slate-50/60 transition-colors'
+                            : 'hover:bg-gray-50 transition-colors'
+                      }`}
+                      // グループの左端に色帯（inset）を敷いて「同じ色＝同じカテゴリのブロック」を伝える。
+                      style={grouped ? { boxShadow: `inset 3px 0 0 hsl(${hue} 55% 60%)` } : undefined}
                     >
-                      編集
-                    </button>
-                    <button
-                      onClick={() => handleDelete(template.id)}
-                      className="px-3 py-1 text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-                    >
-                      削除
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      {/* Drag handle */}
+                      <td className="w-8 px-2 py-3">
+                        <span
+                          onPointerDown={(e) => startRowDrag(e, template)}
+                          style={{ touchAction: 'none' }}
+                          className={`flex items-center justify-center ${
+                            canDragRows
+                              ? 'cursor-grab active:cursor-grabbing text-gray-300 hover:text-gray-500'
+                              : 'cursor-not-allowed text-gray-200'
+                          }`}
+                          title={canDragRows ? 'ドラッグして並び替え' : undefined}
+                          aria-hidden="true"
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M7 4a1 1 0 110-2 1 1 0 010 2zM7 8a1 1 0 110-2 1 1 0 010 2zM7 12a1 1 0 110-2 1 1 0 010 2zM7 16a1 1 0 110-2 1 1 0 010 2zM13 4a1 1 0 110-2 1 1 0 010 2zM13 8a1 1 0 110-2 1 1 0 010 2zM13 12a1 1 0 110-2 1 1 0 010 2zM13 16a1 1 0 110-2 1 1 0 010 2z" />
+                          </svg>
+                        </span>
+                      </td>
+
+                      {/* Name */}
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{template.name}</p>
+                          <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
+                            {template.messageContent.slice(0, 50)}
+                            {template.messageContent.length > 50 ? '...' : ''}
+                          </p>
+                        </div>
+                      </td>
+
+                      {/* Category（全て表示は見出しで示すので列ごと省略） */}
+                      {!grouped && (
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                            {template.category}
+                          </span>
+                        </td>
+                      )}
+
+                      {/* Message Type */}
+                      <td className="px-4 py-3 text-sm text-gray-600">
+                        {messageTypeLabels[template.messageType] || template.messageType}
+                      </td>
+
+                      {/* Created At */}
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {formatDate(template.createdAt)}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => setEditing(template)}
+                          className="mr-2 px-3 py-1 text-xs font-medium text-white rounded-md transition-opacity hover:opacity-90"
+                          style={{ backgroundColor: '#0f172a' }}
+                        >
+                          編集
+                        </button>
+                        <button
+                          onClick={() => handleDelete(template.id)}
+                          className="px-3 py-1 text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                        >
+                          削除
+                        </button>
+                      </td>
+                    </tr>
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
           </div>
@@ -363,7 +671,40 @@ export default function TemplatesPage() {
         isOpen={editing !== null}
         template={editing}
         onClose={() => setEditing(null)}
-        onSaved={() => load()}
+        onSaved={() => { load(); loadCategories() }}
+      />
+
+      {/* カテゴリ並び替え（失敗時は throw してモーダル内にエラー表示。並びは保持される） */}
+      <ReorderModal
+        isOpen={reordering === 'categories'}
+        title="カテゴリの並び替え"
+        items={categories.map((c) => ({ key: c.name, label: c.name }))}
+        onClose={() => setReordering(null)}
+        onSave={async (names) => {
+          const res = await api.templateCategories.reorder(names)
+          if (!res.success) throw new Error(res.error)
+          setCategories(res.data)
+          setReordering(null)
+          load()
+        }}
+      />
+
+      {/* カテゴリ内テンプレ並び替え */}
+      <ReorderModal
+        isOpen={reordering === 'templates'}
+        title={`「${selectedCategory}」内の並び替え`}
+        items={templates.map((t) => ({
+          key: t.id,
+          label: t.name,
+          sub: t.messageContent.slice(0, 40),
+        }))}
+        onClose={() => setReordering(null)}
+        onSave={async (ids) => {
+          const res = await api.templates.reorder(ids)
+          if (!res.success) throw new Error(res.error)
+          setReordering(null)
+          load()
+        }}
       />
     </div>
   )

@@ -321,6 +321,20 @@ export const api = {
       ),
     delete: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/templates/${id}`, { method: 'DELETE' }),
+    reorder: (ids: string[]) =>
+      fetchApi<ApiResponse<null>>('/api/templates/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ ids }),
+      }),
+  },
+  templateCategories: {
+    list: () =>
+      fetchApi<ApiResponse<{ id: string | null; name: string; sortOrder: number }[]>>('/api/template-categories'),
+    reorder: (names: string[]) =>
+      fetchApi<ApiResponse<{ id: string | null; name: string; sortOrder: number }[]>>('/api/template-categories/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ names }),
+      }),
   },
   automations: {
     list: (params?: { accountId?: string }) => {

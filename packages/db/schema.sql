@@ -391,11 +391,22 @@ CREATE TABLE IF NOT EXISTS templates (
   category        TEXT NOT NULL DEFAULT 'general',
   message_type    TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'flex', 'carousel')),
   message_content TEXT NOT NULL,
+  sort_order      INTEGER NOT NULL DEFAULT 0, -- migration 913: カテゴリ内の表示順（0=未並び替え）
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_templates_category ON templates (category);
+
+-- migration 913: カテゴリ（templates.category の自由文字列）の表示順マスタ。
+-- 行は並び替え保存時にだけ作られる（未登録カテゴリは 999999 相当で名前順の末尾）。
+CREATE TABLE IF NOT EXISTS template_categories (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE,
+  sort_order INTEGER NOT NULL DEFAULT 999999,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 
 -- ============================================================
 -- Round 3: オペレーター/チャット

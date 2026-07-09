@@ -71,6 +71,7 @@ const RESOURCE_JA: Record<string, string> = {
   friends: '友だち',
   tags: 'タグ',
   templates: 'テンプレート',
+  'template-categories': 'テンプレカテゴリ',
   scenarios: 'シナリオ',
   broadcasts: '一斉配信',
   automations: 'オートメーション',
