@@ -173,17 +173,19 @@ export default function TemplatesPage() {
 
   const dragId = useRef<string | null>(null)
   const dragCat = useRef<string | null>(null)
-  // ドラッグ開始時の同カテゴリ各行の固定スロット（縦位置）。ドラッグ中は行が入れ替わっても
-  // スロット（位置の集合）は不変なので、これを基準に「ポインタが何番目のスロットにいるか」を
-  // 決める。FLIP アニメ中の getBoundingClientRect はアニメ位置を返して当てにならないため、
-  // ライブの rect で判定すると入替えを取りこぼす（＝「半分くらい動かせない」の原因）。
-  const dragSlots = useRef<{ mid: number }[]>([])
-  const startIds = useRef<string[]>([]) // 変化が無ければ保存しない用のスナップショット
+  // ドラッグ開始時の「全行」の固定スロット（縦位置）を id 付きで持つ。ドラッグ中は行が
+  // 入れ替わってもスロット（位置の集合）は不変なので、これを基準に「ポインタが上から何番目の
+  // スロットにいるか」で対象を決める。FLIP アニメ中の getBoundingClientRect はアニメ位置を
+  // 返して当てにならないため、ライブの rect で判定すると取りこぼす（＝以前の不具合の原因）。
+  const dragSlots = useRef<{ id: string; mid: number }[]>([])
+  // 保存判定用スナップショット（ドラッグ開始時のカテゴリ順とカテゴリ内 id 順）。
+  const dragSnap = useRef<{ catOrder: string[]; catIds: Record<string, string[]> }>({ catOrder: [], catIds: {} })
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [reorderSaving, setReorderSaving] = useState(false)
 
   const catIds = (list: Template[], cat: string) =>
     list.filter((t) => t.category === cat).map((t) => t.id)
+  const uniqueCats = (list: Template[]) => [...new Set(list.map((t) => t.category))]
 
   // FLIP: 前回レンダーからの縦位置差ぶんだけ旧位置→新位置へスライドさせる。
   // Web Animations API を使うのは、アニメ後にインライン style が残らない＝タブ非表示で
@@ -219,64 +221,99 @@ export default function TemplatesPage() {
     e.preventDefault()
     dragId.current = t.id
     dragCat.current = t.category
-    startIds.current = catIds(templatesRef.current, t.category)
     setDraggingId(t.id)
     document.body.style.userSelect = 'none'
 
-    // 同カテゴリ行の固定スロットをスナップショット（残アニメを終端させてから計測）。
+    // 開始時のカテゴリ順・カテゴリ内 id 順を保存（drop 時の差分＝保存要否の判定に使う）。
+    const snapCatIds: Record<string, string[]> = {}
+    templatesRef.current.forEach((x) => { (snapCatIds[x.category] ??= []).push(x.id) })
+    dragSnap.current = { catOrder: uniqueCats(templatesRef.current), catIds: snapCatIds }
+
+    // 全行の固定スロットを id 付きでスナップショット（残アニメを終端させてから計測）。
+    // 全行を対象にすることで「全て」表示でカテゴリを跨いだ移動も判定できる。
     dragSlots.current = templatesRef.current
-      .filter((x) => x.category === t.category)
-      .map((x) => rowRefs.current.get(x.id))
-      .filter((el): el is HTMLTableRowElement => !!el)
-      .map((el) => {
+      .map((x) => ({ id: x.id, el: rowRefs.current.get(x.id) }))
+      .filter((r): r is { id: string; el: HTMLTableRowElement } => !!r.el)
+      .map(({ id, el }) => {
         el.getAnimations?.().forEach((a) => a.finish())
         const r = el.getBoundingClientRect()
-        return { top: r.top, mid: r.top + r.height / 2 }
+        return { id, top: r.top, mid: r.top + r.height / 2 }
       })
       .sort((a, b) => a.top - b.top)
-      .map(({ mid }) => ({ mid }))
+      .map(({ id, mid }) => ({ id, mid }))
 
     const onMove = (ev: PointerEvent) => {
       const did = dragId.current
       const cat = dragCat.current
       const slots = dragSlots.current
       if (!did || !cat || slots.length === 0) return
-      // ポインタが何番目のスロット（＝カテゴリ内の何番目の位置）にいるか。固定値なので安定。
-      let to = slots.findIndex((s) => ev.clientY < s.mid)
-      if (to === -1) to = slots.length - 1
-      const catItems = templatesRef.current.filter((x) => x.category === cat)
-      const from = catItems.findIndex((x) => x.id === did)
-      const target = Math.max(0, Math.min(to, catItems.length - 1))
-      if (from < 0 || from === target) return // 位置が変わらないなら何もしない
-      animateNext.current = true
-      setTemplates((prev) => {
-        const items = prev.filter((x) => x.category === cat)
-        const f = items.findIndex((x) => x.id === did)
-        const tg = Math.max(0, Math.min(to, items.length - 1))
-        if (f < 0 || f === tg) return prev
-        const reordered = [...items]
-        const [moved] = reordered.splice(f, 1)
-        reordered.splice(tg, 0, moved)
-        let k = 0
-        return prev.map((x) => (x.category === cat ? reordered[k++] : x)) // 該当カテゴリ位置だけ差し替え
-      })
+      // ポインタ直下のスロット（固定値なので安定）→ 現在その位置に居る行＝ターゲット。
+      let si = slots.findIndex((s) => ev.clientY < s.mid)
+      if (si === -1) si = slots.length - 1
+      const cur = templatesRef.current
+      const target = cur[Math.max(0, Math.min(si, cur.length - 1))]
+      if (!target || target.id === did) return
+
+      if (target.category === cat) {
+        // 同一カテゴリ → カテゴリ内でターゲット位置へ入替え。
+        animateNext.current = true
+        setTemplates((prev) => {
+          const f = prev.findIndex((x) => x.id === did)
+          const tg = prev.findIndex((x) => x.id === target.id)
+          if (f < 0 || tg < 0 || f === tg) return prev
+          const next = [...prev]
+          const [moved] = next.splice(f, 1)
+          next.splice(tg, 0, moved)
+          return next
+        })
+      } else {
+        // 別カテゴリ領域 → ドラッグ中の行のカテゴリ「ブロックごと」ターゲットのカテゴリ位置へ移動
+        // （＝カテゴリ順の変更）。カテゴリ内順は維持する。
+        animateNext.current = true
+        setTemplates((prev) => {
+          const order = uniqueCats(prev)
+          const fc = order.indexOf(cat)
+          const tc = order.indexOf(target.category)
+          if (fc < 0 || tc < 0 || fc === tc) return prev
+          const newOrder = [...order]
+          const [movedCat] = newOrder.splice(fc, 1)
+          newOrder.splice(tc, 0, movedCat)
+          const groups: Record<string, Template[]> = {}
+          prev.forEach((x) => { (groups[x.category] ??= []).push(x) })
+          return newOrder.flatMap((c) => groups[c])
+        })
+      }
     }
 
     const onUp = async () => {
       document.removeEventListener('pointermove', onMove)
       document.body.style.userSelect = ''
       const cat = dragCat.current
+      const snap = dragSnap.current
       dragId.current = null
       dragCat.current = null
       dragSlots.current = []
       setDraggingId(null)
       if (!cat) return
-      const ids = catIds(templatesRef.current, cat)
-      if (ids.length < 2 || JSON.stringify(ids) === JSON.stringify(startIds.current)) return
+
+      const cur = templatesRef.current
+      const newCatOrder = uniqueCats(cur)
+      const newDragCatIds = catIds(cur, cat)
+      const catOrderChanged = JSON.stringify(newCatOrder) !== JSON.stringify(snap.catOrder)
+      const tmplOrderChanged = JSON.stringify(newDragCatIds) !== JSON.stringify(snap.catIds[cat] || [])
+      if (!catOrderChanged && !tmplOrderChanged) return
+
       setReorderSaving(true)
       try {
-        const res = await api.templates.reorder(ids)
-        if (!res.success) { setError('並び順の保存に失敗しました'); load() }
+        if (catOrderChanged) {
+          const res = await api.templateCategories.reorder(newCatOrder)
+          if (!res.success) throw new Error(res.error)
+          setCategories(res.data) // チップバーの順序も更新
+        }
+        if (tmplOrderChanged && newDragCatIds.length >= 2) {
+          const res = await api.templates.reorder(newDragCatIds)
+          if (!res.success) throw new Error(res.error)
+        }
       } catch {
         setError('並び順の保存に失敗しました')
         load()
@@ -354,7 +391,10 @@ export default function TemplatesPage() {
       {!loading && templates.length >= 2 && (
         <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
           <p className="text-xs text-gray-400">
-            行の左端 <span className="align-middle">⣿</span> をドラッグして並び替えできます（同じカテゴリ内）
+            行の左端 <span className="align-middle">⣿</span> をドラッグして並び替え
+            {selectedCategory === 'all'
+              ? '（同カテゴリ内で入替え／別カテゴリへ動かすとカテゴリ順が変わります）'
+              : '（カテゴリ内で入替え）'}
           </p>
           {selectedCategory !== 'all' && (
             <button
