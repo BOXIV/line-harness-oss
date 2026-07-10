@@ -53,10 +53,12 @@ export default function BookingsPage() {
     }).catch(() => {})
   }, [])
 
-  // 承認/否認は manager も可。削除は owner/admin のみ。
+  // 承認/否認・キャンセルは manager も可。削除は owner/admin のみ。
   const canApproveReject =
     currentRole === 'admin' || currentRole === 'owner' || currentRole === 'manager'
+  const canCancel = canApproveReject
   const canDelete = currentRole === 'admin' || currentRole === 'owner'
+  const [notice, setNotice] = useState('')
   const [detail, setDetail] = useState<{
     id: string
     status: string
@@ -100,6 +102,7 @@ export default function BookingsPage() {
   async function openDetail(id: string) {
     setSelectedId(id)
     setOtherCandidate(1)
+    setNotice('') // 別の予約を操作し始めたら直近のキャンセル成功バナーは消す
     try {
       const res = await api.bookingRequests.get(id)
       if (res.success) {
@@ -149,6 +152,22 @@ export default function BookingsPage() {
     }
   }
 
+  async function cancelBooking(id: string) {
+    if (!confirm('この撮影日程をキャンセルしますか？出品者にキャンセル通知が送信され、確定していた枠は開放されます。')) return
+    const reason = prompt('キャンセル理由（任意・出品者への通知に表示されます。例: 雨天のため）') ?? undefined
+    try {
+      const res = await api.bookingRequests.cancel(id, reason?.trim() || undefined)
+      if (!res.success) { setError(res.error || 'キャンセルに失敗しました'); return }
+      setSelectedId(null)
+      setDetail(null)
+      setError('')
+      setNotice('撮影日程をキャンセルしました。改めて日程を送る場合は、個別チャット画面の「🗓️ 日程調整送信」から最新日程のフォームを再送できます。')
+      await load()
+    } catch {
+      setError('キャンセルに失敗しました')
+    }
+  }
+
   async function deleteBooking(id: string) {
     if (!confirm('この予約を削除しますか？取り消せません。')) return
     try {
@@ -170,6 +189,12 @@ export default function BookingsPage() {
             {error}
           </div>
         )}
+        {notice && (
+          <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg text-sm flex items-start gap-2">
+            <span className="flex-1">{notice}</span>
+            <button onClick={() => setNotice('')} className="text-blue-400 hover:text-blue-600 shrink-0" aria-label="閉じる">✕</button>
+          </div>
+        )}
 
         {/* ステータスタブ（件数バッジ付き） */}
         {(() => {
@@ -182,6 +207,7 @@ export default function BookingsPage() {
             { key: 'pending_invite', label: '招待中', color: 'blue' },
             { key: 'approved', label: '承認済み', color: 'green' },
             { key: 'rejected', label: '却下', color: 'red' },
+            { key: 'cancelled', label: 'キャンセル', color: 'gray' },
             { key: 'all', label: 'すべて', color: 'gray' },
           ]
           return (
@@ -192,7 +218,7 @@ export default function BookingsPage() {
                 return (
                   <button
                     key={t.key}
-                    onClick={() => setStatusFilter(t.key)}
+                    onClick={() => { setStatusFilter(t.key); setNotice('') }}
                     className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap border ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900'
@@ -228,7 +254,7 @@ export default function BookingsPage() {
               </select>
             </div>
             <button
-              onClick={load}
+              onClick={() => { setNotice(''); load() }}
               className="ml-auto text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg"
             >
               更新
@@ -395,6 +421,21 @@ export default function BookingsPage() {
                   <div>
                     <div className="text-xs text-gray-500">メモ</div>
                     <div className="text-sm text-gray-700">{detail.notes}</div>
+                  </div>
+                )}
+
+                {/* 承認済み日程のキャンセル（雨天中止など）。manager 以上。 */}
+                {detail.status === 'approved' && canCancel && (
+                  <div className="pt-2 border-t border-gray-100">
+                    <button
+                      onClick={() => cancelBooking(detail.id)}
+                      className="w-full px-4 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-medium rounded-lg"
+                    >
+                      🌧️ 撮影日程をキャンセル
+                    </button>
+                    <p className="mt-2 text-xs text-gray-500">
+                      キャンセルすると出品者に通知が届き、確定枠が開放されます。改めて日程を送る場合は個別チャットの「🗓️ 日程調整送信」から最新日程のフォームを再送できます。
+                    </p>
                   </div>
                 )}
 

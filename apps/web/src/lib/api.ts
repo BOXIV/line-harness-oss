@@ -673,6 +673,12 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ notes }),
       }),
+    /** 承認済み日程のキャンセル（雨天中止など）。owner/admin/manager のみ。出品者にキャンセル通知を送信。 */
+    cancel: (id: string, reason?: string) =>
+      fetchApi<ApiResponse<unknown>>(`/api/booking-requests/${id}/cancel`, {
+        method: 'PUT',
+        body: JSON.stringify({ reason }),
+      }),
     delete: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/booking-requests/${id}`, { method: 'DELETE' }),
   },
