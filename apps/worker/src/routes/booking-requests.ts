@@ -417,8 +417,8 @@ async function sendBookingStatusNotification(
       type: 'box',
       layout: 'vertical',
       contents: [
-        { type: 'text', text: `${headerEmoji} ${headerText}`, weight: 'bold', size: 'lg', color: '#ffffff' },
-        { type: 'text', text: headerSub, size: 'xs', color: '#ffffff', margin: 'sm' },
+        { type: 'text', text: `${headerEmoji} ${headerText}`, weight: 'bold', size: 'lg', color: '#ffffff', wrap: true },
+        { type: 'text', text: headerSub, size: 'xs', color: '#ffffff', margin: 'sm', wrap: true },
       ],
       backgroundColor: headerColor,
       paddingAll: '20px',
