@@ -102,6 +102,7 @@ export default function BookingsPage() {
   async function openDetail(id: string) {
     setSelectedId(id)
     setOtherCandidate(1)
+    setNotice('') // 別の予約を操作し始めたら直近のキャンセル成功バナーは消す
     try {
       const res = await api.bookingRequests.get(id)
       if (res.success) {
@@ -217,7 +218,7 @@ export default function BookingsPage() {
                 return (
                   <button
                     key={t.key}
-                    onClick={() => setStatusFilter(t.key)}
+                    onClick={() => { setStatusFilter(t.key); setNotice('') }}
                     className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap border ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900'
@@ -253,7 +254,7 @@ export default function BookingsPage() {
               </select>
             </div>
             <button
-              onClick={load}
+              onClick={() => { setNotice(''); load() }}
               className="ml-auto text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg"
             >
               更新

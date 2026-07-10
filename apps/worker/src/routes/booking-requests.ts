@@ -176,7 +176,10 @@ bookingRequests.put('/api/booking-requests/:id', async (c) => {
       if (body.staffId && body.staffId !== currentStaff.id) {
         return c.json({ success: false, error: 'Forbidden: cannot reassign booking' }, 403);
       }
-      if (body.status && ['approved', 'rejected'].includes(body.status)) {
+      // approve/reject/cancel は専用エンドポイント(manager以上)に一本化。staff が汎用 PUT で
+      // status を直接書き換える抜け道を塞ぐ（cancel を含めないとスロット未開放・通知なしの
+      // 不整合キャンセルを staff が作れてしまう）。
+      if (body.status && ['approved', 'rejected', 'cancelled'].includes(body.status)) {
         return c.json({ success: false, error: 'Forbidden: only owner/admin/manager can change status' }, 403);
       }
     }
