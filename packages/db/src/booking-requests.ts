@@ -239,6 +239,27 @@ export async function rejectBookingRequest(
   return getBookingRequestById(db, id);
 }
 
+/**
+ * 承認済み予約の日程キャンセル（雨天中止など）。status='cancelled' にし、理由があれば notes へ。
+ * approved_by/approved_at は元の承認者情報として残す（誰がキャンセルしたかは audit_log 側で記録）。
+ */
+export async function cancelBookingRequest(
+  db: D1Database,
+  id: string,
+  notes?: string,
+): Promise<BookingRequestRow | null> {
+  const now = jstNow();
+  await db
+    .prepare(
+      `UPDATE booking_requests
+       SET status = 'cancelled', notes = COALESCE(?, notes), updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(notes ?? null, now, id)
+    .run();
+  return getBookingRequestById(db, id);
+}
+
 export async function deleteBookingRequest(db: D1Database, id: string): Promise<void> {
   await db.prepare(`DELETE FROM booking_requests WHERE id = ?`).bind(id).run();
 }

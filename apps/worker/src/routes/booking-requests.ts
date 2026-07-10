@@ -11,6 +11,7 @@ import {
   updateBookingRequest,
   approveBookingRequest,
   rejectBookingRequest,
+  cancelBookingRequest,
   getStaffById,
   deleteBookingRequest,
   getStaffAvailabilityById,
@@ -279,6 +280,52 @@ bookingRequests.put('/api/booking-requests/:id/reject', async (c) => {
   }
 });
 
+/** PUT /api/booking-requests/:id/cancel — 承認済み日程のキャンセル + LINE通知（owner/admin/manager）
+ *
+ * 雨天中止などで確定済みの撮影日程を取り消す。スロットを開放し、対象ユーザーへキャンセル通知を送る。
+ * キャンセル後は個別チャットの「日程調整送信」から改めて最新日程のフォームを再送できる。
+ * body (optional): { reason?: string } — キャンセル理由（例: 雨天のため）。通知に含め notes にも保存。
+ */
+bookingRequests.put('/api/booking-requests/:id/cancel', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const staff = c.get('staff');
+    if (!staff) return c.json({ success: false, error: 'Unauthorized' }, 401);
+    // 権限: owner/admin/manager（マネージャー以上）
+    if (staff.role !== 'admin' && staff.role !== 'owner' && staff.role !== 'manager') {
+      return c.json({ success: false, error: 'Forbidden: owner/admin/manager only' }, 403);
+    }
+
+    const existing = await getBookingRequestById(c.env.DB, id);
+    if (!existing) return c.json({ success: false, error: 'Not found' }, 404);
+    // 承認済みの予約のみキャンセル可能（未承認は却下フローを使う）
+    if (existing.status !== 'approved') {
+      return c.json({ success: false, error: 'Only approved bookings can be cancelled' }, 400);
+    }
+
+    const body = await c.req.json<{ reason?: string }>().catch(() => ({} as { reason?: string }));
+    const reason = body.reason?.trim() || undefined;
+
+    // 確定スロットを開放（他の予約で再利用できるように）
+    if (existing.slot_id) {
+      await markSlotUnbooked(c.env.DB, existing.slot_id);
+    }
+
+    const updated = await cancelBookingRequest(c.env.DB, id, reason);
+
+    c.executionCtx.waitUntil(
+      sendBookingStatusNotification(c.env, id, 'cancelled', reason).catch((err) =>
+        console.error('cancel notification failed:', err),
+      ),
+    );
+
+    return c.json({ success: true, data: updated });
+  } catch (err) {
+    console.error('PUT /api/booking-requests/:id/cancel error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 /** DELETE /api/booking-requests/:id （admin/owner のみ） */
 bookingRequests.delete('/api/booking-requests/:id', async (c) => {
   try {
@@ -306,7 +353,8 @@ bookingRequests.delete('/api/booking-requests/:id', async (c) => {
 async function sendBookingStatusNotification(
   env: Env['Bindings'],
   bookingId: string,
-  status: 'approved' | 'rejected',
+  status: 'approved' | 'rejected' | 'cancelled',
+  reason?: string,
 ): Promise<void> {
   const booking = await getBookingRequestById(env.DB, bookingId);
   if (!booking?.friend_id) return;
@@ -333,15 +381,31 @@ async function sendBookingStatusNotification(
   }
 
   const isApproved = status === 'approved';
-  const headerColor = isApproved ? '#0f172a' : '#dc2626';
-  const headerEmoji = isApproved ? '🎉' : '⚠️';
-  const headerText = isApproved ? '撮影日が確定しました' : 'ご予約日程について';
-  const headerSub = isApproved ? '下記の日程でお伺いします' : '日程の再調整をお願いします';
+  const isCancelled = status === 'cancelled';
+  // approved=濃紺 / rejected=赤 / cancelled=グレー
+  const headerColor = isApproved ? '#0f172a' : isCancelled ? '#475569' : '#dc2626';
+  const headerEmoji = isApproved ? '🎉' : isCancelled ? '🌧️' : '⚠️';
+  const headerText = isApproved
+    ? '撮影日が確定しました'
+    : isCancelled
+      ? '撮影日程がキャンセルされました'
+      : 'ご予約日程について';
+  const headerSub = isApproved
+    ? '下記の日程でお伺いします'
+    : isCancelled
+      ? '改めて日程調整のご案内をお送りします'
+      : '日程の再調整をお願いします';
   const bodyText = isApproved
     ? '当日は車両のナンバープレートを確認の上、撮影スタッフがお伺いいたします。お時間に余裕を持ってご準備ください。'
-    : '申し訳ございませんが、ご予約日程の調整をお願いいたします。担当者より別途ご連絡いたします。';
+    : isCancelled
+      ? `申し訳ございませんが、上記の撮影日程はキャンセルとなりました。${reason ? `\n理由: ${reason}` : ''}\n改めて撮影日程調整のご案内をLINEでお送りしますので、少々お待ちください。`
+      : '申し訳ございませんが、ご予約日程の調整をお願いいたします。担当者より別途ご連絡いたします。';
 
   const hasDateInfo = !!dateLabel && !!timeLabel;
+  // カード色: approved=緑 / cancelled=グレー / rejected=赤
+  const cardBg = isApproved ? '#f0fdf4' : isCancelled ? '#f1f5f9' : '#fef2f2';
+  const cardLabelColor = isApproved ? '#15803d' : isCancelled ? '#475569' : '#b91c1c';
+  const cardTitle = isCancelled ? '📅 キャンセルされた日時' : '📅 撮影日時';
 
   const flex = {
     type: 'bubble',
@@ -367,15 +431,15 @@ async function sendBookingStatusNotification(
               {
                 type: 'box',
                 layout: 'vertical',
-                backgroundColor: isApproved ? '#f0fdf4' : '#fef2f2',
+                backgroundColor: cardBg,
                 cornerRadius: 'lg',
                 paddingAll: '20px',
                 contents: [
                   {
                     type: 'text',
-                    text: '📅 撮影日時',
+                    text: cardTitle,
                     size: 'xs',
-                    color: isApproved ? '#15803d' : '#b91c1c',
+                    color: cardLabelColor,
                     weight: 'bold',
                   },
                   {
@@ -383,7 +447,8 @@ async function sendBookingStatusNotification(
                     text: dateLabel,
                     size: 'xl',
                     weight: 'bold',
-                    color: '#0f172a',
+                    color: isCancelled ? '#94a3b8' : '#0f172a',
+                    ...(isCancelled ? { decoration: 'line-through' } : {}),
                     margin: 'sm',
                     wrap: true,
                   },
@@ -392,7 +457,8 @@ async function sendBookingStatusNotification(
                     text: timeLabel,
                     size: 'xl',
                     weight: 'bold',
-                    color: '#0f172a',
+                    color: isCancelled ? '#94a3b8' : '#0f172a',
+                    ...(isCancelled ? { decoration: 'line-through' } : {}),
                     margin: 'xs',
                   },
                 ],
@@ -450,7 +516,7 @@ async function sendBookingStatusNotification(
   const sentLineId = firstSentMessageId(await client.pushMessage(friend.line_user_id, [
     {
       type: 'flex',
-      altText: isApproved ? '撮影日が確定しました' : 'ご予約日程について',
+      altText: isApproved ? '撮影日が確定しました' : isCancelled ? '撮影日程がキャンセルされました' : 'ご予約日程について',
       contents: flex,
     },
   ]));
