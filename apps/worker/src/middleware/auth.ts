@@ -19,6 +19,7 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path.startsWith('/auth/') ||
     path.startsWith('/booking') ||
     path.startsWith('/listing-form/') ||
+    path.startsWith('/diagnosis-form') ||
     path === '/api/integrations/stripe/webhook' ||
     path === '/api/notion/automation' ||
     path.match(/^\/api\/webhooks\/incoming\/[^/]+\/receive$/) ||
