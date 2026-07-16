@@ -17,6 +17,11 @@
 //   DIAGNOSIS_SLACK_CHANNEL_ID  — #診断依頼 のチャンネル ID（未設定なら Slack 通知なし）
 //   DIAGNOSIS_SLACK_BOT_TOKEN   — 未設定なら SELLENTRY_SLACK_BOT_TOKEN を流用
 //   DIAGNOSIS_LIFF_ID           — 診断フォーム用 LIFF ID（未設定なら LIFF_URL から導出）
+//   DIAGNOSIS_NOTION_DB_ID      — Notion「出品者リードリスト」DB ID
+//
+// リポジトリは public のため、ID 類も値はコミットせず wrangler secret で投入する:
+//   echo '<value>' | pnpm exec wrangler secret put DIAGNOSIS_NOTION_DB_ID --name line-connect-test
+//   echo '<value>' | pnpm exec wrangler secret put DIAGNOSIS_SLACK_CHANNEL_ID --name line-connect-test
 
 import { Hono } from 'hono';
 import { LineClient } from '@line-crm/line-sdk';

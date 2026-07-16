@@ -21,12 +21,6 @@ account_id = "e839830b4102c24f0d03834e09d8b101"
 [assets]
 not_found_handling = "single-page-application"
 
-[vars]
-# バッテリー劣化診断リードの起票先 Notion DB（出品者リードリスト）。ID は秘密情報ではないため vars で管理。
-DIAGNOSIS_NOTION_DB_ID = "39fbb10aac1a80b7bfead98625b4e147"
-# 診断依頼の Slack 通知先 #pj-lightning-lead（bot はクロコ=SELLENTRY_SLACK_BOT_TOKEN を流用）
-DIAGNOSIS_SLACK_CHANNEL_ID = "C0BHUN410N6"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "line-connect"
