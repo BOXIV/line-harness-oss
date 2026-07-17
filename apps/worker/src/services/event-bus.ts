@@ -271,13 +271,31 @@ async function executeAction(
         .first<{ line_user_id: string; is_following: number }>();
       if (!friend) break;
       const lineClient = new LineClient(lineAccessToken);
-      const msgType = action.params.messageType || 'text';
+      // BOXIV: templateName/templateId 指定時は送信時点の最新テンプレを解決する。
+      // （cron が日次で書き換えるテンプレ（例: friend-add-greeting の最安EV）を
+      //   automation に固定コピーせず常に最新で送るため。name は env 間で安定なので
+      //   promote 時の ID remap も不要になる）
+      let msgType = action.params.messageType || 'text';
+      let content = action.params.content;
+      if (action.params.templateName || action.params.templateId) {
+        const tpl = action.params.templateName
+          ? await db.prepare('SELECT message_type, message_content FROM templates WHERE name = ?')
+              .bind(action.params.templateName)
+              .first<{ message_type: string; message_content: string }>()
+          : await db.prepare('SELECT message_type, message_content FROM templates WHERE id = ?')
+              .bind(action.params.templateId)
+              .first<{ message_type: string; message_content: string }>();
+        if (tpl) {
+          msgType = tpl.message_type;
+          content = tpl.message_content;
+        }
+      }
       let msg: Message;
       if (msgType === 'flex') {
-        const contents = JSON.parse(action.params.content);
+        const contents = JSON.parse(content);
         msg = { type: 'flex', altText: action.params.altText || extractFlexAltText(contents), contents };
       } else {
-        msg = { type: 'text', text: action.params.content };
+        msg = { type: 'text', text: content };
       }
       // Prefer replyMessage (free) when replyToken is available
       let deliveryType: 'reply' | 'push' = 'push';
@@ -304,7 +322,7 @@ async function executeAction(
         // push 経路: 未フォロー（友だち未追加/ブロック中）には届かないため、
         // 送信失敗として記録してスキップする（黙って成功扱いにしない）。
         if (!friend.is_following) {
-          await logFailedOutgoing(db, friendId, msgType, action.params.content);
+          await logFailedOutgoing(db, friendId, msgType, content);
           break;
         }
         sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [msg]));
@@ -319,7 +337,7 @@ async function executeAction(
             `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
              VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?, ?)`,
           )
-          .bind(logId, friendId, msgType, action.params.content, sentLineId, deliveryType, jstNow())
+          .bind(logId, friendId, msgType, content, sentLineId, deliveryType, jstNow())
           .run();
       } catch (logErr) {
         console.error('event-bus send_message: failed to log to messages_log', logErr);
