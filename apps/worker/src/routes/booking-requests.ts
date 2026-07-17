@@ -111,7 +111,10 @@ bookingRequests.get('/api/booking-requests/:id', async (c) => {
     const friend = row.friend_id ? await getFriendById(c.env.DB, row.friend_id) : null;
     const slot = row.slot_id ? await getStaffAvailabilityById(c.env.DB, row.slot_id) : null;
 
-    // 同時間帯の代替スタッフ候補（変更用）
+    const staffList = await getStaffMembers(c.env.DB);
+    const staffMap = new Map(staffList.map((s) => [s.id, s]));
+
+    // 同時間帯の代替スタッフ候補（変更用）— 現担当は除外
     let alternativeStaff: unknown[] = [];
     if (slot) {
       const candidates = await findAvailableStaffForSlot(
@@ -121,13 +124,13 @@ bookingRequests.get('/api/booking-requests/:id', async (c) => {
         slot.start_time,
         slot.end_time,
       );
-      const staffList = await getStaffMembers(c.env.DB);
-      const staffMap = new Map(staffList.map((s) => [s.id, s]));
-      alternativeStaff = candidates.map((cand) => ({
-        availabilityId: cand.id,
-        staffId: cand.staff_id,
-        staffName: staffMap.get(cand.staff_id)?.name ?? null,
-      }));
+      alternativeStaff = candidates
+        .filter((cand) => cand.staff_id !== row.staff_id)
+        .map((cand) => ({
+          availabilityId: cand.id,
+          staffId: cand.staff_id,
+          staffName: staffMap.get(cand.staff_id)?.name ?? null,
+        }));
     }
 
     return c.json({
@@ -135,6 +138,7 @@ bookingRequests.get('/api/booking-requests/:id', async (c) => {
       data: {
         ...row,
         friend_name: friend?.display_name ?? null,
+        staff_name: row.staff_id ? staffMap.get(row.staff_id)?.name ?? null : null,
         slot,
         alternativeStaff,
       },
@@ -168,12 +172,55 @@ bookingRequests.put('/api/booking-requests/:id', async (c) => {
     const existing = await getBookingRequestById(c.env.DB, id);
     if (!existing) return c.json({ success: false, error: 'Not found' }, 404);
 
+    // BOXIV: 担当スタッフ(staff_id)とシフト枠(slot_id)は必ず一体で更新する。
+    // 旧実装は片方だけ更新できたため、一覧（staff_id 表示）とシフトUI（slot の持ち主に表示）が
+    // 別々のスタッフを指す不整合が起きた（例: 撮影予約 8736 = 一覧は小林・ガント×は薄井）。
+    let targetStaffId = body.staffId;
+    let targetSlotId = body.slotId;
+
+    if (targetSlotId) {
+      // 枠を指定 → 担当スタッフは枠の持ち主に自動追従（同一枠の再指定でも同期＝自己修復）
+      const newSlot = await getStaffAvailabilityById(c.env.DB, targetSlotId);
+      if (!newSlot) {
+        return c.json({ success: false, error: '指定されたシフト枠が見つかりません' }, 404);
+      }
+      if (targetSlotId !== existing.slot_id && newSlot.is_booked) {
+        return c.json({ success: false, error: 'そのシフト枠は既に他の予約で埋まっています' }, 409);
+      }
+      if (targetStaffId && targetStaffId !== newSlot.staff_id) {
+        return c.json({ success: false, error: 'staffId とシフト枠の担当スタッフが一致しません' }, 400);
+      }
+      targetStaffId = newSlot.staff_id;
+    } else if (targetStaffId && targetStaffId !== existing.staff_id && targetSlotId === undefined) {
+      // 担当だけ指定 → 同一日時・同一エリアの変更先スタッフの空き枠にシフト枠も差し替える
+      const currentSlot = existing.slot_id
+        ? await getStaffAvailabilityById(c.env.DB, existing.slot_id)
+        : null;
+      if (currentSlot) {
+        const candidates = await findAvailableStaffForSlot(
+          c.env.DB,
+          currentSlot.area,
+          currentSlot.date,
+          currentSlot.start_time,
+          currentSlot.end_time,
+        );
+        const newSlot = candidates.find((s) => s.staff_id === targetStaffId);
+        if (!newSlot) {
+          return c.json(
+            { success: false, error: '変更先スタッフに同一日時の空き枠がありません（先にシフトを登録してください）' },
+            409,
+          );
+        }
+        targetSlotId = newSlot.id;
+      }
+    }
+
     // staffロールは自分担当のみ編集可、かつ担当変更は不可
     if (currentStaff?.role === 'staff') {
       if (existing.staff_id !== currentStaff.id) {
         return c.json({ success: false, error: 'Forbidden' }, 403);
       }
-      if (body.staffId && body.staffId !== currentStaff.id) {
+      if (targetStaffId && targetStaffId !== currentStaff.id) {
         return c.json({ success: false, error: 'Forbidden: cannot reassign booking' }, 403);
       }
       // approve/reject/cancel は専用エンドポイント(manager以上)に一本化。staff が汎用 PUT で
@@ -184,17 +231,21 @@ bookingRequests.put('/api/booking-requests/:id', async (c) => {
       }
     }
 
-    // スロット差し替え処理
-    if (body.slotId !== undefined && body.slotId !== existing.slot_id) {
+    // スロット差し替え（staff_id も同時に更新され、一覧とシフトUIの整合が保たれる）
+    if (targetSlotId !== undefined && targetSlotId !== existing.slot_id) {
       if (existing.slot_id) {
         await markSlotUnbooked(c.env.DB, existing.slot_id);
       }
-      if (body.slotId) {
-        await markSlotBooked(c.env.DB, body.slotId);
+      if (targetSlotId) {
+        await markSlotBooked(c.env.DB, targetSlotId);
       }
     }
 
-    const updated = await updateBookingRequest(c.env.DB, id, body);
+    const updated = await updateBookingRequest(c.env.DB, id, {
+      ...body,
+      staffId: targetStaffId,
+      slotId: targetSlotId,
+    });
     return c.json({ success: true, data: updated });
   } catch (err) {
     console.error('PUT /api/booking-requests/:id error:', err);

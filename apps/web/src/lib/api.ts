@@ -650,7 +650,7 @@ export const api = {
       fetchApi<ApiResponse<{
         id: string; status: string; plate_number: string | null; customer_name: string | null;
         prefecture: string; area: string; vehicle_info: string | null; notes: string | null;
-        friend_id: string | null; staff_id: string | null; friend_name: string | null;
+        friend_id: string | null; staff_id: string | null; friend_name: string | null; staff_name: string | null;
         candidate_1_date: string | null; candidate_1_start: string | null; candidate_1_end: string | null;
         candidate_2_date: string | null; candidate_2_start: string | null; candidate_2_end: string | null;
         candidate_3_date: string | null; candidate_3_start: string | null; candidate_3_end: string | null;

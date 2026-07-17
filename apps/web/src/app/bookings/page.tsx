@@ -68,6 +68,7 @@ export default function BookingsPage() {
     area: string
     notes: string | null
     friend_name: string | null
+    staff_name: string | null
     candidate_1_date: string | null; candidate_1_start: string | null; candidate_1_end: string | null
     candidate_2_date: string | null; candidate_2_start: string | null; candidate_2_end: string | null
     candidate_3_date: string | null; candidate_3_start: string | null; candidate_3_end: string | null
@@ -76,6 +77,9 @@ export default function BookingsPage() {
     alternativeStaff: Array<{ availabilityId: string; staffId: string; staffName: string | null }>
   } | null>(null)
   const [otherCandidate, setOtherCandidate] = useState<1 | 2 | 3>(1)
+  // 担当スタッフ変更: ドロップダウンで選択→「変更」ボタンで確定（即時変更による誤操作防止）
+  const [altSlotId, setAltSlotId] = useState('')
+  const [changingStaff, setChangingStaff] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -102,6 +106,7 @@ export default function BookingsPage() {
   async function openDetail(id: string) {
     setSelectedId(id)
     setOtherCandidate(1)
+    setAltSlotId('')
     setNotice('') // 別の予約を操作し始めたら直近のキャンセル成功バナーは消す
     try {
       const res = await api.bookingRequests.get(id)
@@ -116,13 +121,20 @@ export default function BookingsPage() {
   }
 
   async function changeStaff(slotId: string) {
-    if (!detail) return
+    if (!detail || !slotId) return
+    setChangingStaff(true)
     try {
-      await api.bookingRequests.update(detail.id, { slotId })
+      const res = await api.bookingRequests.update(detail.id, { slotId })
+      if (!res.success) {
+        setError(res.error || 'スタッフ変更に失敗しました')
+        return
+      }
       await openDetail(detail.id)
       await load()
     } catch {
       setError('スタッフ変更に失敗しました')
+    } finally {
+      setChangingStaff(false)
     }
   }
 
@@ -364,6 +376,9 @@ export default function BookingsPage() {
                   <div className="bg-gray-50 rounded-lg p-3">
                     <div className="text-xs text-gray-500 mb-1">予約日時</div>
                     <div className="font-bold text-gray-900">{detail.slot.date} {detail.slot.start_time}〜{detail.slot.end_time}</div>
+                    {detail.staff_name && (
+                      <div className="text-sm text-gray-700 mt-1">担当スタッフ: <span className="font-bold">{detail.staff_name}</span></div>
+                    )}
                   </div>
                 )}
 
@@ -403,16 +418,26 @@ export default function BookingsPage() {
                 {detail.alternativeStaff.length > 0 && (
                   <div>
                     <div className="text-xs text-gray-500 mb-2">担当スタッフを変更</div>
-                    <div className="space-y-1">
-                      {detail.alternativeStaff.map((alt) => (
-                        <button
-                          key={alt.availabilityId}
-                          onClick={() => changeStaff(alt.availabilityId)}
-                          className="block w-full text-left px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
-                        >
-                          {alt.staffName || alt.staffId}
-                        </button>
-                      ))}
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={altSlotId}
+                        onChange={(e) => setAltSlotId(e.target.value)}
+                        className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white text-gray-900"
+                      >
+                        <option value="">変更先のスタッフを選択</option>
+                        {detail.alternativeStaff.map((alt) => (
+                          <option key={alt.availabilityId} value={alt.availabilityId}>
+                            {alt.staffName || alt.staffId}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => changeStaff(altSlotId)}
+                        disabled={!altSlotId || changingStaff}
+                        className="shrink-0 px-5 py-2 text-sm font-bold text-white bg-gray-900 rounded-lg hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {changingStaff ? '変更中…' : '変更'}
+                      </button>
                     </div>
                   </div>
                 )}
