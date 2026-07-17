@@ -195,7 +195,9 @@ function yen(n: number): string {
 
 function buildBubble2(env: Env['Bindings'], picks: Listing[], teslaUnder3m: number): unknown {
   const MEDIA = `${env.WORKER_URL || 'https://line-connect-test.boxiv.workers.dev'}/media/bubbles`;
-  const rows: unknown[] = [];
+  const rows: unknown[] = [
+    { type: 'text', text: '現在最安のテスラを3台ご紹介', weight: 'bold', size: 'md', color: '#111111' },
+  ];
   picks.forEach((p, i) => {
     if (i > 0) rows.push({ type: 'separator', margin: 'lg', color: '#E6E6EA' });
     const info: unknown[] = [
@@ -214,9 +216,13 @@ function buildBubble2(env: Env['Bindings'], picks: Listing[], teslaUnder3m: numb
       type: 'box', layout: 'horizontal', spacing: 'md', margin: 'lg', alignItems: 'center',
       contents: [
         {
-          type: 'image',
-          url: p.imageUrl || `${MEDIA}/thumb-wide.jpg`,
-          size: '100px', aspectRatio: '1200:630', aspectMode: 'cover', flex: 0,
+          // 角丸クリップ用ラッパー（flex image 自体は cornerRadius 不可）
+          type: 'box', layout: 'vertical', cornerRadius: '10px', width: '100px', flex: 0,
+          contents: [{
+            type: 'image',
+            url: p.imageUrl || `${MEDIA}/thumb-wide.jpg`,
+            size: 'full', aspectRatio: '1200:630', aspectMode: 'cover',
+          }],
         },
         {
           type: 'box', layout: 'vertical', spacing: 'xs', flex: 1,
