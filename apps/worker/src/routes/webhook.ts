@@ -140,6 +140,13 @@ async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
+    // 再フォロー（ブロック解除/削除後の再追加）判定。upsert 前の既存レコードが
+    // is_following=0、または follow イベントの isUnblocked（SDK 型に未定義のため安全に参照）。
+    const existingFriend = await getFriendByLineUserId(db, userId);
+    const isReFollow =
+      (existingFriend != null && !existingFriend.is_following) ||
+      (event as { follow?: { isUnblocked?: boolean } }).follow?.isUnblocked === true;
+
     // プロフィール取得 & 友だち登録/更新
     let profile;
     try {
@@ -166,9 +173,17 @@ async function handleEvent(
     // BOXIV: 友だち追加完了フロー — 出品フォーム連携済みかで分岐する。
     //   連携済み(listing_entries.status='linked') → 出品価格お知らせ(listing_link_completed)を送信。
     //     OAuth 時に未フォロー/ブロックで送れなかった分の救済になり、後から友だち追加した人にも届く。
-    //     二重送信は friend.metadata フラグ(listing_price_notified)で防止。連携済みは挨拶(friend_add)を送らない。
-    //   未連携(ふつうのユーザ: フォーム未入力/広告登録のみ) → 既存の friend_add シナリオ（挨拶）。
-    const linkedEntry = await getLinkedEntryByLineUserId(db, userId);
+    //     二重送信は friend.metadata フラグ(listing_price_notified)で防止。
+    //     価格お知らせ送信済みの「再フォロー」（ブロック解除/再追加）には挨拶(friend_add)を送る。
+    //   未連携(ふつうのユーザ: フォーム未入力/広告登録のみ) → friend_add シナリオ + 挨拶。
+    //     連携ボタン(bot_prompt=aggressive)の友だち追加では follow がコールバックの markLinked
+    //     （連携書き込み）より数秒先行するため、新規フォローは 5 秒待って再判定してから挨拶する
+    //     （即判定すると連携直後のユーザへ挨拶を誤送する）。再フォローは連携フローと競合しないため待たない。
+    let linkedEntry = await getLinkedEntryByLineUserId(db, userId);
+    if (!linkedEntry && !isReFollow) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      linkedEntry = await getLinkedEntryByLineUserId(db, userId);
+    }
     if (linkedEntry) {
       if (!(await hasListingPriceNotified(db, friend.id))) {
         await fireEvent(
@@ -183,10 +198,20 @@ async function handleEvent(
         );
         await markListingPriceNotified(db, friend.id);
         console.log(`follow: 連携済み出品ユーザへ listing_link_completed を送信 friend=${friend.id} match_key=${linkedEntry.match_key}`);
+      } else if (isReFollow) {
+        // ブロック解除/再追加: 価格お知らせは送信済みなので、挨拶で再開を迎える。
+        await fireEvent(
+          db,
+          'friend_add',
+          { friendId: friend.id, eventData: { displayName: friend.display_name } },
+          lineAccessToken,
+          lineAccountId,
+        );
+        console.log(`follow: 連携済みの再フォロー — 挨拶(friend_add)を送信 friend=${friend.id}`);
       } else {
         console.log(`follow: 連携済みだが価格お知らせ送信済み — スキップ friend=${friend.id}`);
       }
-      return; // 連携済みは friend_add（挨拶/イベント）を送らず終了
+      return; // 連携済みはシナリオ登録（未連携新規向けのステップ配信）を行わない
     }
 
     // friend_add シナリオに登録（このアカウントのシナリオのみ）

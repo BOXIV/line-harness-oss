@@ -399,6 +399,9 @@ listingFormLine.get('/listing-form/callback', async (c) => {
   let notionPageId: string | null = null;
   let slackThreadTs: string | null = null;
   let linkedEntry: Awaited<ReturnType<typeof markLinked>> = null;
+  // ⚠️ markLinked は follow webhook 側の「5秒ホールド再判定」(webhook.ts) が待つ書き込み。
+  // この呼び出しより前に遅い外部処理（Notion/Slack 等）を挟むとホールドに間に合わず、
+  // 連携ユーザへ挨拶を誤送するため、必ずコールバック最初の書き込みのままにすること。
   try {
     const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
     if (!entry) {
