@@ -47,6 +47,8 @@ import { bookingRequests } from './routes/booking-requests.js';
 import { staffAvailability } from './routes/staff-availability.js';
 // 出品フォーム LINE 連携 (BOXIV)
 import { listingFormLine } from './routes/listing-form-line.js';
+// バッテリー劣化診断 LIFF フォーム (BOXIV)
+import { diagnosisForm } from './routes/diagnosis-form.boxiv.js';
 // 顧客ステータス (Notion 同期, BOXIV)
 import { friendStatus } from './routes/friend-status.boxiv.js';
 // 個別チャット送信予約 (BOXIV)
@@ -104,6 +106,13 @@ export type Env = {
     NOTION_BUYER_STATUS_PROP?: string;
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
     NOTION_AUTOMATION_SECRET?: string;       // PR6: Notion DBオートメーション Send webhook の共有シークレット（未設定なら受信口は無効）
+    // バッテリー劣化診断 LIFF フォーム (BOXIV) — 全て任意（未設定なら該当処理をスキップ）
+    SPEC_API_KEY?: string;                     // getVehicleSpecs の x-api-key
+    SPEC_API_URL?: string;                     // 既定: asia-northeast1 boxiv-share getVehicleSpecs
+    DIAGNOSIS_SLACK_CHANNEL_ID?: string;       // #診断依頼 チャンネル ID
+    DIAGNOSIS_SLACK_BOT_TOKEN?: string;        // 未設定なら SELLENTRY_SLACK_BOT_TOKEN を流用
+    DIAGNOSIS_LIFF_ID?: string;                // 診断フォーム用 LIFF ID（未設定なら LIFF_URL から導出）
+    DIAGNOSIS_NOTION_DB_ID?: string;           // Notion「出品者リードリスト」DB ID
     // 出品フォーム台帳→Notion 即起票 + 催促 (BOXIV)
     LISTING_FORM_SUBMIT_TOKEN?: string;        // /listing-form/submit の簡易共有トークン（任意）
     NOTION_SELLER_MATCH_KEY_PROP?: string;     // default: match_key
@@ -196,6 +205,9 @@ app.route('/', staffAvailability);
 
 // 出品フォーム LINE 連携 (BOXIV)
 app.route('/', listingFormLine);
+
+// バッテリー劣化診断 LIFF フォーム (BOXIV)
+app.route('/', diagnosisForm);
 
 // 顧客ステータス (BOXIV)
 app.route('/', friendStatus);
