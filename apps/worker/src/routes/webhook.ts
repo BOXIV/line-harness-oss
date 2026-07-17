@@ -177,11 +177,11 @@ async function handleEvent(
     //     価格お知らせ送信済みの「再フォロー」（ブロック解除/再追加）には挨拶(friend_add)を送る。
     //   未連携(ふつうのユーザ: フォーム未入力/広告登録のみ) → friend_add シナリオ + 挨拶。
     //     連携ボタン(bot_prompt=aggressive)の友だち追加では follow がコールバックの markLinked
-    //     （連携書き込み）より数秒先行するため、新規フォローは 5 秒待って再判定してから挨拶する
+    //     （連携書き込み）より数秒先行するため、新規フォローは 3 秒待って再判定してから挨拶する
     //     （即判定すると連携直後のユーザへ挨拶を誤送する）。再フォローは連携フローと競合しないため待たない。
     let linkedEntry = await getLinkedEntryByLineUserId(db, userId);
     if (!linkedEntry && !isReFollow) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 3000));
       linkedEntry = await getLinkedEntryByLineUserId(db, userId);
     }
     if (linkedEntry) {
