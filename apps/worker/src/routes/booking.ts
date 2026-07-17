@@ -380,6 +380,12 @@ booking.get('/booking/confirm', async (c) => {
   const start = c.req.query('start');
   const end = c.req.query('end');
   if (!token || !date || !start || !end) return renderError('パラメータが不足しています');
+  // date/start/end はこの後 HTML 属性値やテキストへ展開される。/booking/slots と同様に
+  // フォーマットを厳格検証して不正値を弾く（反射XSS対策 — 未検証だと ?date="><script> が
+  // 予約者の LINE 認証済みページ上で実行される）。
+  if (!isValidDateString(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(end)) {
+    return renderError('日時の形式が不正です');
+  }
 
   const record = await getBookingRequestByToken(c.env.DB, token);
   if (!record) return renderError('予約リンクが見つかりません');
@@ -569,6 +575,16 @@ booking.post('/booking/submit', async (c) => {
       );
     }
 
+    // スロットを先に原子的に確保する（二重予約対策）。ここで確保 → 予約書き込みの順にし、
+    // 確保に失敗（同時予約に負けた）したら書き込まずにエラーを返す。
+    const claimed = await markSlotBooked(c.env.DB, slot.id);
+    if (!claimed) {
+      return renderError(
+        '申し訳ございません、ご希望の時間枠は他のお客様にご予約いただきました',
+        '別の時間枠をお選びください',
+      );
+    }
+
     // booking_requests を更新
     await updateBookingRequest(c.env.DB, record.id, {
       staffId: slot.staff_id,
@@ -577,9 +593,6 @@ booking.post('/booking/submit', async (c) => {
       status: 'pending',
       friendId: record.friend_id || session.friendId,
     });
-
-    // スロットを予約済みにマーク
-    await markSlotBooked(c.env.DB, slot.id);
 
     // LINE通知（受付完了）— 非同期、失敗は無視
     try {

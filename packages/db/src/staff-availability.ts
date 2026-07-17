@@ -116,12 +116,19 @@ export async function findAvailableStaffForSlot(
   return result.results;
 }
 
-export async function markSlotBooked(db: D1Database, id: string): Promise<void> {
+/**
+ * 空きスロットを予約済みに原子的に確保する。
+ * `WHERE is_booked = 0` を条件にし、実際に更新された行数(meta.changes)で確保成否を返す。
+ * 以前は無条件 UPDATE だったため、同一スロットへの同時予約が両方成功して二重予約になった。
+ * @returns true=このリクエストが確保に成功 / false=既に他予約で埋まっていた
+ */
+export async function markSlotBooked(db: D1Database, id: string): Promise<boolean> {
   const now = jstNow();
-  await db
-    .prepare(`UPDATE staff_availability SET is_booked = 1, updated_at = ? WHERE id = ?`)
+  const res = await db
+    .prepare(`UPDATE staff_availability SET is_booked = 1, updated_at = ? WHERE id = ? AND is_booked = 0`)
     .bind(now, id)
     .run();
+  return (res.meta?.changes ?? 0) === 1;
 }
 
 export async function markSlotUnbooked(db: D1Database, id: string): Promise<void> {

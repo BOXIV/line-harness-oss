@@ -259,9 +259,18 @@ async function executeAction(
       await removeTagFromFriend(db, friendId!, action.params.tagId);
       break;
 
-    case 'start_scenario':
-      await enrollFriendInScenario(db, friendId!, action.params.scenarioId);
+    case 'start_scenario': {
+      // 二重登録ガード: automation が二度発火（キーワード重複・postback連打・再フォロー）しても
+      // 同一シナリオに重複エンロールしない（重複するとcronがドリップ全体を二重配信する）。
+      const alreadyEnrolled = await db
+        .prepare('SELECT id FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ?')
+        .bind(friendId!, action.params.scenarioId)
+        .first<{ id: string }>();
+      if (!alreadyEnrolled) {
+        await enrollFriendInScenario(db, friendId!, action.params.scenarioId);
+      }
       break;
+    }
 
     case 'send_message': {
       if (!lineAccessToken || !friendId) break;

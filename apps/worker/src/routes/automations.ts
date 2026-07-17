@@ -8,6 +8,7 @@ import {
   getAutomationLogs,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const automations = new Hono<Env>();
 
@@ -84,7 +85,7 @@ automations.get('/api/automations/:id', async (c) => {
   }
 });
 
-automations.post('/api/automations', async (c) => {
+automations.post('/api/automations', requireRole('owner','admin'), async (c) => {
   try {
     const body = await c.req.json<{
       name: string;
@@ -122,7 +123,7 @@ automations.post('/api/automations', async (c) => {
   }
 });
 
-automations.put('/api/automations/:id', async (c) => {
+automations.put('/api/automations/:id', requireRole('owner','admin'), async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -147,7 +148,7 @@ automations.put('/api/automations/:id', async (c) => {
   }
 });
 
-automations.delete('/api/automations/:id', async (c) => {
+automations.delete('/api/automations/:id', requireRole('owner','admin'), async (c) => {
   try {
     await deleteAutomation(c.env.DB, c.req.param('id'));
     return c.json({ success: true, data: null });

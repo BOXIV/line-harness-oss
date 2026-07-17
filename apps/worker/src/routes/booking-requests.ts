@@ -231,13 +231,18 @@ bookingRequests.put('/api/booking-requests/:id', async (c) => {
       }
     }
 
-    // スロット差し替え（staff_id も同時に更新され、一覧とシフトUIの整合が保たれる）
+    // スロット差し替え（staff_id も同時に更新され、一覧とシフトUIの整合が保たれる）。
+    // 新枠を先に原子的に確保 → 成功時のみ旧枠を開放する。順序を逆にすると、確保失敗時に
+    // 旧枠だけ開放されてどの枠も押さえていない不整合になる。
     if (targetSlotId !== undefined && targetSlotId !== existing.slot_id) {
+      if (targetSlotId) {
+        const claimed = await markSlotBooked(c.env.DB, targetSlotId);
+        if (!claimed) {
+          return c.json({ success: false, error: 'そのシフト枠は既に他の予約で埋まっています' }, 409);
+        }
+      }
       if (existing.slot_id) {
         await markSlotUnbooked(c.env.DB, existing.slot_id);
-      }
-      if (targetSlotId) {
-        await markSlotBooked(c.env.DB, targetSlotId);
       }
     }
 

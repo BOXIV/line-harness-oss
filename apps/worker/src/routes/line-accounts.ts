@@ -97,10 +97,14 @@ lineAccounts.get('/api/line-accounts/:id', async (c) => {
     if (!account) {
       return c.json({ success: false, error: 'LINE account not found' }, 404);
     }
+    // チャンネルシークレット/アクセストークンは owner/admin のみに開示する。
+    // 以前は role !== 'staff' 判定で manager にも全開示しており、manager が OA を
+    // アプリ外から直接操作（なりすまし送信・友だち吸い出し）できる漏洩があった。
     const staff = c.get('staff');
-    const data = staff?.role === 'staff'
-      ? serializeLineAccount(account)
-      : serializeLineAccountFull(account);
+    const canSeeSecrets = staff?.role === 'owner' || staff?.role === 'admin';
+    const data = canSeeSecrets
+      ? serializeLineAccountFull(account)
+      : serializeLineAccount(account);
     return c.json({ success: true, data });
   } catch (err) {
     console.error('GET /api/line-accounts/:id error:', err);
