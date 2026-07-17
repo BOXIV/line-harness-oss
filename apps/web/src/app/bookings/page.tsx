@@ -68,6 +68,7 @@ export default function BookingsPage() {
     area: string
     notes: string | null
     friend_name: string | null
+    staff_name: string | null
     candidate_1_date: string | null; candidate_1_start: string | null; candidate_1_end: string | null
     candidate_2_date: string | null; candidate_2_start: string | null; candidate_2_end: string | null
     candidate_3_date: string | null; candidate_3_start: string | null; candidate_3_end: string | null
@@ -364,6 +365,9 @@ export default function BookingsPage() {
                   <div className="bg-gray-50 rounded-lg p-3">
                     <div className="text-xs text-gray-500 mb-1">予約日時</div>
                     <div className="font-bold text-gray-900">{detail.slot.date} {detail.slot.start_time}〜{detail.slot.end_time}</div>
+                    {detail.staff_name && (
+                      <div className="text-sm text-gray-700 mt-1">担当スタッフ: <span className="font-bold">{detail.staff_name}</span></div>
+                    )}
                   </div>
                 )}
 
