@@ -49,6 +49,8 @@ import { staffAvailability } from './routes/staff-availability.js';
 import { listingFormLine } from './routes/listing-form-line.js';
 // バッテリー劣化診断 LIFF フォーム (BOXIV)
 import { diagnosisForm } from './routes/diagnosis-form.boxiv.js';
+// 最安EVピックアップ日次更新 (BOXIV)
+import { refreshCheapestListings } from './services/cheapest-listings.boxiv.js';
 // 顧客ステータス (Notion 同期, BOXIV)
 import { friendStatus } from './routes/friend-status.boxiv.js';
 // 個別チャット送信予約 (BOXIV)
@@ -209,6 +211,12 @@ app.route('/', listingFormLine);
 // バッテリー劣化診断 LIFF フォーム (BOXIV)
 app.route('/', diagnosisForm);
 
+// 最安EVピックアップの手動更新（管理用・要Bearer）
+app.post('/api/admin/refresh-cheapest', async (c) => {
+  const result = await refreshCheapestListings(c.env);
+  return c.json({ success: result.ok, data: result });
+});
+
 // 顧客ステータス (BOXIV)
 app.route('/', friendStatus);
 
@@ -337,6 +345,11 @@ async function scheduled(
   if (minute === 0 && hour % 12 === 0) {
     jobs.push(reconcileNotionStatuses(env.DB, env));
   }
+
+  // BOXIV: 毎日 UTC 21:00 (= JST 06:00) に最安EVピックアップ更新を開始。
+  // サブリクエスト上限対策で1回40ページずつの分割巡回（D1のcrawl_stateで継続）。
+  // 21:00 以外の 5分tick では「進行中の巡回があれば続きだけ」実行する（init=false は state 無しなら noop）。
+  jobs.push(refreshCheapestListings(env, { init: minute === 0 && hour === 21 }));
 
   await Promise.allSettled(jobs);
 }
