@@ -114,8 +114,6 @@ export function renderFormPage(liffId: string): string {
 
   /* ───────── FORM ───────── */
   main{ max-width:480px; margin:0 auto; padding:44px 22px 72px; }
-  .fbrand{ width:118px; margin-bottom:22px; }
-  .fbrand svg{ width:100%; height:auto; display:block; }
   h2.formtitle{ color:var(--ink); font-size:23px; font-weight:700; line-height:1.5; }
   .formlede{ color:var(--mute); font-size:13px; margin-top:8px; }
   .steps{ display:flex; gap:8px; margin-top:18px; }
@@ -162,7 +160,7 @@ export function renderFormPage(liffId: string): string {
   #done .mark svg{ width:26px; height:26px; }
   #done h3{ color:var(--ink); font-size:19px; margin:14px 0 6px; }
   #done p{ font-size:13.5px; color:var(--mute); }
-  footer{ margin-top:52px; font-size:10.5px; color:var(--mute); letter-spacing:.06em; text-align:center; }
+  footer{ margin-top:26px; font-size:10.5px; color:var(--mute); letter-spacing:.06em; text-align:center; }
 
   @media (prefers-reduced-motion: reduce){
     html{ scroll-behavior:auto; }
@@ -198,7 +196,6 @@ export function renderFormPage(liffId: string): string {
 
 <!-- ───────── フォーム ───────── -->
 <main id="form-section">
-  <div class="fbrand">${logoSvg('#1a1a1a', 'form')}</div>
   <h2 class="formtitle">テスラバッテリー診断</h2>
   <p class="formlede">入力いただいた車台番号（VIN）から車両データを照会し、<b>バッテリー劣化率</b>と<b>現在の充電容量</b>を診断します。</p>
   <div class="steps"><span>① 1分で入力</span><span>② データ照会</span><span>③ LINEで結果</span></div>
@@ -261,7 +258,7 @@ export function renderFormPage(liffId: string): string {
     <p>診断結果は <b>1営業日以内</b> にLINEでお送りします。<br>そのままお待ちください。</p>
   </div>
 
-  <footer>BOXIV LIGHTNING — EV個人間売買プラットフォーム</footer>
+  <footer>©BOXIV Inc 2026</footer>
 </main>
 
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
