@@ -69,33 +69,34 @@ function parseListing(url: string, html: string): Listing | null {
     }
   }
 
-  // ステータス判定: ペイロードには選択肢定義（商談中/成約済み 等）が全ページ共通で
-  // 含まれるため文字列の有無では判定できない。定義ノード {key,name,...} の uid を集め、
-  // コンテンツ側からその uid が「参照」されている場合のみ商談中/成約済みとみなす。
-  const OPT_NAMES = new Set(['商談中', '成約済み', '成約済', 'SOLD', '売約済み', '売約済']);
-  const optUidIdx = new Set<number>();
+  // ステータス判定: コンテンツ本体（20+フィールドの dict、値はすべて参照index）の
+  // select フィールド（{id,title} 形式）から実ステータスを解決する。
+  // 選択肢enum（出品中/商談中/成約済み/掲載終了/期限切れ）は全ページ共通で埋まるため、
+  // 文字列の有無や選択肢uidへの参照では判定できない（実測: cwNYl8gK フィールド）。
+  const STATUS_NAMES = new Set(['出品中', '商談中', '成約済み', '掲載終了', '期限切れ']);
+  let status: string | null = null;
+  const resolveAt = (i: unknown): unknown =>
+    typeof i === 'number' && i >= 0 && i < payload.length ? payload[i] : undefined;
   for (const node of payload) {
-    if (node && typeof node === 'object' && !Array.isArray(node)) {
-      const rec = node as Record<string, unknown>;
-      if (typeof rec.key === 'number' && typeof rec.name === 'number') {
-        const nm = payload[rec.name];
-        if (typeof nm === 'string' && OPT_NAMES.has(nm.trim())) optUidIdx.add(rec.key);
+    if (status) break;
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+    const rec = node as Record<string, unknown>;
+    const vals = Object.values(rec);
+    if (vals.length < 20 || !vals.every((v) => typeof v === 'number')) continue; // content record のみ
+    for (const vi of vals) {
+      const v = resolveAt(vi);
+      if (v && typeof v === 'object' && !Array.isArray(v) && 'title' in (v as object)) {
+        const t = resolveAt((v as Record<string, unknown>).title);
+        const name = typeof t === 'string' ? t : (v as Record<string, unknown>).title;
+        if (typeof name === 'string' && STATUS_NAMES.has(name.trim())) {
+          status = name.trim();
+          break;
+        }
       }
     }
   }
-  let negotiating = false;
-  if (optUidIdx.size > 0) {
-    for (const node of payload) {
-      if (negotiating) break;
-      if (node && typeof node === 'object' && !Array.isArray(node)) {
-        const rec = node as Record<string, unknown>;
-        if (typeof rec.key === 'number' && typeof rec.name === 'number') continue; // 定義自身
-        negotiating = Object.values(rec).some((v) => typeof v === 'number' && optUidIdx.has(v));
-      } else if (Array.isArray(node) && node.length > 0 && node.every((v) => typeof v === 'number')) {
-        negotiating = (node as number[]).some((v) => optUidIdx.has(v));
-      }
-    }
-  }
+  // 「出品中」のみアクティブ扱い（status不明はアクティブ寄りに倒すと終了車が混ざるため除外）
+  const negotiating = status !== '出品中';
 
   // 走行距離: 説明文の「走行距離48,946km」/「走行 2.1万km」など
   let mileageKm: number | null = null;
