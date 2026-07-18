@@ -123,9 +123,39 @@ type CrawlState = {
   startedAt: string;
 };
 
+// D1 の "storage operation exceeded timeout ... object to be reset" 等は Durable Object 側の
+// 一時的な過負荷で起きる再試行可能エラー。cron の 5分tick では配信系ジョブと同一D1へ同時アクセス
+// するため混雑で起きやすい。このモジュールが触る D1 操作はすべて冪等（純読取 / upsert / delete /
+// トランザクション batch / 上書き UPDATE）なので、短いバックオフで数回だけ再試行してクロール全体を
+// 落とさない。冪等でない操作をここに通してはいけない。
+function isTransientD1Error(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /storage operation exceeded timeout|object to be reset|reset because its code was updated|Network connection lost/i.test(
+    msg
+  );
+}
+
+async function d1Retry<T>(label: string, op: () => Promise<T>): Promise<T> {
+  // 失敗時のみ発生する遅延。cron の壁時計は十分に余裕があるため、一時的なD1ヒカップを
+  // 跨げる程度に長めに取る（合計 ~4.6s）。恒常的失敗は上限で諦めて呼び出し側の警告に委ねる。
+  const backoffMs = [400, 1200, 3000];
+  for (let attempt = 0; attempt <= backoffMs.length; attempt++) {
+    try {
+      return await op();
+    } catch (e) {
+      if (attempt === backoffMs.length || !isTransientD1Error(e)) throw e;
+      console.warn(`cheapest-listings: D1 ${label} 一時エラー、再試行 ${attempt + 1}/${backoffMs.length}`, e);
+      await new Promise((r) => setTimeout(r, backoffMs[attempt]));
+    }
+  }
+  // ループは return か throw で必ず抜ける（TS の戻り値解析用の到達不能行）
+  throw new Error(`d1Retry(${label}): unreachable`);
+}
+
 async function loadState(env: Env['Bindings']): Promise<CrawlState | null> {
-  const row = await env.DB.prepare("SELECT value FROM market_stats WHERE key = 'crawl_state'")
-    .first<{ value: string }>();
+  const row = await d1Retry('loadState', () =>
+    env.DB.prepare("SELECT value FROM market_stats WHERE key = 'crawl_state'").first<{ value: string }>()
+  );
   if (!row) return null;
   try {
     const s = JSON.parse(row.value) as CrawlState;
@@ -139,13 +169,19 @@ async function loadState(env: Env['Bindings']): Promise<CrawlState | null> {
 
 async function saveState(env: Env['Bindings'], s: CrawlState | null): Promise<void> {
   if (s === null) {
-    await env.DB.prepare("DELETE FROM market_stats WHERE key = 'crawl_state'").run();
+    await d1Retry('saveState.delete', () =>
+      env.DB.prepare("DELETE FROM market_stats WHERE key = 'crawl_state'").run()
+    );
     return;
   }
-  await env.DB.prepare(
-    "INSERT INTO market_stats (key, value, updated_at) VALUES ('crawl_state', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now')) " +
-      'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-  ).bind(JSON.stringify(s)).run();
+  await d1Retry('saveState.upsert', () =>
+    env.DB.prepare(
+      "INSERT INTO market_stats (key, value, updated_at) VALUES ('crawl_state', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now')) " +
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+    )
+      .bind(JSON.stringify(s))
+      .run()
+  );
 }
 
 // 1バッチ分（サブリクエスト上限50の内側に収める）だけ巡回して state を進める。
@@ -306,6 +342,13 @@ export async function refreshCheapestListings(
     listings = step;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    // D1 の一時エラーは d1Retry で再試行済み。ここに来ても crawl_state は直前の成功時点で保持され、
+    // 次の5分tickで自動再開・完走する（実測: 21:00 init → 約11分後に完了）。恒常的な誤報を避けるため
+    // 一時D1エラーは Slack に出さず console のみ。sitemap 取得失敗などクロール自体が開始不能な障害だけ警告する。
+    if (isTransientD1Error(e)) {
+      console.warn('cheapest-listings: D1 一時エラーで今tickは中断（次tickで自動再開）', msg);
+      return { ok: false, error: msg };
+    }
     await slackWarn(env, `クロール失敗（${msg}）。前回データを維持します。`);
     return { ok: false, error: msg };
   }
@@ -334,20 +377,24 @@ export async function refreshCheapestListings(
         'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
     ).bind(String(teslaUnder3m), now),
   ];
-  await env.DB.batch(stmts);
+  await d1Retry('cheapest.batch', () => env.DB.batch(stmts));
 
   // friend-add-greeting テンプレ（carousel）の2枚目を再生成
-  const row = await env.DB.prepare('SELECT id, message_content FROM templates WHERE name = ?')
-    .bind('friend-add-greeting')
-    .first<{ id: string; message_content: string }>();
+  const row = await d1Retry('template.read', () =>
+    env.DB.prepare('SELECT id, message_content FROM templates WHERE name = ?')
+      .bind('friend-add-greeting')
+      .first<{ id: string; message_content: string }>()
+  );
   if (row) {
     try {
       const carousel = JSON.parse(row.message_content) as { type: string; contents: unknown[] };
       if (carousel.type === 'carousel' && Array.isArray(carousel.contents) && carousel.contents.length >= 2) {
         carousel.contents[1] = buildBubble2(env, picks, teslaUnder3m);
-        await env.DB.prepare("UPDATE templates SET message_content = ?, updated_at = datetime('now') WHERE id = ?")
-          .bind(JSON.stringify(carousel), row.id)
-          .run();
+        await d1Retry('template.update', () =>
+          env.DB.prepare("UPDATE templates SET message_content = ?, updated_at = datetime('now') WHERE id = ?")
+            .bind(JSON.stringify(carousel), row.id)
+            .run()
+        );
       } else {
         await slackWarn(env, 'friend-add-greeting が carousel 形式でないためテンプレ更新をスキップ。');
       }

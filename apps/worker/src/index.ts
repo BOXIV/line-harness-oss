@@ -108,8 +108,11 @@ export type Env = {
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
     NOTION_AUTOMATION_SECRET?: string;       // PR6: Notion DBオートメーション Send webhook の共有シークレット（未設定なら受信口は無効）
     // バッテリー劣化診断 LIFF フォーム (BOXIV) — 全て任意（未設定なら該当処理をスキップ）
-    SPEC_API_KEY?: string;                     // getVehicleSpecs の x-api-key
-    SPEC_API_URL?: string;                     // 既定: asia-northeast1 boxiv-share getVehicleSpecs
+    // spec_API は listing パイプラインと同じ VEHICLE_SPECS_* を正とする。旧 SPEC_* は後方互換で許容。
+    VEHICLE_SPECS_API_KEY?: string;            // getVehicleSpecs の x-api-key（正）
+    VEHICLE_SPECS_API_URL?: string;            // 既定: asia-northeast1 boxiv-share getVehicleSpecs
+    SPEC_API_KEY?: string;                     // 後方互換（旧名）
+    SPEC_API_URL?: string;                     // 後方互換（旧名）
     DIAGNOSIS_SLACK_CHANNEL_ID?: string;       // #診断依頼 チャンネル ID
     DIAGNOSIS_SLACK_BOT_TOKEN?: string;        // 未設定なら SELLENTRY_SLACK_BOT_TOKEN を流用
     DIAGNOSIS_LIFF_ID?: string;                // 診断フォーム用 LIFF ID（未設定なら LIFF_URL から導出）
@@ -333,12 +336,21 @@ async function scheduled(
     jobs.push(reconcileNotionStatuses(env.DB, env));
   }
 
+  await Promise.allSettled(jobs);
+
   // BOXIV: 毎日 UTC 21:00 (= JST 06:00) に最安EVピックアップ更新を開始。
   // サブリクエスト上限対策で1回40ページずつの分割巡回（D1のcrawl_stateで継続）。
   // 21:00 以外の 5分tick では「進行中の巡回があれば続きだけ」実行する（init=false は state 無しなら noop）。
-  jobs.push(refreshCheapestListings(env, { init: minute === 0 && hour === 21 }));
-
-  await Promise.allSettled(jobs);
+  //
+  // ⚠️ 上の配信系ジョブ群と同時に走らせない（Promise.allSettled の外・後で単独実行）。
+  // クロールの saveState は他ジョブの D1 書き込みと同一DBで競合すると
+  // "storage operation exceeded timeout / object to be reset" を誘発するため、同時D1負荷を避ける。
+  // 進行中でない tick は loadState 1回で noop 即return するのでコストは無視できる。
+  try {
+    await refreshCheapestListings(env, { init: minute === 0 && hour === 21 });
+  } catch (e) {
+    console.error('scheduled: refreshCheapestListings failed', e);
+  }
 }
 
 export default {
