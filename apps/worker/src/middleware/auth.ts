@@ -20,6 +20,7 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path.startsWith('/auth/') ||
     path.startsWith('/booking') ||
     path.startsWith('/listing-form/') ||
+    path === '/link/callback' || // LINE Login 共有コールバック（署名 state で検証・認証ヘッダは付かない）
     path.startsWith('/diagnosis-form') ||
     path === '/api/integrations/stripe/webhook' ||
     path === '/api/notion/automation' ||

@@ -26,111 +26,32 @@
 
 import { Hono } from 'hono';
 import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
-import { LineClient } from '@line-crm/line-sdk';
-import { checkFollowing } from '../services/friendship.boxiv.js';
 import { fireEvent } from '../services/event-bus.js';
 import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText } from '../services/slack.boxiv.js';
+import {
+  packSignedState,
+  isAllowedReturnTo,
+  escapeHtml,
+} from '../services/line-login.boxiv.js';
+import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import type { Env } from '../index.js';
 
 const listingFormLine = new Hono<Env>();
 
-// Allowed return_to hosts (open-redirect protection).
-// Dev hosts (localhost) are only honored when the Worker itself runs on a dev/test origin.
-const RETURN_TO_ALLOWED_HOSTS = [
-  'lightning.boxiv.co.jp',
-  'line-connect.boxiv.workers.dev',
-  'line-connect-test.boxiv.workers.dev',
-];
-const RETURN_TO_DEV_HOSTS = ['localhost', '127.0.0.1'];
-
-function isDevOrigin(host: string): boolean {
-  return host === 'localhost' || host === '127.0.0.1' || host.endsWith('-test.boxiv.workers.dev');
-}
-
-const STATE_TTL_MS = 30 * 60 * 1000; // 30 min
-
-// ─── HMAC state signing ─────────────────────────────────────
-
-async function hmacSign(payload: string, secret: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
-function b64urlEncode(s: string): string {
-  // UTF-8 safe: btoa() only accepts Latin1 and throws on non-Latin1 (e.g. 日本語 の display_name).
-  // Encode to bytes first so a Japanese name in the signed state doesn't 500 /listing-form/start.
-  const bytes = new TextEncoder().encode(s);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function b64urlDecode(s: string): string {
-  const pad = s + '==='.slice((s.length + 3) % 4);
-  const bin = atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-}
-
-async function packState(payloadObj: object, secret: string): Promise<string> {
-  const payload = JSON.stringify(payloadObj);
-  const payloadB64 = b64urlEncode(payload);
-  const sig = await hmacSign(payloadB64, secret);
-  return `${payloadB64}.${sig}`;
-}
-
-async function unpackState<T = unknown>(token: string, secret: string): Promise<T | null> {
-  const [payloadB64, sig] = token.split('.');
-  if (!payloadB64 || !sig) return null;
-  const expected = await hmacSign(payloadB64, secret);
-  // Constant-time compare via length + char-by-char XOR
-  if (expected.length !== sig.length) return null;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
-  if (diff !== 0) return null;
-  try {
-    return JSON.parse(b64urlDecode(payloadB64)) as T;
-  } catch {
-    return null;
-  }
-}
-
-// reqHost = hostname the Worker is currently serving on (gates localhost return_to to dev/test).
-function isAllowedReturnTo(url: string, reqHost: string): boolean {
-  try {
-    const u = new URL(url);
-    const isDevHost = RETURN_TO_DEV_HOSTS.includes(u.hostname);
-    // Scheme must be https (blocks javascript:/data:/protocol-relative); http only for dev hosts.
-    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isDevHost)) return false;
-    if (RETURN_TO_ALLOWED_HOSTS.includes(u.hostname)) return true;
-    if (isDevHost) return isDevOrigin(reqHost); // localhost honored only on a dev/test Worker origin
-    return false;
-  } catch {
-    return false;
-  }
-}
+// HMAC 署名 state / OAuth 交換 / return_to 許可判定は services/line-login.boxiv.ts に集約（複数フロー共有）。
 
 // ─── Routes ──────────────────────────────────────────────────
 
-interface ListingStateV1 {
-  v: 1;
+// フロー Strategy の契約（FlowId / LinkFlow / LinkStateBase）は services/line-login.boxiv.ts に集約。
+// ここは listing_form フロー固有の state と実装だけを持つ。
+
+/** 出品フォーム連携の署名 state。共通 LinkStateBase にフォーム固有フィールドを足す。 */
+interface ListingStateV1 extends LinkStateBase {
   form_id: string;
-  return_to: string;
   display_name: string;
-  ts: number;
 }
 
 /**
@@ -174,12 +95,14 @@ listingFormLine.get('/listing-form/start', async (c) => {
     return c.json({ success: false, error: 'LINE_LOGIN_CHANNEL_ID not configured' }, 500);
   }
 
-  const state = await packState(
-    { v: 1, form_id: formId, return_to: returnTo, display_name: displayName, ts: Date.now() } satisfies ListingStateV1,
+  const state = await packSignedState(
+    { v: 1, flow: 'listing_form', form_id: formId, return_to: returnTo, display_name: displayName, ts: Date.now() } satisfies ListingStateV1,
     c.env.SESSION_SECRET,
   );
 
-  const callbackUrl = `${workerBase}/listing-form/callback`;
+  // 共有 callback（フロー非依存の /link/callback）。LINE Login チャネルの Callback URL 登録が必要
+  // （test/prod 各 Worker の URL）。旧 /listing-form/callback は互換エイリアス（本番切替後に削除予定）。
+  const callbackUrl = `${workerBase}/link/callback`;
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
@@ -303,191 +226,189 @@ listingFormLine.post('/listing-form/submit', async (c) => {
   return c.json({ success: true }, 200);
 });
 
+// ─── フロー Strategy ─────────────────────────────────────────
+
 /**
- * GET /listing-form/callback
- *
- * LINE Login redirects here after user grants permission.
- * Exchanges code for access_token, fetches profile, posts notification to Slack,
- * then redirects to return_to (or shows success page).
+ * 出品フォーム（STUDIO / web）連携の確定処理（データ書き込み＋終端）。
+ * D1 台帳 markLinked（無ければ orphan）→ Notion 出品者DB 起票 → listing_link_completed 発火 →
+ * Slack 親メッセージ更新＋スレッド返信（すべて非致命）→ 終端 Response を返す。
+ * 終端は web 向け: 未フォロー→友だち追加ページ / return_to→?linked=1 / それ以外→success ページ。
  */
-listingFormLine.get('/listing-form/callback', async (c) => {
-  const code = c.req.query('code');
-  const stateParam = c.req.query('state');
-  const errorParam = c.req.query('error');
-  const errorDesc = c.req.query('error_description') ?? '';
-
-  if (errorParam) {
-    return c.html(renderErrorPage(`LINE 連携がキャンセルされました（${errorParam}）`, errorDesc), 400);
-  }
-  if (!code || !stateParam) {
-    return c.html(renderErrorPage('リクエストが不正です', 'パラメータが不足しています。完了ページから連携をやり直してください。'), 400);
-  }
-  if (!c.env.SESSION_SECRET) {
-    return c.json({ success: false, error: 'SESSION_SECRET not configured' }, 500);
-  }
-  if (!c.env.LINE_LOGIN_CHANNEL_ID || !c.env.LINE_LOGIN_CHANNEL_SECRET) {
-    console.error('listing-form callback: LINE_LOGIN_CHANNEL_ID / LINE_LOGIN_CHANNEL_SECRET not configured');
-    return c.json({ success: false, error: 'LINE login not configured' }, 500);
-  }
-
-  const ctx = await unpackState<ListingStateV1>(stateParam, c.env.SESSION_SECRET);
-  if (!ctx || ctx.v !== 1) {
-    return c.html(renderErrorPage('リンクが無効です', 'お手数ですが、完了ページから連携をやり直してください。'), 400);
-  }
-  if (Date.now() - ctx.ts > STATE_TTL_MS) {
-    return c.html(renderErrorPage('時間切れです', '連携の有効期限（30分）が切れました。完了ページから再度お試しください。'), 400);
-  }
-
-  const reqUrl = new URL(c.req.url);
-  const workerBase = (c.env.WORKER_URL || reqUrl.origin).replace(/\/+$/, '');
-
-  // Exchange code → tokens (redirect_uri must match the one sent in /start)
-  const callbackUrl = `${workerBase}/listing-form/callback`;
-  const tokenRes = await fetch('https://api.line.me/oauth2/v2.1/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: callbackUrl,
-      client_id: c.env.LINE_LOGIN_CHANNEL_ID,
-      client_secret: c.env.LINE_LOGIN_CHANNEL_SECRET,
-    }),
-  });
-  if (!tokenRes.ok) {
-    // redact upstream body; keep status + form_id for correlation
-    console.error(`listing-form callback: token exchange failed (status=${tokenRes.status}, form_id=${ctx.form_id})`);
-    return c.html(renderErrorPage('連携に失敗しました', 'お手数ですが、しばらくしてから完了ページより再度お試しください。'), 502);
-  }
-  const tokens = (await tokenRes.json()) as { access_token: string };
-
-  // Fetch profile
-  const profileRes = await fetch('https://api.line.me/v2/profile', {
-    headers: { Authorization: `Bearer ${tokens.access_token}` },
-  });
-  if (!profileRes.ok) {
-    console.error(`listing-form callback: profile fetch failed (status=${profileRes.status}, form_id=${ctx.form_id})`);
-    return c.html(renderErrorPage('連携に失敗しました', 'プロフィールの取得に失敗しました。お手数ですが再度お試しください。'), 502);
-  }
-  const profile = (await profileRes.json()) as {
-    userId: string;
-    displayName: string;
-    pictureUrl?: string;
-  };
-
-  // 実フォロー状態を Messaging API で判定する。bot_prompt=aggressive でも友だち追加は任意で、
-  // ユーザーがスキップすれば「連携済みだが未フォロー（=配信不達）」になる。LINE Login の
-  // profile は友だち状態と無関係なので、Messaging API の /v2/bot/profile で実態を確認する。
-  const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
-  const followStatus = await checkFollowing(lineClient, profile.userId); // true=友だち / false=未追加 / null=判定不能
-
-  // 友だちを D1 に upsert: 既に友だちで follow webhook が発火しないケースでも friend を確実に登録する。
-  // これで突合ボットの friend↔Notion 連携が lineUserId で friend を見つけられる。非致命。
-  // 実フォロー判定値を渡し、未追加で連携しただけのユーザーを is_following=1 と誤検知させない
-  // （null=判定不能のときは既存値を維持）。
-  await upsertFriend(c.env.DB, {
-    lineUserId: profile.userId,
-    displayName: profile.displayName,
-    pictureUrl: profile.pictureUrl ?? null,
-    isFollowing: followStatus === null ? undefined : followStatus,
-  }).catch((err) => {
-    console.error(`listing-form callback: upsertFriend failed (form_id=${ctx.form_id})`, err);
-  });
-
-  // BOXIV: D1 台帳 + Notion を match_key で「連携済み」に更新（旧 reconcile-daemon の Notion 起票を Worker に集約）。
-  // フォーム送信時に submit で起票済みの行へ lineUserId を追記。form_submit が無い直リンクは orphan 行を作る。非致命。
-  let notionPageId: string | null = null;
-  let slackThreadTs: string | null = null;
-  let linkedEntry: Awaited<ReturnType<typeof markLinked>> = null;
-  // ⚠️ markLinked は follow webhook 側の「3秒ホールド再判定」(webhook.ts) が待つ書き込み。
-  // この呼び出しより前に遅い外部処理（Notion/Slack 等）を挟むとホールドに間に合わず、
-  // 連携ユーザへ挨拶を誤送するため、必ずコールバック最初の書き込みのままにすること。
-  try {
-    const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
-    if (!entry) {
-      await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
-    } else {
-      linkedEntry = entry;
-      notionPageId = entry.notion_page_id;
-      slackThreadTs = entry.slack_thread_ts;
-    }
-  } catch (err) {
-    console.error(`listing-form callback: D1 markLinked failed (form_id=${ctx.form_id})`, err);
-  }
-  try {
-    await linkSellerRow(c.env, {
-      matchKey: ctx.form_id,
-      lineUserId: profile.userId,
-      displayName: profile.displayName,
-      knownPageId: notionPageId,
-    });
-  } catch (err) {
-    console.error(`listing-form callback: Notion linkSellerRow failed (form_id=${ctx.form_id})`, err);
-  }
-
-  // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
-  // 何を送るかは管理UIの automation 側で決める。非致命 — 失敗してもリダイレクトは完了。
-  await fireListingLinkCompleted(c.env, profile, ctx, followStatus).catch((err) => {
-    console.error('listing-form callback: listing_link_completed fire threw', err);
-  });
-
-  // Slack: トップのフォーム送信通知を「（LINE連携待ち）」→「（LINE連携済み）」に更新（親メッセージを書換）。非致命。
-  if (slackThreadTs && linkedEntry) {
+export const listingFormFlow: LinkFlow<ListingStateV1> = {
+  async complete(c, ctx, profile, followStatus) {
+    // BOXIV: D1 台帳 + Notion を match_key で「連携済み」に更新（旧 reconcile-daemon の Notion 起票を Worker に集約）。
+    // フォーム送信時に submit で起票済みの行へ lineUserId を追記。form_submit が無い直リンクは orphan 行を作る。非致命。
+    let notionPageId: string | null = null;
+    let slackThreadTs: string | null = null;
+    let linkedEntry: Awaited<ReturnType<typeof markLinked>> = null;
+    // ⚠️ markLinked は follow webhook 側の「3秒ホールド再判定」(webhook.ts) が待つ書き込み。
+    // この呼び出しより前に遅い外部処理（Notion/Slack 等）を挟むとホールドに間に合わず、
+    // 連携ユーザへ挨拶を誤送するため、必ず complete 最初の書き込みのままにすること。
     try {
-      const updated = buildListingFormCard({
-        name: linkedEntry.name,
-        phone: linkedEntry.phone,
-        email: linkedEntry.email,
-        carModel: pickCarModel(linkedEntry.form_data),
-        matchKey: ctx.form_id,
-        linked: true,
-      });
-      await slackUpdate(c.env, slackThreadTs, updated.fallback as string, { attachments: [updated] });
+      const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
+      if (!entry) {
+        await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
+      } else {
+        linkedEntry = entry;
+        notionPageId = entry.notion_page_id;
+        slackThreadTs = entry.slack_thread_ts;
+      }
     } catch (err) {
-      console.error(`listing-form callback: slack update (連携済み) threw (form_id=${ctx.form_id})`, err);
+      console.error(`link callback: D1 markLinked failed (form_id=${ctx.form_id})`, err);
     }
-  }
-
-  // Slack: フォーム通知スレッドに「連携完了」を返信（thread_ts があればスレッド、無ければ単発）。非致命。
-  try {
-    const notionUrl = notionPageId ? `https://www.notion.so/${notionPageId.replace(/-/g, '')}` : null;
-    const card = buildSlackCard({
-      title: '✅ LINE連携が完了しました',
-      color: '#2eb67d', // 緑: 完了
-      omitTitleBlock: true, // 本体 text と重複するため attachment 内のタイトルは出さない
-      fields: [
-        { label: '表示名', value: escapeSlackText(profile.displayName) || '—' },
-        { label: 'LINE userId', value: `\`${profile.userId}\`` },
-        { label: 'Notion', value: notionUrl ? `<${notionUrl}|出品者リストを開く>` : null },
-        { label: 'match_key', value: `\`${ctx.form_id}\`` },
-      ],
-    });
-    await slackPost(c.env, card.fallback as string, { threadTs: slackThreadTs, attachments: [card] });
-  } catch (err) {
-    console.error(`listing-form callback: slack post threw (form_id=${ctx.form_id})`, err);
-  }
-
-  // 未フォロー（友だち追加を断った/まだ追加していない）の場合は、サンクスページではなく
-  // 友だち追加ページを表示する。連携（match_key↔lineUserId、Notion 起票）は完了しているが、
-  // 友だち追加が無いとメッセージが届かないため。追加後は follow webhook が受信を有効化する。
-  if (followStatus === false) {
-    const basicId = await fetchBotBasicId(c.env.LINE_CHANNEL_ACCESS_TOKEN);
-    return c.html(renderFriendAddPage(profile.displayName, basicId));
-  }
-
-  // Redirect to return_to (with ?linked=1) or render success page.
-  // Re-validate against the allowlist at the redirect site (defense-in-depth).
-  if (ctx.return_to && isAllowedReturnTo(ctx.return_to, reqUrl.hostname)) {
     try {
-      const url = new URL(ctx.return_to);
-      url.searchParams.set('linked', '1');
-      return c.redirect(url.toString());
-    } catch {
-      // fall through to default success page if return_to was somehow malformed
+      await linkSellerRow(c.env, {
+        matchKey: ctx.form_id,
+        lineUserId: profile.userId,
+        displayName: profile.displayName,
+        knownPageId: notionPageId,
+      });
+    } catch (err) {
+      console.error(`link callback: Notion linkSellerRow failed (form_id=${ctx.form_id})`, err);
     }
+
+    // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
+    // 何を送るかは管理UIの automation 側で決める。非致命 — 失敗してもリダイレクトは完了。
+    await fireListingLinkCompleted(c.env, profile, ctx, followStatus).catch((err) => {
+      console.error('link callback: listing_link_completed fire threw', err);
+    });
+
+    // Slack: トップのフォーム送信通知を「（LINE連携待ち）」→「（LINE連携済み）」に更新（親メッセージを書換）。非致命。
+    if (slackThreadTs && linkedEntry) {
+      try {
+        const updated = buildListingFormCard({
+          name: linkedEntry.name,
+          phone: linkedEntry.phone,
+          email: linkedEntry.email,
+          carModel: pickCarModel(linkedEntry.form_data),
+          matchKey: ctx.form_id,
+          linked: true,
+        });
+        await slackUpdate(c.env, slackThreadTs, updated.fallback as string, { attachments: [updated] });
+      } catch (err) {
+        console.error(`link callback: slack update (連携済み) threw (form_id=${ctx.form_id})`, err);
+      }
+    }
+
+    // Slack: フォーム通知スレッドに「連携完了」を返信（thread_ts があればスレッド、無ければ単発）。非致命。
+    try {
+      const notionUrl = notionPageId ? `https://www.notion.so/${notionPageId.replace(/-/g, '')}` : null;
+      const card = buildSlackCard({
+        title: '✅ LINE連携が完了しました',
+        color: '#2eb67d', // 緑: 完了
+        omitTitleBlock: true, // 本体 text と重複するため attachment 内のタイトルは出さない
+        fields: [
+          { label: '表示名', value: escapeSlackText(profile.displayName) || '—' },
+          { label: 'LINE userId', value: `\`${profile.userId}\`` },
+          { label: 'Notion', value: notionUrl ? `<${notionUrl}|出品者リストを開く>` : null },
+          { label: 'match_key', value: `\`${ctx.form_id}\`` },
+        ],
+      });
+      await slackPost(c.env, card.fallback as string, { threadTs: slackThreadTs, attachments: [card] });
+    } catch (err) {
+      console.error(`link callback: slack post threw (form_id=${ctx.form_id})`, err);
+    }
+
+    // ─── 終端（web 向け）─────────────────────────────
+    // 未フォロー（友だち追加を断った/まだ追加していない）の場合は、サンクスページではなく
+    // 友だち追加ページを表示する。連携（match_key↔lineUserId、Notion 起票）は完了しているが、
+    // 友だち追加が無いとメッセージが届かないため。追加後は follow webhook が受信を有効化する。
+    if (followStatus === false) {
+      const basicId = await fetchBotBasicId(c.env.LINE_CHANNEL_ACCESS_TOKEN);
+      return c.html(renderFriendAddPage(profile.displayName, basicId));
+    }
+
+    // return_to（with ?linked=1）へ redirect、無ければ success ページ。
+    // allowlist を再検証（defense-in-depth）。
+    if (ctx.return_to && isAllowedReturnTo(ctx.return_to, new URL(c.req.url).hostname)) {
+      try {
+        const url = new URL(ctx.return_to);
+        url.searchParams.set('linked', '1');
+        return c.redirect(url.toString());
+      } catch {
+        // fall through to default success page if return_to was somehow malformed
+      }
+    }
+    return c.html(renderSuccessPage(profile.displayName));
+  },
+};
+
+// ─── 終端ページ（web 向け・listing_form 固有）─────────────────
+
+/** Messaging API の /v2/bot/info から OA の basicId（@xxxx）を取得。友だち追加URLの組み立てに使う。 */
+async function fetchBotBasicId(channelAccessToken: string): Promise<string> {
+  try {
+    const res = await fetch('https://api.line.me/v2/bot/info', {
+      headers: { Authorization: `Bearer ${channelAccessToken}` },
+    });
+    if (res.ok) {
+      const bot = (await res.json()) as { basicId?: string };
+      return bot.basicId || '';
+    }
+  } catch {
+    // ignore — basicId 無しでもページは表示する
   }
-  return c.html(renderSuccessPage(profile.displayName));
-});
+  return '';
+}
+
+/**
+ * 連携は完了したが OA を友だち追加していない出品者に、友だち追加を促すページ。
+ * 追加しないと撮影日程調整などの連絡が届かないため、サンクスページではなくこの画面を出す。
+ */
+function renderFriendAddPage(displayName: string, basicId: string): string {
+  const addUrl = basicId ? `https://line.me/R/ti/p/${escapeHtml(basicId)}` : '';
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>あと少しで完了</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{text-align:center;max-width:420px;width:90%;padding:48px 24px}
+h1{font-size:24px;font-weight:800;margin-bottom:12px}
+p{color:rgba(255,255,255,0.78);line-height:1.7;font-size:15px}
+.btn{display:block;margin-top:28px;padding:16px;border-radius:10px;font-size:16px;font-weight:700;text-decoration:none;background:#06C755;color:#fff}
+.note{font-size:12px;color:rgba(255,255,255,0.45);margin-top:20px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>あと少しで完了です</h1>
+<p>${escapeHtml(displayName)} さん、連携ありがとうございます。<br>担当者からのご連絡をお届けするには<br><b>友だち追加</b>が必要です。</p>
+${addUrl ? `<a href="${addUrl}" class="btn">LINEで友だち追加する</a>` : `<p class="note">お手数ですが LINE 公式アカウントを検索して友だち追加してください。</p>`}
+<p class="note">追加後、メッセージが届くようになります。<br>このページは閉じていただいて構いません。</p>
+</div>
+</body>
+</html>`;
+}
+
+function renderSuccessPage(displayName: string): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>連携完了</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{text-align:center;max-width:420px;width:90%;padding:48px 24px}
+h1{font-size:26px;font-weight:800;margin-bottom:16px}
+p{color:rgba(255,255,255,0.75);line-height:1.7;font-size:15px}
+.note{font-size:12px;color:rgba(255,255,255,0.4);margin-top:32px}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>連携完了 🎉</h1>
+<p>${escapeHtml(displayName)} さん、ありがとうございます。<br>追って LINE でご連絡いたします。</p>
+<p class="note">このページは閉じていただいて構いません。</p>
+</div>
+</body>
+</html>`;
+}
 
 // ─── Slack カードヘルパー ─────────────────────────────────────
 
@@ -632,114 +553,6 @@ async function postSlackLinkNotification(
   if (!body.ok) {
     console.error('listing-form callback: slack chat.postMessage failed', body.error);
   }
-}
-
-/** Messaging API の /v2/bot/info から OA の basicId（@xxxx）を取得。友だち追加URLの組み立てに使う。 */
-async function fetchBotBasicId(channelAccessToken: string): Promise<string> {
-  try {
-    const res = await fetch('https://api.line.me/v2/bot/info', {
-      headers: { Authorization: `Bearer ${channelAccessToken}` },
-    });
-    if (res.ok) {
-      const bot = (await res.json()) as { basicId?: string };
-      return bot.basicId || '';
-    }
-  } catch {
-    // ignore — basicId 無しでもページは表示する
-  }
-  return '';
-}
-
-/**
- * 連携は完了したが OA を友だち追加していない出品者に、友だち追加を促すページ。
- * 追加しないと撮影日程調整などの連絡が届かないため、サンクスページではなくこの画面を出す。
- */
-function renderFriendAddPage(displayName: string, basicId: string): string {
-  const addUrl = basicId ? `https://line.me/R/ti/p/${escapeHtml(basicId)}` : '';
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>あと少しで完了</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{text-align:center;max-width:420px;width:90%;padding:48px 24px}
-h1{font-size:24px;font-weight:800;margin-bottom:12px}
-p{color:rgba(255,255,255,0.78);line-height:1.7;font-size:15px}
-.btn{display:block;margin-top:28px;padding:16px;border-radius:10px;font-size:16px;font-weight:700;text-decoration:none;background:#06C755;color:#fff}
-.note{font-size:12px;color:rgba(255,255,255,0.45);margin-top:20px;line-height:1.6}
-</style>
-</head>
-<body>
-<div class="card">
-<h1>あと少しで完了です</h1>
-<p>${escapeHtml(displayName)} さん、連携ありがとうございます。<br>担当者からのご連絡をお届けするには<br><b>友だち追加</b>が必要です。</p>
-${addUrl ? `<a href="${addUrl}" class="btn">LINEで友だち追加する</a>` : `<p class="note">お手数ですが LINE 公式アカウントを検索して友だち追加してください。</p>`}
-<p class="note">追加後、メッセージが届くようになります。<br>このページは閉じていただいて構いません。</p>
-</div>
-</body>
-</html>`;
-}
-
-function renderSuccessPage(displayName: string): string {
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>連携完了</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{text-align:center;max-width:420px;width:90%;padding:48px 24px}
-h1{font-size:26px;font-weight:800;margin-bottom:16px}
-p{color:rgba(255,255,255,0.75);line-height:1.7;font-size:15px}
-.note{font-size:12px;color:rgba(255,255,255,0.4);margin-top:32px}
-</style>
-</head>
-<body>
-<div class="card">
-<h1>連携完了 🎉</h1>
-<p>${escapeHtml(displayName)} さん、ありがとうございます。<br>追って LINE でご連絡いたします。</p>
-<p class="note">このページは閉じていただいて構いません。</p>
-</div>
-</body>
-</html>`;
-}
-
-function renderErrorPage(title: string, detail: string): string {
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>エラー</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Hiragino Sans','Yu Gothic',system-ui,sans-serif;background:#0f172a;color:#fff;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{text-align:center;max-width:420px;width:90%;padding:48px 24px}
-h1{font-size:22px;font-weight:800;margin-bottom:16px;color:#fca5a5}
-p{color:rgba(255,255,255,0.75);line-height:1.7;font-size:14px}
-</style>
-</head>
-<body>
-<div class="card">
-<h1>${escapeHtml(title)}</h1>
-${detail ? `<p>${escapeHtml(detail)}</p>` : ''}
-</div>
-</body>
-</html>`;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 // Neutralize Slack mrkdwn in user-supplied text: collapse newlines (blocks forged-line injection into
