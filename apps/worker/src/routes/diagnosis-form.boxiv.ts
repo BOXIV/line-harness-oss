@@ -12,8 +12,8 @@
 // 仕様の正本: line/campaigns/battery-diagnosis/REQUIREMENTS.md
 //
 // Optional env:
-//   SPEC_API_KEY                — getVehicleSpecs の x-api-key（未設定なら spec 取得をスキップ）
-//   SPEC_API_URL                — 既定 https://asia-northeast1-boxiv-share.cloudfunctions.net/getVehicleSpecs
+//   VEHICLE_SPECS_API_KEY       — getVehicleSpecs の x-api-key（正・未設定なら spec 取得をスキップ／旧 SPEC_API_KEY も可）
+//   VEHICLE_SPECS_API_URL       — 既定 https://asia-northeast1-boxiv-share.cloudfunctions.net/getVehicleSpecs（旧 SPEC_API_URL も可）
 //   DIAGNOSIS_SLACK_CHANNEL_ID  — #診断依頼 のチャンネル ID（未設定なら Slack 通知なし）
 //   DIAGNOSIS_SLACK_BOT_TOKEN   — 未設定なら SELLENTRY_SLACK_BOT_TOKEN を流用
 //   DIAGNOSIS_LIFF_ID           — 診断フォーム用 LIFF ID（未設定なら LIFF_URL から導出）
@@ -96,17 +96,24 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
   // --- spec_API（getVehicleSpecs）: テスラ VIN かつ API キー設定時のみ。失敗は非致命 ---
+  // キー/URL は listing パイプライン（fetch-spec-api.mjs / .env.example）と同じ VEHICLE_SPECS_* を正とし、
+  // 旧 SPEC_* も後方互換で許容する。
+  const specApiKey = c.env.VEHICLE_SPECS_API_KEY || c.env.SPEC_API_KEY || '';
+  const specApiUrl = c.env.VEHICLE_SPECS_API_URL || c.env.SPEC_API_URL || SPEC_API_DEFAULT_URL;
   let specJson: string | null = null;
   let spec: Record<string, unknown> = {};
-  if (isTesla && c.env.SPEC_API_KEY) {
+  if (isTesla && specApiKey) {
     try {
-      const url = `${c.env.SPEC_API_URL || SPEC_API_DEFAULT_URL}?vin=${encodeURIComponent(vin)}`;
-      const res = await fetch(url, { headers: { 'x-api-key': c.env.SPEC_API_KEY } });
+      const url = `${specApiUrl}?vin=${encodeURIComponent(vin)}`;
+      const res = await fetch(url, { headers: { 'x-api-key': specApiKey } });
       if (res.ok) {
         const data = (await res.json()) as Record<string, unknown>;
+        // レスポンスは { specsResponse: { response: { ...fields... } } }。生 JSON は specsResponse ごと保存し
+        // （listing の spec_api.json と同形式）、フィールド抽出は response 階層から行う。
         const sr = (data.specsResponse ?? data) as Record<string, unknown>;
+        const resp = (sr.response ?? sr) as Record<string, unknown>;
         specJson = JSON.stringify(sr).slice(0, 30000);
-        spec = sr;
+        spec = resp;
       } else {
         console.error('diagnosis-form: spec_API status', res.status);
       }
@@ -115,13 +122,37 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
     }
   }
 
+  // spec の数値フィールドは "95.3%" / "60.0kWh" / "520 km" のように単位付き文字列のことがある。
+  // 先頭に現れる数値だけを取り出す（既に number の modelYear/totalPrice はそのまま通る）。
   const num = (v: unknown): number | null => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (typeof v !== 'string') return null;
+    const m = v.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+    return m ? Number(m[0]) : null;
   };
   const batterySoH = num(spec.batterySoH);
   const degradation = batterySoH === null ? null : Math.round((100 - batterySoH) * 10) / 10;
-  const status = !isTesla ? '非テスラ' : specJson === null ? (c.env.SPEC_API_KEY ? 'API取得不可' : '診断依頼') : '診断依頼';
+  const status = !isTesla ? '非テスラ' : specJson === null ? (specApiKey ? 'API取得不可' : '診断依頼') : '診断依頼';
+
+  // --- 重複エントリー判定（起票前に照会。高頻度の再エントリーは Slack で黄色警告する） ---
+  // 同一顧客/車両の指標: メール / 電話 / VIN / LINEユーザーID のいずれか一致を「重複」とみなす。
+  // （lineUserId は NULL のことがあるため NOT NULL ガードで空一致を防ぐ）
+  let dupCount = 0;
+  let dupFirstAt: string | null = null;
+  try {
+    const dup = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS cnt, MIN(created_at) AS first_at FROM diagnosis_leads
+         WHERE email = ?1 OR phone = ?2 OR vin = ?3
+            OR (?4 IS NOT NULL AND line_user_id = ?4)`
+    )
+      .bind(email, phone, vin, lineUserId)
+      .first<{ cnt: number; first_at: string | null }>();
+    dupCount = dup?.cnt ?? 0;
+    dupFirstAt = dup?.first_at ?? null;
+  } catch (e) {
+    console.error('diagnosis-form: dup check failed', e);
+  }
+  const isDuplicate = dupCount > 0;
 
   // --- D1 起票（必ず作成） ---
   try {
@@ -187,22 +218,35 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
       // 値はコードボックスで囲い、改行はサニタイズ（sell 通知と同じ流儀）
       const code = (s: string) => `\`${s.replace(/[\n\r`]/g, ' ').trim() || '-'}\``;
       const lines = [
-        ':battery: *バッテリー診断 依頼受付*',
+        isDuplicate ? ':warning: *バッテリー診断 依頼受付（重複エントリー）*' : ':battery: *バッテリー診断 依頼受付*',
+      ];
+      // 重複時は先頭に警告行を出す（高頻度の再エントリーは要注意＝黄色カード）
+      if (isDuplicate) {
+        lines.push(
+          `⚠️ *重複エントリー*: 同一の顧客/車両（メール・電話・VIN・LINEのいずれか一致）で既に ${code(String(dupCount) + '件')}。初回 ${code(dupFirstAt ?? '不明')}`
+        );
+      }
+      lines.push(
         `依頼ID: ${code(leadId)}`,
         `VIN: ${code(vin)}${isTesla ? '' : '（⚠️ 非テスラ）'}`,
         `走行距離: ${code(odometerKm.toLocaleString() + ' km')} ／ 次回車検: ${code(shakenMonth)}`,
         `お名前: ${code(name)} ／ LINE: ${code(displayName ?? '未連携')}`,
         batterySoH !== null
           ? `SoH: ${code(batterySoH + '%')}（劣化率 ${degradation}%）`
-          : `spec_API: ${code(status === 'API取得不可' ? '取得不可 ⚠️' : '未実行')}`,
-      ];
+          : `spec_API: ${code(status === 'API取得不可' ? '取得不可 ⚠️' : '未実行')}`
+      );
       await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${slackToken}` },
         body: JSON.stringify({
           channel: slackChannel,
           attachments: [
-            { color: '#2fd06f', fallback: `バッテリー診断 依頼受付 ${leadId}`, text: lines.join('\n') },
+            {
+              // 重複は黄色、通常は緑
+              color: isDuplicate ? '#f2c744' : '#2fd06f',
+              fallback: `バッテリー診断 依頼受付 ${leadId}${isDuplicate ? '（重複）' : ''}`,
+              text: lines.join('\n'),
+            },
           ],
         }),
       });

@@ -1,6 +1,6 @@
 // BOXIV-only: バッテリー劣化診断フォームのページ HTML。
 // デザインは lightning.boxiv.co.jp 準拠（白基調 / #1a1a1a / ピル型ボタン / Noto Sans JP / 角丸カード）。
-// ファーストビュー = 動画背景（東京を走るテスラ→側面→バッテリー可視化）＋
+// ファーストビュー = 動画背景（街を走るテスラ→側面→バッテリー可視化）＋
 // 字幕シーケンス＋バッテリーゲージのベクターアニメ＋CTA。
 // 動画は R2 (`/media/video/diagnosis-hero.mp4`) から配信。reduced-motion / 動画エラー時は
 // ポスター静止画＋完成状態に即フォールバックする。
@@ -178,7 +178,7 @@ export function renderFormPage(liffId: string): string {
   <div class="hbrand">${logoSvg('#ffffff', 'hero')}</div>
   <button id="skip" type="button">スキップ →</button>
 
-  <p class="cap" id="cap1">東京を走る、あなたのテスラ。</p>
+  <p class="cap" id="cap1">今日も走る、あなたのテスラ。</p>
   <p class="cap" id="cap2">その走りの裏で――</p>
   <p class="cap" id="cap3">バッテリーは、静かに劣化しています。</p>
 
