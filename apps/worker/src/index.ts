@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { LineClient } from '@line-crm/line-sdk';
-import { getLineAccounts } from '@line-crm/db';
 import { processStepDeliveries } from './services/step-delivery.js';
 import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
@@ -310,30 +309,18 @@ async function scheduled(
   // 以降は 5 分ごと
   if (minute % 5 !== 0) return;
 
-  // Get all active accounts from DB, plus the default env account
-  const dbAccounts = await getLineAccounts(env.DB);
-  const activeTokens = new Set<string>();
-
-  // Default account from env
-  activeTokens.add(env.LINE_CHANNEL_ACCESS_TOKEN);
-
-  // DB accounts
-  for (const account of dbAccounts) {
-    if (account.is_active) {
-      activeTokens.add(account.channel_access_token);
-    }
-  }
-
-  // Run delivery for each account
+  // 配信系ジョブ（ステップ/ブロードキャスト/リマインダ）は account でスコープされておらず
+  // 全 due 行を対象にするため、トークン毎に実行すると同じ配信が二重に走る（複数トークン時）。
+  // よって既定の env トークンで「1回だけ」実行する。
+  // ⚠️ マルチOA配信は未対応（各OAのトークンで各OA分だけ送る account スコープ化が必要）。
+  //    現状 prod は単一OAのため実害なし。多OA化する際はここを account 単位に作り替えること。
   const jobs = [];
-  for (const token of activeTokens) {
-    const lineClient = new LineClient(token);
-    jobs.push(
-      processStepDeliveries(env.DB, lineClient, env.WORKER_URL),
-      processScheduledBroadcasts(env.DB, lineClient, env.WORKER_URL),
-      processReminderDeliveries(env.DB, lineClient),
-    );
-  }
+  const defaultClient = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
+  jobs.push(
+    processStepDeliveries(env.DB, defaultClient, env.WORKER_URL),
+    processScheduledBroadcasts(env.DB, defaultClient, env.WORKER_URL),
+    processReminderDeliveries(env.DB, defaultClient),
+  );
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
   // BOXIV: 個別チャット送信予約 (友だちに紐づく line_account を内部で解決)

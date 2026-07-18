@@ -168,8 +168,11 @@ staff.patch('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
       return c.json({ success: false, error: 'Staff member not found' }, 404);
     }
     if (currentStaff.role === 'manager') {
-      if (target.role === 'owner') {
-        return c.json({ success: false, error: 'マネージャーはオーナーを編集できません' }, 403);
+      // マネージャーは自分より上位（owner/admin）および他のマネージャーの行を編集できない。
+      // 対象は撮影スタッフ(staff)のみ。以前は owner だけを守っており、admin を staff へ降格・
+      // 無効化できる権限昇格の穴があった。
+      if (target.role !== 'staff') {
+        return c.json({ success: false, error: 'マネージャーは撮影スタッフのみ編集できます' }, 403);
       }
       // 撮影スタッフ限定運用: マネージャーはロールを「撮影スタッフ」以外へ変更できない
       // （staff 作成→昇格 による権限回避を防ぐ）。
@@ -224,8 +227,10 @@ staff.delete('/api/staff/:id', requireRole('owner', 'manager'), async (c) => {
       return c.json({ success: false, error: 'Staff member not found' }, 404);
     }
 
-    if (currentStaff.role === 'manager' && target.role === 'owner') {
-      return c.json({ success: false, error: 'マネージャーはオーナーを削除できません' }, 403);
+    // マネージャーは撮影スタッフ(staff)のみ削除可。以前は owner だけを守っており、
+    // admin/他manager を削除できた（アカウントロックアウト）。
+    if (currentStaff.role === 'manager' && target.role !== 'staff') {
+      return c.json({ success: false, error: 'マネージャーは撮影スタッフのみ削除できます' }, 403);
     }
 
     if (target.role === 'owner' && target.is_active === 1) {
@@ -268,8 +273,10 @@ staff.post('/api/staff/:id/regenerate-key', requireRole('owner', 'manager'), asy
     if (!exists) {
       return c.json({ success: false, error: 'Staff member not found' }, 404);
     }
-    if (currentStaff.role === 'manager' && exists.role === 'owner') {
-      return c.json({ success: false, error: 'マネージャーはオーナーのキーを再生成できません' }, 403);
+    // マネージャーは撮影スタッフ(staff)のみキー再生成可。以前は owner だけを守っており、
+    // admin のキーを再生成して受け取り → admin 権限を奪取できる昇格の穴があった。
+    if (currentStaff.role === 'manager' && exists.role !== 'staff') {
+      return c.json({ success: false, error: 'マネージャーは撮影スタッフのキーのみ再生成できます' }, 403);
     }
     const newKey = await regenerateStaffApiKey(c.env.DB, id);
     return c.json({ success: true, data: { apiKey: newKey } });

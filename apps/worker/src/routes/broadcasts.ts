@@ -12,6 +12,7 @@ import { processBroadcastSend } from '../services/broadcast.js';
 import { processSegmentSend } from '../services/segment-send.js';
 import type { SegmentCondition } from '../services/segment-query.js';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const broadcasts = new Hono<Env>();
 
@@ -71,7 +72,7 @@ broadcasts.get('/api/broadcasts/:id', async (c) => {
 });
 
 // POST /api/broadcasts - create
-broadcasts.post('/api/broadcasts', async (c) => {
+broadcasts.post('/api/broadcasts', requireRole('owner','admin','manager'), async (c) => {
   try {
     const body = await c.req.json<{
       title: string;
@@ -126,7 +127,7 @@ broadcasts.post('/api/broadcasts', async (c) => {
 });
 
 // PUT /api/broadcasts/:id - update draft
-broadcasts.put('/api/broadcasts/:id', async (c) => {
+broadcasts.put('/api/broadcasts/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     const existing = await getBroadcastById(c.env.DB, id);
@@ -172,7 +173,7 @@ broadcasts.put('/api/broadcasts/:id', async (c) => {
 });
 
 // DELETE /api/broadcasts/:id - delete
-broadcasts.delete('/api/broadcasts/:id', async (c) => {
+broadcasts.delete('/api/broadcasts/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     await deleteBroadcast(c.env.DB, id);
@@ -184,7 +185,7 @@ broadcasts.delete('/api/broadcasts/:id', async (c) => {
 });
 
 // POST /api/broadcasts/:id/send - send now
-broadcasts.post('/api/broadcasts/:id/send', async (c) => {
+broadcasts.post('/api/broadcasts/:id/send', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     const existing = await getBroadcastById(c.env.DB, id);
@@ -209,7 +210,7 @@ broadcasts.post('/api/broadcasts/:id/send', async (c) => {
 });
 
 // POST /api/broadcasts/:id/send-segment - send to a filtered segment
-broadcasts.post('/api/broadcasts/:id/send-segment', async (c) => {
+broadcasts.post('/api/broadcasts/:id/send-segment', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     const existing = await getBroadcastById(c.env.DB, id);

@@ -8,6 +8,7 @@
 // POST /api/admin/reconcile-schema  → { added: string[], present: number, missingTables: string[] }
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const schemaReconcile = new Hono<Env>();
 
@@ -28,7 +29,7 @@ const EXPECTED: Record<string, Array<[string, string]>> = {
   ref_tracking: [['fbclid', 'TEXT'], ['gclid', 'TEXT'], ['twclid', 'TEXT'], ['ttclid', 'TEXT'], ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_campaign', 'TEXT'], ['user_agent', 'TEXT'], ['ip_address', 'TEXT']],
 };
 
-schemaReconcile.post('/api/admin/reconcile-schema', async (c) => {
+schemaReconcile.post('/api/admin/reconcile-schema', requireRole('owner','admin'), async (c) => {
   const added: string[] = [];
   const missingTables: string[] = [];
   let present = 0;

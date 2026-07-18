@@ -1,10 +1,12 @@
-import type { Context, Next } from 'hono';
+import { createMiddleware } from 'hono/factory';
 import type { Env } from '../index.js';
 
 type Role = 'owner' | 'admin' | 'manager' | 'staff';
 
+// createMiddleware で生成することで、`.post(path, requireRole(...), handler)` に挟んでも
+// Hono のパスパラメータ推論（c.req.param('id') が string）を壊さない。
 export function requireRole(...allowed: Role[]) {
-  return async (c: Context<Env>, next: Next): Promise<Response | void> => {
+  return createMiddleware<Env>(async (c, next) => {
     const staff = c.get('staff');
     if (!staff || !allowed.includes(staff.role)) {
       return c.json(
@@ -13,5 +15,5 @@ export function requireRole(...allowed: Role[]) {
       );
     }
     return next();
-  };
+  });
 }

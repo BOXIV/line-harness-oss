@@ -155,11 +155,18 @@ async function handleEvent(
       console.error('Failed to get profile for', userId, err);
     }
 
+    // getProfile が失敗した時（LINE API 一時障害等）は profile 系フィールドのキー自体を
+    // 渡さない。upsertFriend は「キーがあり値が null」だと既存の表示名/画像を null で上書き
+    // するため、キーを省略して既存値を保持する（再フォロー時の表示名消失を防ぐ）。
     const friend = await upsertFriend(db, {
       lineUserId: userId,
-      displayName: profile?.displayName ?? null,
-      pictureUrl: profile?.pictureUrl ?? null,
-      statusMessage: profile?.statusMessage ?? null,
+      ...(profile
+        ? {
+            displayName: profile.displayName ?? null,
+            pictureUrl: profile.pictureUrl ?? null,
+            statusMessage: profile.statusMessage ?? null,
+          }
+        : {}),
       // follow イベント = 友だち追加（またはブロック解除）。確実に push 可能。
       isFollowing: true,
     });

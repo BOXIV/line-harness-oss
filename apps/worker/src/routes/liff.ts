@@ -18,6 +18,39 @@ import type { Env } from '../index.js';
 
 const liffRoutes = new Hono<Env>();
 
+// OAuth 完了後の redirect 先を検証する（オープンリダイレクト対策）。
+// state は署名なしでクライアントが自由に詰められるため、`/auth/callback` の最後で
+// 生の redirect を無検証で c.redirect すると、正規の BOXIV オリジンから任意サイトへ
+// 302 できてしまいフィッシングの踏み台になる。許可するのは:
+//   - 同一オリジンの相対パス（"/" 始まりだが "//" や "/\" は不可＝プロトコル相対を弾く）
+//   - host が boxiv 系 / 自 Worker の絶対 https URL
+// 不許可なら null を返し、呼び出し側は既定の遷移（チャット等）にフォールバックする。
+const REDIRECT_ALLOWED_HOSTS = [
+  'lightning.boxiv.co.jp',
+  'boxiv.co.jp',
+  'line-connect.boxiv.workers.dev',
+  'line-connect-test.boxiv.workers.dev',
+  'liff.line.me',
+  'line.me',
+];
+function safeRedirect(redirect: string | undefined, reqHost: string): string | null {
+  if (!redirect) return null;
+  // 相対パス: "/" 始まりで、かつ "//"（プロトコル相対）や "/\" でない。
+  if (redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.startsWith('/\\')) {
+    return redirect;
+  }
+  try {
+    const u = new URL(redirect);
+    if (u.protocol !== 'https:') return null;
+    if (u.hostname === reqHost || REDIRECT_ALLOWED_HOSTS.includes(u.hostname)) {
+      return redirect;
+    }
+  } catch {
+    // 相対でも絶対 URL でもない → 不許可
+  }
+  return null;
+}
+
 // ─── LINE Login OAuth (bot_prompt=aggressive) ───────────────────
 
 /**
@@ -492,9 +525,10 @@ liffRoutes.get('/auth/callback', async (c) => {
       }
     }
 
-    // Redirect or show completion
-    if (redirect) {
-      return c.redirect(redirect);
+    // Redirect or show completion（オープンリダイレクト対策で allowlist を通す）
+    const validated = safeRedirect(redirect, new URL(c.req.url).hostname);
+    if (validated) {
+      return c.redirect(validated);
     }
 
     // Redirect to the correct bot's chat after auth

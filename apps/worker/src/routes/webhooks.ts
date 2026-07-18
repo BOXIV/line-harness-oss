@@ -12,6 +12,7 @@ import {
   deleteOutgoingWebhook,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const webhooks = new Hono<Env>();
 
@@ -38,7 +39,7 @@ webhooks.get('/api/webhooks/incoming', async (c) => {
   }
 });
 
-webhooks.post('/api/webhooks/incoming', async (c) => {
+webhooks.post('/api/webhooks/incoming', requireRole('owner','admin'), async (c) => {
   try {
     const body = await c.req.json<{ name: string; sourceType?: string; secret?: string }>();
     if (!body.name) return c.json({ success: false, error: 'name is required' }, 400);
@@ -50,7 +51,7 @@ webhooks.post('/api/webhooks/incoming', async (c) => {
   }
 });
 
-webhooks.put('/api/webhooks/incoming/:id', async (c) => {
+webhooks.put('/api/webhooks/incoming/:id', requireRole('owner','admin'), async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -64,7 +65,7 @@ webhooks.put('/api/webhooks/incoming/:id', async (c) => {
   }
 });
 
-webhooks.delete('/api/webhooks/incoming/:id', async (c) => {
+webhooks.delete('/api/webhooks/incoming/:id', requireRole('owner','admin'), async (c) => {
   try {
     await deleteIncomingWebhook(c.env.DB, c.req.param('id'));
     return c.json({ success: true, data: null });
@@ -98,7 +99,7 @@ webhooks.get('/api/webhooks/outgoing', async (c) => {
   }
 });
 
-webhooks.post('/api/webhooks/outgoing', async (c) => {
+webhooks.post('/api/webhooks/outgoing', requireRole('owner','admin'), async (c) => {
   try {
     const body = await c.req.json<{ name: string; url: string; eventTypes: string[]; secret?: string }>();
     if (!body.name || !body.url) return c.json({ success: false, error: 'name and url are required' }, 400);
@@ -113,7 +114,7 @@ webhooks.post('/api/webhooks/outgoing', async (c) => {
   }
 });
 
-webhooks.put('/api/webhooks/outgoing/:id', async (c) => {
+webhooks.put('/api/webhooks/outgoing/:id', requireRole('owner','admin'), async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -127,7 +128,7 @@ webhooks.put('/api/webhooks/outgoing/:id', async (c) => {
   }
 });
 
-webhooks.delete('/api/webhooks/outgoing/:id', async (c) => {
+webhooks.delete('/api/webhooks/outgoing/:id', requireRole('owner','admin'), async (c) => {
   try {
     await deleteOutgoingWebhook(c.env.DB, c.req.param('id'));
     return c.json({ success: true, data: null });
@@ -144,6 +145,16 @@ webhooks.post('/api/webhooks/incoming/:id/receive', async (c) => {
     const id = c.req.param('id');
     const wh = await getIncomingWebhookById(c.env.DB, id);
     if (!wh || !wh.is_active) return c.json({ success: false, error: 'Webhook not found or inactive' }, 404);
+
+    // secret が設定されている場合は共有シークレットを検証する（設定時のみ強制＝後方互換）。
+    // 以前は secret 列を保存していながら受信時に一切照合せず、UUID の秘匿だけが保護だった。
+    // 送信側は X-Webhook-Secret ヘッダ（または ?secret=）で同じ値を渡す。
+    if (wh.secret) {
+      const provided = c.req.header('X-Webhook-Secret') || c.req.query('secret') || '';
+      if (provided !== wh.secret) {
+        return c.json({ success: false, error: 'Unauthorized' }, 401);
+      }
+    }
 
     const body = await c.req.json();
 

@@ -18,6 +18,7 @@ import { buildMessage } from '../services/step-delivery.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const friends = new Hono<Env>();
 
@@ -231,7 +232,7 @@ friends.get('/api/friends/:id', async (c) => {
 });
 
 // PUT /api/friends/:id - 管理画面で編集する可変フィールド（管理名）を更新
-friends.put('/api/friends/:id', async (c) => {
+friends.put('/api/friends/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const db = c.env.DB;
@@ -251,7 +252,7 @@ friends.put('/api/friends/:id', async (c) => {
 });
 
 // POST /api/friends/:id/tags - add tag
-friends.post('/api/friends/:id/tags', async (c) => {
+friends.post('/api/friends/:id/tags', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const body = await c.req.json<{ tagId: string }>();
@@ -296,7 +297,7 @@ friends.post('/api/friends/:id/tags', async (c) => {
 });
 
 // DELETE /api/friends/:id/tags/:tagId - remove tag
-friends.delete('/api/friends/:id/tags/:tagId', async (c) => {
+friends.delete('/api/friends/:id/tags/:tagId', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const tagId = c.req.param('tagId');
@@ -323,7 +324,7 @@ friends.delete('/api/friends/:id/tags/:tagId', async (c) => {
 });
 
 // PUT /api/friends/:id/metadata - merge metadata fields
-friends.put('/api/friends/:id/metadata', async (c) => {
+friends.put('/api/friends/:id/metadata', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const db = c.env.DB;
@@ -392,7 +393,7 @@ friends.get('/api/friends/:id/messages', async (c) => {
 });
 
 // POST /api/friends/:id/messages - send message to friend
-friends.post('/api/friends/:id/messages', async (c) => {
+friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const body = await c.req.json<{
