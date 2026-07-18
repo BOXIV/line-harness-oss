@@ -24,7 +24,8 @@ export type FlowId = 'listing_form' | 'app_listing';
 export interface LinkStateBase {
   v: 1;
   flow?: FlowId;
-  return_to: string;
+  /** web フローの戻り先。アプリフローは固定スキームへ戻すため使わない（省略可）。 */
+  return_to?: string;
   ts: number;
 }
 
@@ -61,7 +62,8 @@ const RETURN_TO_ALLOWED_HOSTS = [
 ];
 const RETURN_TO_DEV_HOSTS = ['localhost', '127.0.0.1'];
 
-function isDevOrigin(host: string): boolean {
+/** Worker 自身が dev/test オリジンで動いているか（テスト専用エンドポイントのゲート等に使う）。 */
+export function isDevOrigin(host: string): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host.endsWith('-test.boxiv.workers.dev');
 }
 

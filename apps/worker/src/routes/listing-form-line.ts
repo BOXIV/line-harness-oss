@@ -193,6 +193,9 @@ listingFormLine.post('/listing-form/submit', async (c) => {
   const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailRaw) ? emailRaw : null;
   const phoneRaw = (body.phone ? String(body.phone) : pick('電話番号')) || '';
   const phone = phoneRaw.replace(/[^\d+-]/g, '') || null;
+  // BOXIV ユーザーID（アプリ経由の起票で入る。app_listing 連携の引き当てキー。任意）
+  const boxivIdRaw = String(body.boxiv_id ?? '').trim();
+  const boxivId = /^[A-Za-z0-9_-]{1,64}$/.test(boxivIdRaw) ? boxivIdRaw : null;
   const reqHost = new URL(c.req.url).hostname;
   const returnTo = body.return_to && isAllowedReturnTo(String(body.return_to), reqHost) ? String(body.return_to) : null;
 
@@ -207,7 +210,7 @@ listingFormLine.post('/listing-form/submit', async (c) => {
 
   // 3) Notion へ即ミラー起票（未連携）— 非致命
   try {
-    const pageId = await createOrUpdateSellerRow(c.env, { matchKey, formData: fields, name, phone, email, zip });
+    const pageId = await createOrUpdateSellerRow(c.env, { matchKey, formData: fields, name, phone, email, zip, boxivId });
     if (pageId) await setNotionPageId(c.env.DB, matchKey, pageId);
   } catch (e) {
     console.error('listing-form submit: Notion 起票 failed', e);

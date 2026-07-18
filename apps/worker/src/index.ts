@@ -46,6 +46,8 @@ import { bookingRequests } from './routes/booking-requests.js';
 import { staffAvailability } from './routes/staff-availability.js';
 // 出品フォーム LINE 連携 (BOXIV)
 import { listingFormLine } from './routes/listing-form-line.js';
+// アプリ出品 LINE 連携（Portal アプリ・BOXIV）
+import { appListing } from './routes/app-listing.boxiv.js';
 // LINE Login 共有コールバック（フロー非依存の司令塔・BOXIV）
 import { linkCallback } from './routes/link-callback.boxiv.js';
 // バッテリー劣化診断 LIFF フォーム (BOXIV)
@@ -211,6 +213,8 @@ app.route('/', staffAvailability);
 
 // 出品フォーム LINE 連携 (BOXIV)
 app.route('/', listingFormLine);
+// アプリ出品 LINE 連携（/app-listing/start・BOXIV）
+app.route('/', appListing);
 // LINE Login 共有コールバック（/link/callback ＋ 旧 /listing-form/callback エイリアス・BOXIV）
 app.route('/', linkCallback);
 

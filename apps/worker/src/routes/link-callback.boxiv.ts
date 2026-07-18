@@ -26,6 +26,7 @@ import {
 } from '../services/line-login.boxiv.js';
 import type { FlowId, LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { listingFormFlow } from './listing-form-line.js';
+import { appListingFlow } from './app-listing.boxiv.js';
 import type { Env } from '../index.js';
 
 const linkCallback = new Hono<Env>();
@@ -37,6 +38,7 @@ const linkCallback = new Hono<Env>();
  */
 const LINK_FLOWS: Partial<Record<FlowId, LinkFlow>> = {
   listing_form: listingFormFlow,
+  app_listing: appListingFlow,
 };
 
 /**
