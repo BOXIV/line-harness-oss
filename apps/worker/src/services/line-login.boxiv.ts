@@ -9,6 +9,7 @@
 // 旧形式（flow フィールド無し）の in-flight state も検証・パースできる。
 
 import type { Context } from 'hono';
+import type { Friend } from '@line-crm/db';
 import type { Env } from '../index.js';
 
 // ─── フロー Strategy の契約（フロー横断・特定フローに依存しない） ─────
@@ -36,14 +37,16 @@ export interface LinkStateBase {
 export interface LinkFlow<S extends LinkStateBase = LinkStateBase> {
   /**
    * 共通の friend upsert 後に呼ばれ、フロー固有のデータ書き込み＋イベント発火を行い、
-   * 最終的にユーザーへ返す Response（HTML ページ or return_to への redirect）を返す。
+   * 最終的にユーザーへ返す Response（HTML ページ or スキーム/return_to への redirect）を返す。
    * データ書き込みは非致命前提（失敗しても終端 Response は返す）。
+   * `friend` は共通前半で登録済みの D1 friend（DB 障害等で取得できなければ null）。
    */
   complete(
     c: Context<Env>,
     ctx: S,
     profile: LineProfile,
     followStatus: boolean | null,
+    friend: Friend | null,
   ): Promise<Response>;
 }
 

@@ -13,7 +13,8 @@
 
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { upsertFriend } from '@line-crm/db';
+import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
+import type { Friend } from '@line-crm/db';
 import { LineClient } from '@line-crm/line-sdk';
 import { checkFollowing } from '../services/friendship.boxiv.js';
 import {
@@ -112,22 +113,27 @@ const handleLinkCallback = async (c: Context<Env>) => {
   const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
   const followStatus = await checkFollowing(lineClient, profile.userId); // true=友だち / false=未追加 / null=判定不能
 
-  // 友だちを D1 に upsert: 既に友だちで follow webhook が発火しないケースでも friend を確実に登録する。
-  // これで突合ボットの friend↔Notion 連携が lineUserId で friend を見つけられる。非致命。
-  // 実フォロー判定値を渡し、未追加で連携しただけのユーザーを is_following=1 と誤検知させない
-  // （null=判定不能のときは既存値を維持）。
-  await upsertFriend(c.env.DB, {
-    lineUserId: profile.userId,
-    displayName: profile.displayName,
-    pictureUrl: profile.pictureUrl ?? null,
-    isFollowing: followStatus === null ? undefined : followStatus,
-  }).catch((err) => {
+  // 友だちを D1 に upsert（全フロー共通の identity 登録）: 既に友だちで follow webhook が発火しない
+  // ケースでも friend を確実に登録する。これで突合ボットの friend↔Notion 連携が lineUserId で friend を
+  // 見つけられる。実フォロー判定値を渡し、未追加で連携しただけのユーザーを is_following=1 と誤検知させない
+  // （null=判定不能のときは既存値を維持）。ここで1回だけ作り、その friend を各フローに渡す（二重 upsert 廃止）。
+  let friend: Friend | null = null;
+  try {
+    friend = await upsertFriend(c.env.DB, {
+      lineUserId: profile.userId,
+      displayName: profile.displayName,
+      pictureUrl: profile.pictureUrl ?? null,
+      isFollowing: followStatus === null ? undefined : followStatus,
+    });
+  } catch (err) {
+    // 競合（follow webhook と同時 INSERT）等 → 既存を取り直す。両方失敗なら null のまま各フローが判断。
     console.error(`link callback: upsertFriend failed (flow=${flow})`, err);
-  });
+    friend = await getFriendByLineUserId(c.env.DB, profile.userId).catch(() => null);
+  }
 
   // ここから先（フロー固有のデータ書き込み＋イベント発火＋終端の描画/redirect）はフローが所有する。
   // 終端はフロー依存（web は HTML ページ、アプリは自スキームへ redirect）なので Response をそのまま返す。
-  return flowHandler.complete(c, ctx, profile, followStatus);
+  return flowHandler.complete(c, ctx, profile, followStatus, friend);
 };
 
 linkCallback.get('/link/callback', handleLinkCallback);

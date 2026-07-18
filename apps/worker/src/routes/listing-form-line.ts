@@ -25,7 +25,7 @@
 //   pnpm exec wrangler secret put SLACK_LISTING_LINK_CHANNEL_ID --config wrangler.boxiv.toml
 
 import { Hono } from 'hono';
-import { upsertFriend, getFriendByLineUserId } from '@line-crm/db';
+import type { Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
@@ -235,7 +235,7 @@ listingFormLine.post('/listing-form/submit', async (c) => {
  * 終端は web 向け: 未フォロー→友だち追加ページ / return_to→?linked=1 / それ以外→success ページ。
  */
 export const listingFormFlow: LinkFlow<ListingStateV1> = {
-  async complete(c, ctx, profile, followStatus) {
+  async complete(c, ctx, profile, followStatus, friend) {
     // BOXIV: D1 台帳 + Notion を match_key で「連携済み」に更新（旧 reconcile-daemon の Notion 起票を Worker に集約）。
     // フォーム送信時に submit で起票済みの行へ lineUserId を追記。form_submit が無い直リンクは orphan 行を作る。非致命。
     let notionPageId: string | null = null;
@@ -269,7 +269,8 @@ export const listingFormFlow: LinkFlow<ListingStateV1> = {
 
     // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
     // 何を送るかは管理UIの automation 側で決める。非致命 — 失敗してもリダイレクトは完了。
-    await fireListingLinkCompleted(c.env, profile, ctx, followStatus).catch((err) => {
+    // friend は共通前半で登録済みのものを受け取る（フロー内で再 upsert しない）。
+    await fireListingLinkCompleted(c.env, profile, ctx, followStatus, friend).catch((err) => {
       console.error('link callback: listing_link_completed fire threw', err);
     });
 
@@ -464,21 +465,11 @@ async function fireListingLinkCompleted(
   profile: { userId: string; displayName: string; pictureUrl?: string },
   ctx: ListingStateV1,
   followStatus: boolean | null,
+  friend: Friend | null,
 ) {
-  let friend;
-  try {
-    friend = await upsertFriend(env.DB, {
-      lineUserId: profile.userId,
-      displayName: profile.displayName ?? null,
-      pictureUrl: profile.pictureUrl ?? null,
-      isFollowing: followStatus === null ? undefined : followStatus,
-    });
-  } catch {
-    // 競合（follow webhook と同時 INSERT）等 → 既存を取り直す
-    friend = await getFriendByLineUserId(env.DB, profile.userId);
-  }
+  // friend は共通前半（link-callback）で登録済みのものを受け取る（ここでは upsert しない）。
   if (!friend) {
-    console.warn('listing-form callback: friend upsert/fetch failed — listing_link_completed をスキップ');
+    console.warn('listing-form callback: friend が無い — listing_link_completed をスキップ');
     return;
   }
 
