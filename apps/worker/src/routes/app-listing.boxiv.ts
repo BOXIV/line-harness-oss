@@ -24,6 +24,7 @@ import { Hono } from 'hono';
 import { packSignedState, escapeHtml } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { linkSellerRowByBoxivId } from '../services/listing-notion.boxiv.js';
+import { slackPost, buildSlackCard } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
 
 const appListing = new Hono<Env>();
@@ -101,10 +102,34 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
   async complete(c, ctx, profile, followStatus, _friend) {
     // boxivID キーで Notion 出品者DB の LINE User ID を update（行は submit 起票済みが前提）。非致命。
     try {
-      await linkSellerRowByBoxivId(c.env, {
+      const pageId = await linkSellerRowByBoxivId(c.env, {
         boxivId: ctx.boxiv_id,
         lineUserId: profile.userId,
       });
+      if (!pageId) {
+        // boxivID に対応する出品者行が無い（起票前提だが未検出）→ Slack で警告。
+        // 通知先は env の SLACK_LISTING_LINK_CHANNEL_ID＝dev/prod で別チャンネル。別 try で握る（非致命）。
+        try {
+          const card = buildSlackCard({
+            title: 'アプリ出品者のLINE連携に失敗しました',
+            color: '#e01e5a', // 赤: 失敗・手動対応要
+            omitTitleBlock: true,
+            fields: [
+              { label: 'BOXIV ID', value: `\`${ctx.boxiv_id}\`` },
+              { label: 'LINE USER ID', value: `\`${profile.userId}\`` },
+            ],
+          });
+          const text =
+            '🔴 アプリ出品者のLINE連携に失敗しました\n' +
+            'NOTIONにBOXIV IDが見つかりませんでした。手動対応をお願いします。';
+          const r = await slackPost(c.env, text, { attachments: [card] });
+          console.log(
+            `app-listing: 出品者行なし → Slack 通知 ${r.ok ? 'OK' : `NG(${r.error})`} (boxiv_id=${ctx.boxiv_id})`,
+          );
+        } catch (slackErr) {
+          console.error(`app-listing: Slack 通知 threw (boxiv_id=${ctx.boxiv_id})`, slackErr);
+        }
+      }
     } catch (err) {
       console.error(`app-listing: Notion lineUserId update failed (boxiv_id=${ctx.boxiv_id})`, err);
     }
