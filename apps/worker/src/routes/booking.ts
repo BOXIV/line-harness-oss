@@ -22,8 +22,10 @@ import {
 } from '@line-crm/db';
 import {
   AREA_LABELS,
+  BOOKING_MIN_LEAD_DAYS,
   generateSlots,
   getDateRange,
+  getMinBookingDate,
   isValidDateString,
   parseJstDate,
   formatJstDateLabel,
@@ -188,6 +190,19 @@ function renderAuthRequired(token: string, c: { env: Env['Bindings']; req: { url
   });
 }
 
+/**
+ * 最短リードタイム（BOOKING_MIN_LEAD_DAYS）より手前の日付を弾く共通エラー。
+ * 承認確認・撮影スタッフ派遣の準備が間に合わないため受付不可（＝3日前締切）。
+ * 日付ピッカーで直近日を非表示にしていても、URL直打ち/戻る操作/POST偽装で
+ * 直近日が入り込むため、slots・confirm・submit の各段でこのガードを通す。
+ */
+function renderTooSoon(): Response {
+  return renderError(
+    'ご指定の日付はご予約いただけません',
+    `撮影日の${BOOKING_MIN_LEAD_DAYS}日前までにお申し込みください（本日から${BOOKING_MIN_LEAD_DAYS}日後以降の日程をお選びください）`,
+  );
+}
+
 // ─── GET /booking?token=xxx 日付ピッカー ─────────────────────
 
 booking.get('/booking', async (c) => {
@@ -235,8 +250,10 @@ booking.get('/booking', async (c) => {
     );
   }
 
-  // 28日先までの日付配列を生成
-  const dates = getDateRange(28);
+  // 28日先までの日付を生成し、最短リードタイム（本日から BOOKING_MIN_LEAD_DAYS 日後）より
+  // 手前の直近日は選択肢に出さない（＝3日前締切）。承認確認・スタッフ派遣手配の時間を確保する。
+  const minBookingDate = getMinBookingDate();
+  const dates = getDateRange(28).filter((d) => d >= minBookingDate);
   const datesWithAvailability = await findDatesWithAvailability(c.env.DB, record.area, dates);
 
   const dateButtons = dates
@@ -282,7 +299,7 @@ ${renderHeader('STEP 1 / 3 ・日付を選択')}
     <div class="grid grid-cols-4 gap-2">
       ${dateButtons}
     </div>
-    <p class="text-xs text-gray-500 mt-4">※ 最大4週間先までご予約いただけます</p>
+    <p class="text-xs text-gray-500 mt-4">※ 撮影日の${BOOKING_MIN_LEAD_DAYS}日前までにお申し込みください（本日から${BOOKING_MIN_LEAD_DAYS}日後以降・最大4週間先まで）</p>
   </div>
 </main>`;
 
@@ -298,6 +315,8 @@ booking.get('/booking/slots', async (c) => {
   const date = c.req.query('date');
   if (!token || !date) return renderError('パラメータが不足しています');
   if (!isValidDateString(date)) return renderError('日付の形式が不正です');
+  // 3日前締切: 直近日のスロット閲覧をブロック（ピッカーを介さない直接アクセス対策）
+  if (date < getMinBookingDate()) return renderTooSoon();
 
   const record = await getBookingRequestByToken(c.env.DB, token);
   if (!record) return renderError('予約リンクが見つかりません');
@@ -386,6 +405,8 @@ booking.get('/booking/confirm', async (c) => {
   if (!isValidDateString(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(end)) {
     return renderError('日時の形式が不正です');
   }
+  // 3日前締切: 直近日の確認画面表示をブロック（deep-link/戻る操作対策）
+  if (date < getMinBookingDate()) return renderTooSoon();
 
   const record = await getBookingRequestByToken(c.env.DB, token);
   if (!record) return renderError('予約リンクが見つかりません');
@@ -542,6 +563,9 @@ booking.post('/booking/submit', async (c) => {
     if (!/^\d{4}$/.test(plateNumber)) {
       return renderError('ナンバープレートは4桁の数字で入力してください');
     }
+    // 3日前締切の最終ガード（サーバ側の権威判定）。ピッカー/画面を迂回した
+    // 直近日の POST 偽装もここで確実に弾く。スロット確保・DB更新の前に判定する。
+    if (date < getMinBookingDate()) return renderTooSoon();
 
     const record = await getBookingRequestByToken(c.env.DB, token);
     if (!record) return renderError('予約リンクが見つかりません');
