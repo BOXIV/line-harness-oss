@@ -92,7 +92,7 @@ export default function ShiftLogicModal({ onClose }: { onClose: () => void }) {
       aria-label="撮影予約・シフトロジック"
     >
       <div
-        className="relative flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-white/75 shadow-[0_30px_80px_-20px_rgba(15,23,42,0.5)] ring-1 ring-black/5 backdrop-blur-2xl"
+        className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/60 bg-white/75 shadow-[0_30px_80px_-20px_rgba(15,23,42,0.5)] ring-1 ring-black/5 backdrop-blur-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 上部の光沢（リキッドグラスのシーン） */}
