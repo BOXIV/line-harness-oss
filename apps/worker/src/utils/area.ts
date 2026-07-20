@@ -155,3 +155,24 @@ export function getDateRange(daysAhead: number): string[] {
   }
   return dates;
 }
+
+/**
+ * 撮影予約の最短リードタイム（日数, JST・暦日基準）。
+ *
+ * 直前の申込は「承認確認」と「撮影スタッフの派遣手配」が間に合わないため、
+ * 本日を0日目として、この日数以降の日程のみ予約可能にする。
+ * 例: 3 → 本日から3日後以降のみ受付＝実質「撮影日の3日前が申込締切」。
+ *
+ * ※「その他の県」フロー(/booking/other)はスタッフが定期巡回しておらず、より長い
+ *   リードタイム(MIN_DAYS_AHEAD=7)を別途使用する。こちらは首都圏など巡回エリア向け。
+ */
+export const BOOKING_MIN_LEAD_DAYS = 3;
+
+/**
+ * 予約可能な最短日（YYYY-MM-DD, JST）を返す。
+ * 本日を index0 とし、BOOKING_MIN_LEAD_DAYS 日後の日付。
+ * 予約フォームの日付フィルタ／各サーバ側ガードで共通利用する。
+ */
+export function getMinBookingDate(): string {
+  return getDateRange(BOOKING_MIN_LEAD_DAYS + 1)[BOOKING_MIN_LEAD_DAYS];
+}
