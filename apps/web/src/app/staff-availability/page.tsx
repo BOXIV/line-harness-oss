@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import AreaTabs from '@/components/staff-availability/area-tabs'
+import ShiftLogicModal from '@/components/staff-availability/shift-logic-modal'
 import { AREA_LABELS, type AreaId } from '@/lib/area-meta'
 
 const SLOT_OPTIONS = [
@@ -88,6 +89,7 @@ export default function StaffAvailabilityPage() {
   })
   const [saving, setSaving] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>('gantt')
+  const [showLogic, setShowLogic] = useState(false)
   const [ganttStartDate, setGanttStartDate] = useState<string>(() => jstToday())
   const [ganttArea, setGanttArea] = useState<string>('shutoken')
   const [bookings, setBookings] = useState<BookingRow[]>([])
@@ -398,8 +400,25 @@ export default function StaffAvailabilityPage() {
 
   return (
     <>
-      <Header title="スタッフシフト管理" />
+      <Header
+        title="スタッフシフト管理"
+        action={
+          <button
+            onClick={() => setShowLogic(true)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/70 px-3.5 py-2 text-xs font-medium text-slate-700 shadow-sm backdrop-blur transition hover:bg-white hover:shadow"
+            title="撮影予約・シフトロジックの解説を表示"
+          >
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M8 7.1v3.5M8 5.1h.01" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+            シフトロジック
+          </button>
+        }
+      />
       <main className="px-6 py-6">
+        {showLogic && <ShiftLogicModal onClose={() => setShowLogic(false)} />}
+
         {error && (
           <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-800 rounded-lg text-sm">
             {error}
