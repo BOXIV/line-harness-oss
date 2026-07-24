@@ -145,6 +145,27 @@ export async function listBookingRequests(
   return result.results;
 }
 
+/**
+ * 承認待ち（status = 'pending'）の件数。サイドバーのバッジ用に件数だけを軽量に返す。
+ * staffId を渡すと担当分のみカウントする（staffロールのスコープに合わせる）。
+ */
+export async function countPendingBookingRequests(
+  db: D1Database,
+  filter: { staffId?: string } = {},
+): Promise<number> {
+  const where = ["status = 'pending'"];
+  const params: unknown[] = [];
+  if (filter.staffId) {
+    where.push('staff_id = ?');
+    params.push(filter.staffId);
+  }
+  const row = await db
+    .prepare(`SELECT COUNT(*) as count FROM booking_requests WHERE ${where.join(' AND ')}`)
+    .bind(...params)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
+}
+
 export async function updateBookingRequest(
   db: D1Database,
   id: string,

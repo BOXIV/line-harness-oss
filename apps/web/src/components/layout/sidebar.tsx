@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAccount } from '@/contexts/account-context'
 import type { AccountWithStats } from '@/contexts/account-context'
+import { api } from '@/lib/api'
+import { BOOKINGS_CHANGED_EVENT } from '@/lib/booking-events'
 
 // ビルド環境判定（NEXT_PUBLIC_API_URL のホストで test / 本番 を見分け、タイトルにバッジを出す）。
 const _API_URL = process.env.NEXT_PUBLIC_API_URL || ''
@@ -52,7 +54,7 @@ const menuSections = [
   {
     label: '撮影予約',
     items: [
-      { href: '/bookings', label: '予約一覧', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+      { href: '/bookings', label: '予約一覧', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z', badge: 'bookingPending' },
       { href: '/staff-availability', label: 'スタッフシフト', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
     ],
   },
@@ -168,6 +170,57 @@ function AccountSwitcher() {
   )
 }
 
+/**
+ * 撮影予約の「承認待ち」件数。
+ * 初回 + パス変更 + 60秒ポーリング + タブ復帰 + 予約操作イベントで更新する。
+ */
+function usePendingBookingCount(pathname: string) {
+  const [count, setCount] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const fetchCount = async () => {
+      // 未ログイン時（APIキー未設定）は叩かない
+      if (!localStorage.getItem('lh_api_key')) return
+      try {
+        const res = await api.bookingRequests.pendingCount()
+        if (!cancelled && res.success) setCount(res.data.count)
+      } catch {
+        // バッジは補助情報なので失敗しても画面には出さない（前回値を保持）
+      }
+    }
+
+    fetchCount()
+    const timer = setInterval(fetchCount, 60_000)
+    const onVisible = () => { if (document.visibilityState === 'visible') fetchCount() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener(BOOKINGS_CHANGED_EVENT, fetchCount)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener(BOOKINGS_CHANGED_EVENT, fetchCount)
+    }
+  }, [pathname])
+
+  return count
+}
+
+/** 承認待ち件数の赤バッジ（0件なら非表示） */
+function PendingBadge({ count, active }: { count: number; active: boolean }) {
+  if (count <= 0) return null
+  return (
+    <span
+      className={`ml-auto shrink-0 min-w-[20px] h-5 px-1.5 inline-flex items-center justify-center rounded-full text-[11px] font-bold leading-none ${
+        active ? 'bg-white text-red-600' : 'bg-red-500 text-white'
+      }`}
+      aria-label={`承認待ち ${count}件`}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
+
 function NavIcon({ d }: { d: string }) {
   return (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -181,6 +234,7 @@ export default function Sidebar() {
   const [isOpen, setIsOpen] = useState(false)
   const [staffName, setStaffName] = useState<string | null>(null)
   const [staffRole, setStaffRole] = useState<string | null>(null)
+  const pendingBookings = usePendingBookingCount(pathname)
 
   useEffect(() => {
     setStaffName(localStorage.getItem('lh_staff_name'))
@@ -253,6 +307,9 @@ export default function Sidebar() {
                 >
                   <NavIcon d={item.icon} />
                   {item.label}
+                  {'badge' in item && item.badge === 'bookingPending' && (
+                    <PendingBadge count={pendingBookings} active={active} />
+                  )}
                 </Link>
               )
             })}
@@ -302,8 +359,8 @@ export default function Sidebar() {
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
-          aria-label="メニュー"
+          className="relative min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
+          aria-label={pendingBookings > 0 ? `メニュー（承認待ち ${pendingBookings}件）` : 'メニュー'}
         >
           <svg className="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {isOpen
@@ -311,6 +368,12 @@ export default function Sidebar() {
               : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             }
           </svg>
+          {/* メニューを閉じていてもバッジが見えるよう、ハンバーガーにも件数を出す */}
+          {!isOpen && pendingBookings > 0 && (
+            <span className="absolute top-1 right-1 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+              {pendingBookings > 99 ? '99+' : pendingBookings}
+            </span>
+          )}
         </button>
         <div className="flex items-center gap-2">
           <img src="/logo.png" alt="BOXIV" className="w-5 h-5" />

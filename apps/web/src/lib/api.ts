@@ -646,6 +646,9 @@ export const api = {
         createdAt: string; updatedAt: string;
       }>>>('/api/booking-requests' + (qs ? '?' + qs : ''))
     },
+    /** 承認待ち件数（サイドバーの赤バッジ用）。件数だけを軽量に取得する。 */
+    pendingCount: () =>
+      fetchApi<ApiResponse<{ count: number }>>('/api/booking-requests/pending-count'),
     get: (id: string) =>
       fetchApi<ApiResponse<{
         id: string; status: string; plate_number: string | null; customer_name: string | null;
