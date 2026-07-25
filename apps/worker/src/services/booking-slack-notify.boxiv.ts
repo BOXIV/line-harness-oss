@@ -80,27 +80,38 @@ export async function notifyBookingSlack(
     const n = booking.selected_candidate;
     fixedDate = formatSlotLabel(row[`candidate_${n}_date`], row[`candidate_${n}_start`], row[`candidate_${n}_end`]);
   }
-  let dateField = fixedDate;
-  if (!dateField) {
-    const candidates = [1, 2, 3]
-      .map((n) => {
-        const label = formatSlotLabel(row[`candidate_${n}_date`], row[`candidate_${n}_start`], row[`candidate_${n}_end`]);
-        return label ? `第${n}希望: ${label}` : null;
-      })
-      .filter((v): v is string => v !== null);
-    dateField = candidates.length ? candidates.join('\n') : '-';
-  }
+  const candidateLines = fixedDate
+    ? []
+    : [1, 2, 3]
+        .map((n) => {
+          const label = formatSlotLabel(row[`candidate_${n}_date`], row[`candidate_${n}_start`], row[`candidate_${n}_end`]);
+          return label ? `第${n}希望　*${escapeSlackText(label)}*` : null;
+        })
+        .filter((v): v is string => v !== null);
 
   const isApproved = kind === 'approved';
   const title = isApproved ? '予約が確定しました。' : '予約申請がありました。';
   const dateLabel = isApproved && fixedDate ? '確定日時' : '希望日時';
 
-  const lines = [
-    `お客様名: ${escapeSlackText(customerName)}`,
-    `掲載ID: ${escapeSlackText(listingId)}`,
-    `${dateLabel}: ${escapeSlackText(dateField)}`,
-    `エリア: ${escapeSlackText(areaField)}`,
-    `担当スタッフ: ${escapeSlackText(staffName)}`,
+  // 日時は 1 件なら 1 行、3候補なら見出し＋インデントした候補行にする。
+  let dateLines: string;
+  if (fixedDate) {
+    dateLines = `${dateLabel}　*${escapeSlackText(fixedDate)}*`;
+  } else if (candidateLines.length) {
+    dateLines = `${dateLabel}\n${candidateLines.map((l) => `　　${l}`).join('\n')}`;
+  } else {
+    dateLines = `${dateLabel}　*-*`;
+  }
+
+  // 明細は attachment 内の context ブロックで小さく出す。
+  // context = 小さいグレー文字、attachment の color = 左のカラーサイドバー（申請=アンバー/確定=緑）で
+  // 見出しと明細のメリハリを付ける。値は escapeSlackText 済みを埋め込む。
+  const details = [
+    `👤 お客様名　*${escapeSlackText(customerName)}*`,
+    `🏷️ 掲載ID　*${escapeSlackText(listingId)}*`,
+    `🗓️ ${dateLines}`,
+    `📍 エリア　*${escapeSlackText(areaField)}*`,
+    `📸 担当スタッフ　*${escapeSlackText(staffName)}*`,
   ].join('\n');
 
   const res = await fetch('https://slack.com/api/chat.postMessage', {
@@ -111,9 +122,13 @@ export async function notifyBookingSlack(
       text: title, // 通知バナー用フォールバック
       unfurl_links: false,
       unfurl_media: false,
-      blocks: [
-        { type: 'section', text: { type: 'mrkdwn', text: `<!here>\n*${title}*` } },
-        { type: 'section', text: { type: 'mrkdwn', text: lines } },
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `<!here>\n*${title}*` } }],
+      attachments: [
+        {
+          color: isApproved ? '#16a34a' : '#f59e0b',
+          fallback: title,
+          blocks: [{ type: 'context', elements: [{ type: 'mrkdwn', text: details }] }],
+        },
       ],
     }),
   });
