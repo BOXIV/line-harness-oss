@@ -111,10 +111,21 @@ chats.delete('/api/operators/:id', requireRole('owner','admin'), async (c) => {
 
 // ========== チャットCRUD ==========
 
-function parseFriendNotion(metadataJson: unknown): { source: string; pageId: string; label: string | null; realName: string | null } | null {
+type FriendNotionLink = {
+  source: string;
+  pageId: string;
+  label: string | null;
+  realName: string | null;
+  listingType?: string | null;
+  /** オペレーターが掲載IDを明示選択した連携 */
+  pinned?: boolean;
+  candidateCount?: number;
+};
+
+function parseFriendNotion(metadataJson: unknown): FriendNotionLink | null {
   if (typeof metadataJson !== 'string' || !metadataJson) return null;
   try {
-    const meta = JSON.parse(metadataJson) as { notion?: { source: string; pageId: string; label: string | null; realName: string | null } };
+    const meta = JSON.parse(metadataJson) as { notion?: FriendNotionLink };
     return meta.notion ?? null;
   } catch {
     return null;

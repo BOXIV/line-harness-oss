@@ -9,6 +9,7 @@ import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
 import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
+import NotionLinkPicker from '@/components/chats/notion-link-picker'
 import { detectFriendSource } from '@/lib/friend-source'
 import { notionPillClass } from '@/lib/notion-color'
 import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
@@ -16,8 +17,13 @@ import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 interface NotionFriendLink {
   source: 'seller' | 'buyer'
   pageId: string
+  /** 掲載ID */
   label: string | null
   realName: string | null
+  listingType?: string | null
+  /** オペレーターが掲載IDを明示選択した連携（他の掲載ID行のステータスは反映されない） */
+  pinned?: boolean
+  candidateCount?: number
   linkedAt?: string
 }
 
@@ -223,7 +229,6 @@ export default function ChatsPage() {
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
   const [customerStatusFilter, setCustomerStatusFilter] = useState<string>('all')
   const [statusOptions, setStatusOptions] = useState<Array<{ id: string; name: string; color: string | null; source: 'seller' | 'buyer' }>>([])
-  const [linkingNotion, setLinkingNotion] = useState(false)
   const [notionMessage, setNotionMessage] = useState('')
   const [sendingSchedule, setSendingSchedule] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -750,8 +755,16 @@ export default function ChatsPage() {
                         compact
                       />
                       {chatDetail.notion?.label && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600"
+                          title={[
+                            chatDetail.notion.listingType,
+                            chatDetail.notion.pinned ? '掲載IDを選択して固定済み（他の掲載ID行のステータスは反映されません）' : '自動判定で連携中',
+                            (chatDetail.notion.candidateCount ?? 0) > 1 ? `候補 ${chatDetail.notion.candidateCount} 件` : null,
+                          ].filter(Boolean).join(' / ')}
+                        >
                           {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}
+                          {chatDetail.notion.pinned && <span className="ml-1">📌</span>}
                         </span>
                       )}
                       <RichMenuPicker friendId={chatDetail.friendId} />
@@ -802,37 +815,17 @@ export default function ChatsPage() {
                   >
                     {sendingSchedule ? '⏳' : '🗓️'} 日程調整送信
                   </button>
-                  <button
-                    onClick={async () => {
-                      if (!chatDetail) return
-                      setLinkingNotion(true)
-                      setNotionMessage('')
-                      try {
-                        const res = await api.chats.notionLink(chatDetail.friendId)
-                        if (res.success) {
-                          if (res.data.linked) {
-                            setNotionMessage(`✓ 連携完了: ${res.data.link?.realName ?? ''}`)
-                            loadChatDetail(chatDetail.id)
-                            loadChats()
-                          } else {
-                            setNotionMessage(res.data.message ?? '該当レコードが見つかりませんでした')
-                          }
-                        } else {
-                          setNotionMessage(`連携失敗: ${res.error}`)
-                        }
-                      } catch (e) {
-                        setNotionMessage(`連携失敗: ${e instanceof Error ? e.message : 'unknown'}`)
-                      } finally {
-                        setLinkingNotion(false)
-                        setTimeout(() => setNotionMessage(''), 5000)
+                  <NotionLinkPicker
+                    friendId={chatDetail.friendId}
+                    onLinked={(message, linked) => {
+                      setNotionMessage(message)
+                      if (linked) {
+                        loadChatDetail(chatDetail.id)
+                        loadChats()
                       }
+                      setTimeout(() => setNotionMessage(''), 6000)
                     }}
-                    disabled={linkingNotion}
-                    className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-md transition-colors"
-                    title="Notion 出品者DB と連携"
-                  >
-                    {linkingNotion ? '⏳' : '🔗'} Notion連携
-                  </button>
+                  />
                   <button
                     onClick={() => setShowSchedulePanel(true)}
                     className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-md transition-colors"
