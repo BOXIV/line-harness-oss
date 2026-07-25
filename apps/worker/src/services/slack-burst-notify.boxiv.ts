@@ -12,6 +12,8 @@
 // 並行性: flush は cron(1分)からのみ呼ぶ前提（index.ts の scheduled で `* * * * *` 限定）。
 // Cloudflare は同一 cron を多重起動しないため、1分間隔・サブ秒で完了する flush は競合しない。
 
+import { escapeSlackText } from './slack.boxiv.js';
+
 export interface SlackBurstEnv {
   DB: D1Database;
   CHAT_ALERT_SLACK_BOT_TOKEN?: string;
@@ -177,7 +179,7 @@ async function flushOne(
       let body = r.message_type === 'text' ? r.content : `[${MEDIA_KIND_LABEL[r.message_type] || r.message_type}]`;
       body = body.replace(/\s+/g, ' ').trim();
       if (body.length > 140) body = body.slice(0, 140) + '…';
-      return `\`${t}\` ${body}`;
+      return `\`${t}\` ${escapeSlackText(body)}`;
     })
     .join('\n');
 
@@ -188,7 +190,9 @@ async function flushOne(
       channel,
       text: 'メッセージ受信がありました。',
       blocks: [
-        { type: 'section', text: { type: 'mrkdwn', text: `<!channel>\n*メッセージ受信がありました。*\nユーザー名: ${userName}` } },
+        // ユーザー名・本文はエスケープ必須。mrkdwn は `<!channel>` 等のブロードキャストメンションを
+        // 解釈するため、LINE表示名やメッセージ本文にそれを書かれると @here より広く通知されてしまう。
+        { type: 'section', text: { type: 'mrkdwn', text: `<!here>\n*メッセージ受信がありました。*\nユーザー名: ${escapeSlackText(userName)}` } },
         { type: 'context', elements: [{ type: 'mrkdwn', text: lines || '(本文なし)' }] },
       ],
     }),

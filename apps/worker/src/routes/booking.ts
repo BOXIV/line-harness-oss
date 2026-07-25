@@ -37,6 +37,7 @@ import {
   findDatesWithAvailability,
 } from '../utils/staff-assignment.js';
 import { bookingAuthMiddleware } from '../middleware/booking-auth.js';
+import { notifyBookingSlack } from '../services/booking-slack-notify.boxiv.js';
 import type { Env } from '../index.js';
 import { firstSentMessageId } from '../utils/quote.js';
 
@@ -625,6 +626,13 @@ booking.post('/booking/submit', async (c) => {
       console.error('booking submit: LINE notification failed:', err);
     }
 
+    // Slack通知（#pj-lightning-line「予約申請がありました。」）— 応答をブロックしない
+    c.executionCtx.waitUntil(
+      notifyBookingSlack(c.env, record.id, 'requested').catch((err) =>
+        console.error('booking submit: Slack notification failed:', err),
+      ),
+    );
+
     // 完了画面へリダイレクト
     return c.redirect(`/booking/complete?token=${encodeURIComponent(token)}`);
   } catch (err) {
@@ -939,6 +947,13 @@ booking.post('/booking/other/submit', async (c) => {
     } catch (err) {
       console.error('booking other submit: LINE notification failed:', err);
     }
+
+    // Slack通知（#pj-lightning-line「予約申請がありました。」）— 3候補は希望日時として並べる
+    c.executionCtx.waitUntil(
+      notifyBookingSlack(c.env, record.id, 'requested').catch((err) =>
+        console.error('booking other submit: Slack notification failed:', err),
+      ),
+    );
 
     return c.redirect(`/booking/complete?token=${encodeURIComponent(token)}`);
   } catch (err) {
