@@ -21,6 +21,7 @@ import {
   getStaffMembers,
   findAvailableStaffForSlot,
 } from '@line-crm/db';
+import { notifyBookingSlack } from '../services/booking-slack-notify.boxiv.js';
 import type { Env } from '../index.js';
 import { firstSentMessageId } from '../utils/quote.js';
 
@@ -292,6 +293,13 @@ bookingRequests.put('/api/booking-requests/:id/approve', async (c) => {
     c.executionCtx.waitUntil(
       sendBookingStatusNotification(c.env, id, 'approved').catch((err) =>
         console.error('approve notification failed:', err),
+      ),
+    );
+
+    // Slack通知（#pj-lightning-line「予約が確定しました。」）
+    c.executionCtx.waitUntil(
+      notifyBookingSlack(c.env, id, 'approved').catch((err) =>
+        console.error('approve Slack notification failed:', err),
       ),
     );
 
