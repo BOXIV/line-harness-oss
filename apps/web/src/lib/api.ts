@@ -31,6 +31,35 @@ import type { RichMenu, CreateRichMenuInput } from '@line-crm/shared'
 /** Broadcast type from API (now camelCase after worker serialization) */
 export type ApiBroadcast = Broadcast
 
+/** BOXIV: friend.metadata.notion（連携中の Notion 出品者DB 行） */
+export interface NotionSellerLink {
+  source: 'seller'
+  pageId: string
+  /** 掲載ID */
+  label: string | null
+  realName: string | null
+  listingType?: string | null
+  /** オペレーターが掲載IDを明示選択した連携（他の掲載ID行のステータスは反映されない） */
+  pinned?: boolean
+  candidateCount?: number
+  linkedAt?: string
+}
+
+/** BOXIV: 連携先の候補（Notion 出品者DB の行） */
+export interface NotionSellerCandidate {
+  pageId: string
+  /** 掲載ID */
+  label: string | null
+  realName: string | null
+  listingType: string | null
+  status: string | null
+  /** 'name' は LINE User ID 未記入の行を名前で拾った弱い一致 */
+  matchedBy: 'lineUserId' | 'name'
+  createdTime: string | null
+  lastEditedTime: string | null
+  url: string | null
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 if (!API_URL) {
   throw new Error(
@@ -402,18 +431,26 @@ export const api = {
       fetchApi<ApiResponse<{ id: string; lastReadAt: string }>>(`/api/chats/${id}/read`, {
         method: 'POST',
       }),
-    notionLink: (friendId: string) =>
+    /**
+     * Notion 出品者DB との連携。pageId を渡すとその掲載ID行に固定する（pinned）。
+     * 省略時は自動判定（既にオペレーターが選択済みならその行を維持）。
+     */
+    notionLink: (friendId: string, pageId?: string) =>
       fetchApi<ApiResponse<{
         linked: boolean
         message?: string
-        link?: {
-          source: 'seller'
-          pageId: string
-          label: string | null
-          realName: string | null
-          linkedAt: string
-        }
-      }>>(`/api/friends/${friendId}/notion-link`, { method: 'POST' }),
+        link?: NotionSellerLink
+      }>>(`/api/friends/${friendId}/notion-link`, {
+        method: 'POST',
+        ...(pageId ? { body: JSON.stringify({ pageId }) } : {}),
+      }),
+    /** 連携先の候補（掲載IDが複数ある出品者の紐付け先選択用） */
+    notionCandidates: (friendId: string) =>
+      fetchApi<ApiResponse<{
+        candidates: NotionSellerCandidate[]
+        linkedPageId: string | null
+        pinned: boolean
+      }>>(`/api/friends/${friendId}/notion-candidates`),
   },
   reminders: {
     list: (params?: { accountId?: string }) => {

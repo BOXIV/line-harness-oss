@@ -9,6 +9,13 @@
 //   status  : Notion select/status の option id == status_options.notion_id（source 一致）
 //             → friend_status_assignments.status_option_id へ upsert（assigned_by='notion'）
 //   Notion 側でステータス未設定 → ローカル割当を解除（delete）。
+//
+// 掲載ID の多重化ガード（重要）:
+//   1人の出品者が複数の掲載ID行を持つ場合（プレミアム出品 → アプリ出品へ変更 等）、
+//   friends.metadata.notion.pageId で選ばれている行以外のステータス変更は反映しない。
+//   これが無いと「旧プレミアム出品行を取引停止にすると LINE Connect 側も取引停止になる」
+//   （さらに 12h reconcile で行間のステータスが交互に上書きされる）。
+//   連携が無い友だちは従来どおり LINE User ID 一致だけで反映する。
 
 import { jstNow } from '@line-crm/db';
 
@@ -90,6 +97,17 @@ function extractFromPage(
   return { lineUserId, optionId, optionName };
 }
 
+// friends.metadata.notion（連携先の掲載ID行）を読む。
+function parseLinkedNotion(metadataJson: string | null): { source?: string; pageId?: string } | null {
+  if (!metadataJson) return null;
+  try {
+    const meta = JSON.parse(metadataJson) as { notion?: { source?: string; pageId?: string } };
+    return meta.notion ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // friend_status_assignments を Notion 値で upsert（未設定なら delete）。
 async function applyStatus(
   db: D1Database,
@@ -97,12 +115,26 @@ async function applyStatus(
   lineUserId: string,
   optionId: string | null,
   optionName: string | null,
+  sourcePageId: string | null,
 ): Promise<string> {
   const friend = await db
-    .prepare('SELECT id FROM friends WHERE line_user_id = ?')
+    .prepare('SELECT id, metadata FROM friends WHERE line_user_id = ?')
     .bind(lineUserId)
-    .first<{ id: string }>();
+    .first<{ id: string; metadata: string | null }>();
   if (!friend) return 'skip-no-friend';
+
+  // 連携先の掲載ID行が決まっているなら、その行以外のステータス変更は無視する。
+  // source 違い（購入者DB由来）は連携情報が出品者行なので比較しない。
+  if (sourcePageId) {
+    const linked = parseLinkedNotion(friend.metadata);
+    if (
+      linked?.pageId &&
+      (linked.source ?? 'seller') === source &&
+      normalizeId(linked.pageId) !== normalizeId(sourcePageId)
+    ) {
+      return 'skip-other-listing';
+    }
+  }
 
   if (!optionId) {
     await db.prepare('DELETE FROM friend_status_assignments WHERE friend_id = ?').bind(friend.id).run();
@@ -160,7 +192,7 @@ export async function syncNotionPageStatus(
   if (!source) return 'skip-unknown-db';
   const { lineUserId, optionId, optionName } = extractFromPage(env, source, page);
   if (!lineUserId) return 'skip-no-lineuserid';
-  return applyStatus(db, source, lineUserId, optionId, optionName);
+  return applyStatus(db, source, lineUserId, optionId, optionName, page.id || pageId);
 }
 
 // 12h reconcile: 出品者/購入者DB を走査し、全ページのステータスを取り込む（自己修復）。
@@ -192,7 +224,7 @@ export async function reconcileNotionStatuses(db: D1Database, env: NotionStatusS
         try {
           const { lineUserId, optionId, optionName } = extractFromPage(env, source, page);
           if (!lineUserId) continue;
-          await applyStatus(db, source, lineUserId, optionId, optionName);
+          await applyStatus(db, source, lineUserId, optionId, optionName, page.id);
         } catch (err) {
           console.error('reconcileNotionStatuses: row failed', err);
         }

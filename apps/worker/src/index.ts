@@ -106,6 +106,7 @@ export type Env = {
     NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
     NOTION_BUYER_STATUS_PROP?: string;
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
+    NOTION_SELLER_LISTING_TYPE_PROP?: string; // default: 出品タイプ（連携先候補の表示用）
     NOTION_AUTOMATION_SECRET?: string;       // PR6: Notion DBオートメーション Send webhook の共有シークレット（未設定なら受信口は無効）
     // バッテリー劣化診断 LIFF フォーム (BOXIV) — 全て任意（未設定なら該当処理をスキップ）
     // spec_API は listing パイプラインと同じ VEHICLE_SPECS_* を正とする。旧 SPEC_* は後方互換で許容。
