@@ -22,6 +22,7 @@ export interface ListingNotionEnv {
   NOTION_SELLER_EMAIL_PROP?: string;            // default '[Form]メールアドレス'
   NOTION_SELLER_MEMO_PROP?: string;             // default 'その他詳細備考'
   NOTION_SELLER_LISTING_ID_PROP?: string;       // default '掲載ID'
+  NOTION_SELLER_BOXIV_ID_PROP?: string;         // default 'boxivID'
   NOTION_SELLER_ZIP_PROP?: string;              // default '郵便番号'
   NOTION_SELLER_STATUS_PROP?: string;           // default 'ステータス ' (末尾スペース)
   NOTION_SELLER_STATUS_VALUE?: string;          // default '0_LINE登録'（連携時に付与）
@@ -42,6 +43,7 @@ interface Cfg {
   emailProp: string;
   memoProp: string;
   listingIdProp: string;
+  boxivIdProp: string;
   zipProp: string;
   statusProp: string;
   statusValue: string;
@@ -65,6 +67,7 @@ export function notionSellerConfig(env: ListingNotionEnv): Cfg | null {
     emailProp: env.NOTION_SELLER_EMAIL_PROP || '[Form]メールアドレス',
     memoProp: env.NOTION_SELLER_MEMO_PROP || 'その他詳細備考',
     listingIdProp: env.NOTION_SELLER_LISTING_ID_PROP || '掲載ID',
+    boxivIdProp: env.NOTION_SELLER_BOXIV_ID_PROP || 'boxivID',
     zipProp: env.NOTION_SELLER_ZIP_PROP || '郵便番号',
     statusProp: env.NOTION_SELLER_STATUS_PROP || 'ステータス ',
     statusValue: env.NOTION_SELLER_STATUS_VALUE || '0_LINE登録',
@@ -272,6 +275,8 @@ export interface CreateInput {
   phone?: string | null;
   email?: string | null;
   zip?: string | null;
+  /** BOXIV ユーザーID（= Cloud SQL User.userPublicId・英大文字+数字8桁）。アプリ経由の起票で入る前提（app_listing 連携の引き当てキー）。 */
+  boxivId?: string | null;
 }
 
 /**
@@ -285,6 +290,7 @@ export async function createOrUpdateSellerRow(env: ListingNotionEnv, input: Crea
   const baseMs = Date.now();
   const props = buildSellerProps(input.formData, { phone: input.phone, email: input.email }, cfg, baseMs);
   if (input.zip) props[cfg.zipProp] = richText(input.zip);
+  if (input.boxivId) props[cfg.boxivIdProp] = richText(input.boxivId);
 
   const existing = await queryPageId(cfg, cfg.matchKeyProp, input.matchKey);
   if (existing) {
@@ -357,4 +363,31 @@ export async function linkSellerRow(env: ListingNotionEnv, input: LinkInput): Pr
   const created = await notionApi(cfg, `/pages`, 'POST', { parent: { database_id: cfg.dbId }, properties: createProps });
   if (created.id) await setOperationalStatus(created.id);
   return created.id ?? null;
+}
+
+export interface LinkByBoxivIdInput {
+  boxivId: string; // BOXIV ユーザーID
+  lineUserId: string;
+}
+
+/**
+ * アプリ出品フロー用: boxivID で Notion 出品者DB を引き当て、lineUserId / 連携ステータス(連携済) を PATCH。
+ * フォームフロー(match_key)と違い、アプリは boxivID を署名 state で持つのでそれをキーにする。
+ * 行は submit（起票）が boxivID 入りで作っている前提。無ければ何もしない(null)。返り値: pageId or null。
+ */
+export async function linkSellerRowByBoxivId(
+  env: ListingNotionEnv,
+  input: LinkByBoxivIdInput,
+): Promise<string | null> {
+  const cfg = notionSellerConfig(env);
+  if (!cfg) return null;
+  const pageId = await queryPageId(cfg, cfg.boxivIdProp, input.boxivId);
+  if (!pageId) return null; // 起票済みが前提。無ければ紐付け対象なし
+  await notionApi(cfg, `/pages/${pageId}`, 'PATCH', {
+    properties: {
+      [cfg.lineUserIdProp]: richText(input.lineUserId),
+      [cfg.linkStatusProp]: notionValue('select', cfg.linkStatusLinked),
+    },
+  });
+  return pageId;
 }
