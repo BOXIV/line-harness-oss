@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import {
   listBookingRequests,
+  countPendingBookingRequests,
   getBookingRequestById,
   updateBookingRequest,
   approveBookingRequest,
@@ -98,6 +99,23 @@ bookingRequests.get('/api/booking-requests', async (c) => {
     return c.json({ success: true, data });
   } catch (err) {
     console.error('GET /api/booking-requests error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+/** GET /api/booking-requests/pending-count — 承認待ち件数（サイドバーのバッジ用）
+ *
+ * `/:id` より前に定義すること（後に置くと :id として拾われる）。
+ * 権限: staffロールは自分が担当する予約のみ。admin/ownerは全体。
+ */
+bookingRequests.get('/api/booking-requests/pending-count', async (c) => {
+  try {
+    const currentStaff = c.get('staff');
+    const staffId = currentStaff?.role === 'staff' ? currentStaff.id : undefined;
+    const count = await countPendingBookingRequests(c.env.DB, { staffId });
+    return c.json({ success: true, data: { count } });
+  } catch (err) {
+    console.error('GET /api/booking-requests/pending-count error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/api'
+import { notifyBookingsChanged } from '@/lib/booking-events'
 import Header from '@/components/layout/header'
 
 const AREA_LABELS: Record<string, string> = {
@@ -91,6 +92,8 @@ export default function BookingsPage() {
       const res = await api.bookingRequests.list(params)
       if (res.success) {
         setItems(res.data || [])
+        // 承認/却下などで一覧を読み直したらサイドバーの承認待ちバッジも更新する
+        notifyBookingsChanged()
       } else {
         setError(res.error || '読み込みに失敗しました')
       }
