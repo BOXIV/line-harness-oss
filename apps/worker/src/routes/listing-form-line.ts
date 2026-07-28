@@ -27,7 +27,7 @@
 import { Hono } from 'hono';
 import type { Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText } from '../services/slack.boxiv.js';
@@ -498,8 +498,8 @@ async function fireListingLinkCompleted(
     env.LINE_CHANNEL_ACCESS_TOKEN,
   );
   // 二重送信防止: 送信済みフラグを立てる（follow webhook 側はこれを見て再送しない）。
-  await markListingPriceNotified(env.DB, friend.id).catch((err) =>
-    console.error('listing-form callback: markListingPriceNotified failed', err),
+  await markLinkCompletedNotified(env.DB, friend.id, 'seller').catch((err) =>
+    console.error('listing-form callback: markLinkCompletedNotified failed', err),
   );
 }
 

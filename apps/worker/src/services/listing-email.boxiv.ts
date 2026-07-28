@@ -87,3 +87,81 @@ export function buildReminderSms(link: string): string {
     link,
   ].join('\n');
 }
+
+/**
+ * 購入エントリー未連携者への催促メール。出品者版と同一デザインで、文面だけ購入導線に差し替える。
+ * link = LIFF ラップ済みの連携リンク（呼び出し側で生成）。
+ */
+export function buildBuyerReminderEmail(link: string): ReminderEmailContent {
+  const subject = '【BOXIV Lightning】ご購入手続きに向けたLINE連携のお願い';
+  const html = `<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BOXIV Lightning LINE連携のご案内</title></head>
+<body style="margin:0;padding:0;background-color:#ffffff;font-family:-apple-system,'Hiragino Sans','Helvetica Neue',Arial,sans-serif;color:#1d1d1f;line-height:1.7">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff">
+    <tr><td align="center" style="padding:32px 16px">
+      <div style="text-align:center;margin:0 0 24px 0">
+        <img src="${LOGO_URL}" alt="BOXIV Lightning" width="300" style="display:inline-block;width:50%;max-width:300px;height:auto;">
+      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background-color:#f5f5f7;border-radius:14px">
+        <tr><td style="padding:45px 44px 0 44px">
+          <p style="margin:0 0 12px 0;font-size:15px">この度はBOXIV Lightningにて購入エントリーをいただき誠にありがとうございます。</p>
+          <p style="margin:0 0 12px 0;font-size:15px">BOXIV Lightning サポートチームでございます。</p>
+          <p style="margin:0;font-size:15px">購入エントリーを承りました。ご納車までのお手続きはLINEにてやり取りさせていただきますため、お手数ではございますが公式LINEアカウントとの連携をお願いいたします。</p>
+        </td></tr>
+        <tr><td style="padding:28px 44px 0 44px">
+          <h2 style="margin:0 0 8px 0;font-size:18px;font-weight:700;color:#1d1d1f">LINE連携のお手続き</h2>
+          <hr style="border:0;border-top:1px solid #d2d2d7;margin:0 0 16px 0">
+          <p style="margin:0 0 8px 0;font-size:15px">下記リンクから公式LINEアカウントとの連携をお願いいたします。</p>
+          <p style="margin:0 0 16px 0;font-size:13px;color:#6e6e73">※スマートフォンではLINEアプリが起動し、自動でログインされます。</p>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 4px 0">
+            <tr><td style="background-color:#06c755;border-radius:9999px"><a href="${link}" style="display:inline-block;padding:14px 32px;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;border-radius:9999px">LINEで連携する</a></td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:28px 44px 0 44px">
+          <p style="margin:0;font-size:15px">LINE連携後に、ご納車日の調整やお支払いのご案内を差し上げますので、早めのご対応をお願いいたします。</p>
+        </td></tr>
+        <tr><td style="padding:16px 44px 16px 44px">
+          <p style="margin:0;font-size:15px">今後ともBOXIV Lightningをどうぞよろしくお願いいたします。</p>
+        </td></tr>
+        <tr><td style="padding:8px 44px 45px 44px">
+          <hr style="border:0;border-top:1px solid #d2d2d7;margin:0 0 16px 0">
+          <p style="margin:0 0 4px 0;font-size:14px;font-weight:600;color:#1d1d1f">BOXIV Lightning サポートチーム</p>
+          <p style="margin:0 0 8px 0;font-size:13px;color:#6e6e73">※このメールは送信専用です。ご返信いただいても当社では受信できません。</p>
+          <p style="margin:0;font-size:13px;color:#6e6e73">お問い合わせフォームは<a href="${SUPPORT_FORM_URL}" style="color:#06c755;text-decoration:underline;font-weight:600">こちら</a></p>
+        </td></tr>
+      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="height:24px;line-height:24px">&nbsp;</td></tr></table>
+    </td></tr>
+  </table>
+</body></html>`;
+
+  const text = `この度はBOXIV Lightningにて購入エントリーをいただき誠にありがとうございます。
+BOXIV Lightning サポートチームでございます。
+
+購入エントリーを承りました。ご納車までのお手続きはLINEにてやり取りさせていただきますため、
+お手数ではございますが公式LINEアカウントとの連携をお願いいたします。
+
+■ LINE連携のお手続き
+下記リンクから連携をお願いいたします（スマートフォンではLINEアプリが起動し自動ログインされます）。
+${link}
+
+LINE連携後に、ご納車日の調整やお支払いのご案内を差し上げますので、早めのご対応をお願いいたします。
+今後ともBOXIV Lightningをどうぞよろしくお願いいたします。
+
+BOXIV Lightning サポートチーム
+※このメールは送信専用です。ご返信いただいても当社では受信できません。
+お問い合わせフォーム: ${SUPPORT_FORM_URL}`;
+
+  return { subject, text, html };
+}
+
+/** 購入者向け SMS 本文（プレーン・実改行・短縮リンク）。link は短縮URL(/rb/<key>)を渡す想定。 */
+export function buildBuyerReminderSms(link: string): string {
+  return [
+    '【BOXIV Lightning】',
+    '購入エントリーありがとうございます。ご納車までのお手続きはLINEでご案内いたしますので、公式LINEの連携をお願いします。',
+    '',
+    '▼連携はこちら',
+    link,
+  ].join('\n');
+}

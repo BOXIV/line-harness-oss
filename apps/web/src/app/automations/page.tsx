@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 
-type AutomationEventType = "friend_add" | "tag_change" | "score_threshold" | "cv_fire" | "message_received" | "calendar_booked" | "postback_received" | "listing_link_completed"
+type AutomationEventType = "friend_add" | "tag_change" | "score_threshold" | "cv_fire" | "message_received" | "calendar_booked" | "postback_received" | "listing_link_completed" | "buyer_link_completed"
 
 interface AutomationAction {
   type: "add_tag" | "remove_tag" | "start_scenario" | "send_message" | "send_webhook" | "switch_rich_menu"
@@ -34,6 +34,7 @@ const eventTypeOptions: { value: AutomationEventType; label: string }[] = [
   { value: 'calendar_booked', label: 'カレンダー予約' },
   { value: 'postback_received', label: 'ポストバック受信' },
   { value: 'listing_link_completed', label: '出品フォーム連携完了' },
+  { value: 'buyer_link_completed', label: '購入エントリー連携完了' },
 ]
 
 const eventTypeLabelMap: Record<AutomationEventType, string> = {
@@ -45,6 +46,7 @@ const eventTypeLabelMap: Record<AutomationEventType, string> = {
   calendar_booked: 'カレンダー予約',
   postback_received: 'ポストバック受信',
   listing_link_completed: '出品フォーム連携完了',
+  buyer_link_completed: '購入エントリー連携完了',
 }
 
 const eventTypeBadgeColor: Record<AutomationEventType, string> = {
@@ -56,6 +58,7 @@ const eventTypeBadgeColor: Record<AutomationEventType, string> = {
   calendar_booked: 'bg-indigo-100 text-indigo-700',
   postback_received: 'bg-orange-100 text-orange-700',
   listing_link_completed: 'bg-teal-100 text-teal-700',
+  buyer_link_completed: 'bg-sky-100 text-sky-700',
 }
 
 interface CreateFormState {
