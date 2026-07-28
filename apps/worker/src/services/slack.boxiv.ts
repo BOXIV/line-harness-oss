@@ -73,7 +73,10 @@ export async function slackPost(
   text: string,
   opts: { threadTs?: string | null; attachments?: unknown[]; channel?: string | null } = {},
 ): Promise<SlackPostResult> {
-  const channel = opts.channel || env.SLACK_LISTING_LINK_CHANNEL_ID;
+  // channel キーを渡した時点で「宛先は呼び出し側が決める」。値が undefined でも
+  // 既定チャンネルへフォールバックしない（購入者チャンネル未設定のときに
+  // 購入者カードが #pj-lightning-sell へ紛れ込むのを防ぐ）。
+  const channel = 'channel' in opts ? opts.channel : env.SLACK_LISTING_LINK_CHANNEL_ID;
   if (!env.SELLENTRY_SLACK_BOT_TOKEN || !channel) {
     return { ok: false, error: 'slack not configured' };
   }
@@ -113,7 +116,8 @@ export async function slackUpdate(
   text: string,
   opts: { attachments?: unknown[]; channel?: string | null } = {},
 ): Promise<SlackPostResult> {
-  const channel = opts.channel || env.SLACK_LISTING_LINK_CHANNEL_ID;
+  // slackPost と同じ規約: channel キーを渡したら既定へフォールバックしない。
+  const channel = 'channel' in opts ? opts.channel : env.SLACK_LISTING_LINK_CHANNEL_ID;
   if (!env.SELLENTRY_SLACK_BOT_TOKEN || !channel || !ts) {
     return { ok: false, error: 'slack update not configured (token/channel/ts)' };
   }
