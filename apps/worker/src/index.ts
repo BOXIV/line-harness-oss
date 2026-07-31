@@ -214,7 +214,7 @@ app.route('/', staffAvailability);
 
 // 出品フォーム LINE 連携 (BOXIV)
 app.route('/', listingFormLine);
-// アプリ出品 LINE 連携（/app-listing/start・BOXIV）
+// アプリ出品 LINE 連携（/app-listing/start ＋ 完了ページ /app-listing/done・BOXIV）
 app.route('/', appListing);
 // LINE Login 共有コールバック（/link/callback ＋ 旧 /listing-form/callback エイリアス・BOXIV）
 app.route('/', linkCallback);
