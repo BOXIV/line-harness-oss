@@ -153,8 +153,8 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
          odometer_km, shaken_month, consent, consented_at, utm,
          spec_json, model, trim, model_year, type_of_drive,
          battery_soh, degradation_pct, battery_capacity_kwh, battery_soh_at, msrp, production_date,
-         status, spec_error, spec_attempts, spec_last_try_at
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         status, spec_error, spec_attempts, spec_last_try_at, spec_derived
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
       .bind(
         leadId, lineUserId, displayName, name, email, phone, vin, isTesla ? 1 : 0,
@@ -164,7 +164,9 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
         f.batterySoH, f.degradationPct, f.batteryCapacityKwh,
         f.batterySoHAt, f.msrp, f.productionDate,
         // 失敗理由と試行回数を残す（cron のバックオフ計算と事後の原因切り分けに使う）
-        status, specError, specTried ? 1 : 0, specTried ? now : null
+        status, specError, specTried ? 1 : 0, specTried ? now : null,
+        // trim/駆動をオプションコードから復元した行は印を付ける（API 実値と区別する）
+        f.derived ? 1 : 0
       )
       .run();
   } catch (e) {
@@ -226,6 +228,10 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
       // 取得不可の時は原因と「自動で再取得する」ことを明示する（運用が手を出す前に待てるように）
       if (status === 'API取得不可') {
         lines.push(`原因: ${code(specError ?? '不明')}`, '⏳ 自動で再取得を試みます（最大6回・24時間まで）');
+      }
+      // 推定で埋めた場合は運用が裏取りできるよう明示する（API の実値ではない）
+      if (f.derived) {
+        lines.push(`ℹ️ グレード/駆動は API が空のためオプションコードから推定: ${code(f.trim ?? '-')}`);
       }
       await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',

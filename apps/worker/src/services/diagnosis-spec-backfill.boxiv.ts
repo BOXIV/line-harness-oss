@@ -160,14 +160,15 @@ export async function backfillDiagnosisSpecs(
             SET spec_json = ?1, model = ?2, trim = ?3, model_year = ?4, type_of_drive = ?5,
                 battery_soh = ?6, degradation_pct = ?7, battery_capacity_kwh = ?8,
                 battery_soh_at = ?9, msrp = ?10, production_date = ?11,
-                status = '診断依頼', spec_error = NULL,
-                spec_attempts = ?12, spec_last_try_at = ?13, updated_at = ?13
-          WHERE lead_id = ?14`
+                status = '診断依頼', spec_error = NULL, spec_derived = ?12,
+                spec_attempts = ?13, spec_last_try_at = ?14, updated_at = ?14
+          WHERE lead_id = ?15`
       )
         .bind(
           result.specJson, f.model, f.trim, f.modelYear, f.typeOfDrive,
           f.batterySoH, f.degradationPct, f.batteryCapacityKwh,
           f.batterySoHAt, f.msrp, f.productionDate,
+          f.derived ? 1 : 0,
           row.spec_attempts + 1, at, row.lead_id
         )
         .run();
@@ -200,7 +201,7 @@ export async function backfillDiagnosisSpecs(
       }
     }
 
-    await postSlack(env, '#2fd06f', [
+    const lines = [
       ':white_check_mark: *バッテリー診断 spec を自動補完しました*',
       `依頼ID: ${code(row.lead_id)}`,
       `VIN: ${code(row.vin)} ／ お名前: ${code(row.name)}`,
@@ -208,7 +209,12 @@ export async function backfillDiagnosisSpecs(
         ? `SoH: ${code(f.batterySoH + '%')}（劣化率 ${f.degradationPct}%）`
         : `SoH: ${code('取得値なし')}`,
       `Notion: ${code(row.notion_page_id ? (notionOk ? '更新済み' : '更新失敗 ⚠️') : '未起票')}`,
-    ]);
+    ];
+    // 推定で埋めた場合は運用が裏取りできるよう明示する（API の実値ではない）
+    if (f.derived) {
+      lines.push(`ℹ️ グレード/駆動は API が空のためオプションコードから推定: ${code(f.trim ?? '-')}`);
+    }
+    await postSlack(env, '#2fd06f', lines);
   }
 
   return summary;
