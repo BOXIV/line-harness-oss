@@ -1,0 +1,11 @@
+-- 918_diagnosis_leads_spec_derived.sql
+-- BOXIV: trim / typeOfDrive を spec_API の実値ではなく推定で埋めた行に印を付ける。
+--
+-- 上流は初期 MIC 車（VIN 先頭 LRW＝上海製 等）で trim="" / typeOfDrive=null を返す。
+-- 通常はモデルタイプコード（$MTxxx）の name が trim 文字列そのものだが、
+-- MIC 個体はその name が空のため API が trim を組み立てられない（一過性ではない）。
+-- その場合は equipmentPrice の駆動オプションとグレード手掛かりから復元する
+-- （services/diagnosis-spec.boxiv.ts の extractSpecFields）。
+--
+-- 復元値は API の実値ではないので、下流が区別できるようフラグを持たせる。
+ALTER TABLE diagnosis_leads ADD COLUMN spec_derived INTEGER NOT NULL DEFAULT 0;
