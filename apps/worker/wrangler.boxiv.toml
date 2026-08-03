@@ -30,6 +30,13 @@ database_id = "8f93ece4-0bda-4d92-8836-3a51737213db"
 binding = "IMAGES"
 bucket_name = "line-connect-images"
 
+# Worker ログ（console.error 等）を保持する。無効だと障害の事後追跡ができない
+# — 実例: 診断フォームの spec_API 失敗（2026-08-01, lead 537809e3-…）は
+# console.error がどこにも残っておらず、原因を断定できなかった。
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [triggers]
 # cron はアカウントの 5 トリガー上限対策で単一に集約。scheduled() が scheduledTime で分岐:
 #   毎分=Slackバースト flush / 5分ごと=配信ジョブ / 12時間ごと=Notion reconcile
