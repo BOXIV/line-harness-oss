@@ -86,6 +86,9 @@ export type Env = {
     LINE_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
+    // authorize の redirect_uri に使うパス。Login チャネルに登録済みの文字列と一致必須
+    // （未設定なら /link/callback。不一致だと LINE が authorize を 400 で弾く）。
+    LINE_LOGIN_CALLBACK_PATH?: string;
     WORKER_URL: string;
     CHAT_ALERT_SLACK_BOT_TOKEN?: string;   // BOXIV: 受信メッセージを Slack 通知する Bot トークン（未設定なら無効）
     CHAT_ALERT_SLACK_CHANNEL_ID?: string;  // BOXIV: 同上 通知先チャンネル ID

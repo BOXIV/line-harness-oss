@@ -154,11 +154,40 @@ export async function unpackSignedState<T = unknown>(token: string, secret: stri
   }
 }
 
+// ─── authorize の redirect_uri ────────────────────────────────
+
+/** 共有 callback の正 URL。新規チャネルはこれを console に登録する。 */
+export const CANONICAL_LINK_CALLBACK_PATH = '/link/callback';
+
+/**
+ * authorize に載せる redirect_uri を組み立てる。
+ *
+ * ⚠️ この値は LINE Login チャネルの「コールバックURL」に登録済みの文字列と完全一致していないと、
+ * LINE が authorize の時点で 400 Bad Request を返し、連携が丸ごと止まる（Worker のログには
+ * /listing-form/start の 302 だけが残り callback は永遠に来ないので、原因が非常に見えにくい）。
+ *
+ * 実障害: 2026-08-03 の本番デプロイで redirect_uri を旧 /listing-form/callback から
+ * /link/callback へ切り替えたが、prod の Login チャネル(2010320277)に /link/callback が
+ * 未登録だったため、出品フォームの LINE 連携が 2026-08-06 まで全ユーザーで失敗した
+ * （test チャネル(2009711299)には登録済みだったので test では再現しなかった）。
+ *
+ * 既定は正 URL。console 側の登録が追いつかない環境は env `LINE_LOGIN_CALLBACK_PATH` に
+ * 登録済みのパス（例: '/listing-form/callback'）を入れて回避する。callback ハンドラは
+ * 受けた実パスから redirect_uri を導出するので、どちらで受けても code 交換は成立する。
+ */
+export function buildLinkCallbackUrl(env: LineLoginEnv, workerBase: string): string {
+  const configured = (env.LINE_LOGIN_CALLBACK_PATH ?? '').trim();
+  const path = configured || CANONICAL_LINK_CALLBACK_PATH;
+  return `${workerBase}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 // ─── OAuth code 交換・プロフィール取得 ─────────────────────────
 
 export interface LineLoginEnv {
   LINE_LOGIN_CHANNEL_ID?: string;
   LINE_LOGIN_CHANNEL_SECRET?: string;
+  /** LINE Login チャネルに登録済みのコールバックパス。未設定なら CANONICAL_LINK_CALLBACK_PATH。 */
+  LINE_LOGIN_CALLBACK_PATH?: string;
 }
 
 export interface LineTokens {

@@ -21,7 +21,7 @@
 //   - 終端は web の HTML ページでなく、未フォローでもアプリの自スキームへ redirect。
 
 import { Hono } from 'hono';
-import { packSignedState, escapeHtml } from '../services/line-login.boxiv.js';
+import { packSignedState, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { linkSellerRowByBoxivId } from '../services/listing-notion.boxiv.js';
 import { slackPost, buildSlackCard } from '../services/slack.boxiv.js';
@@ -80,7 +80,8 @@ appListing.get('/app-listing/start', async (c) => {
     c.env.SESSION_SECRET,
   );
 
-  const callbackUrl = `${workerBase}/link/callback`;
+  // listing_form と同じ共有 callback。登録済みパスは env で切替可（buildLinkCallbackUrl 参照）。
+  const callbackUrl = buildLinkCallbackUrl(c.env, workerBase);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
