@@ -35,6 +35,7 @@ import {
   packSignedState,
   isAllowedReturnTo,
   escapeHtml,
+  buildLinkCallbackUrl,
 } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import type { Env } from '../index.js';
@@ -101,8 +102,9 @@ listingFormLine.get('/listing-form/start', async (c) => {
   );
 
   // 共有 callback（フロー非依存の /link/callback）。LINE Login チャネルの Callback URL 登録が必要
-  // （test/prod 各 Worker の URL）。旧 /listing-form/callback は互換エイリアス（本番切替後に削除予定）。
-  const callbackUrl = `${workerBase}/link/callback`;
+  // （test/prod 各 Worker の URL）。未登録の環境は env LINE_LOGIN_CALLBACK_PATH で
+  // 登録済みパス（旧 /listing-form/callback 等）に退避する — 詳細は buildLinkCallbackUrl。
+  const callbackUrl = buildLinkCallbackUrl(c.env, workerBase);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);

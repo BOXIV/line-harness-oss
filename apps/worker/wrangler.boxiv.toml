@@ -21,6 +21,17 @@ account_id = "e839830b4102c24f0d03834e09d8b101"
 [assets]
 not_found_handling = "single-page-application"
 
+[vars]
+# 本番 Login チャネル(2010320277)に登録済みのコールバックURLは
+#   https://line-connect.boxiv.workers.dev/listing-form/callback
+#   https://line-connect.boxiv.workers.dev/auth/callback
+# の2本のみで、/link/callback は未登録。未登録の redirect_uri で authorize を叩くと
+# LINE が 400 Bad Request を返し、出品フォーム/アプリ出品の LINE 連携が全滅する
+# （実障害 2026-08-03〜08-06。test チャネル(2009711299)には登録済みで再現しなかった）。
+# → console に https://line-connect.boxiv.workers.dev/link/callback を追加したら
+#   この行を削除して正 URL(/link/callback)へ戻す。callback は新旧どちらでも受けられる。
+LINE_LOGIN_CALLBACK_PATH = "/listing-form/callback"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "line-connect"
