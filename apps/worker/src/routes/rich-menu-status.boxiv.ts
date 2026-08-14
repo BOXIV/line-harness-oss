@@ -3,6 +3,7 @@
 
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const richMenuStatus = new Hono<Env>();
 
@@ -31,7 +32,7 @@ interface MappingResponse {
 }
 
 // GET /api/rich-menus/auto-switch — list mappings (joined with status_options for display)
-richMenuStatus.get('/api/rich-menus/auto-switch', async (c) => {
+richMenuStatus.get('/api/rich-menus/auto-switch', requireRole('owner','admin','manager'), async (c) => {
   try {
     const rows = await c.env.DB.prepare(
       `SELECT m.id, m.status_option_id, m.rich_menu_id, m.rich_menu_name,
@@ -65,7 +66,7 @@ richMenuStatus.get('/api/rich-menus/auto-switch', async (c) => {
 });
 
 // PUT /api/rich-menus/auto-switch/:statusOptionId — upsert mapping
-richMenuStatus.put('/api/rich-menus/auto-switch/:statusOptionId', async (c) => {
+richMenuStatus.put('/api/rich-menus/auto-switch/:statusOptionId', requireRole('owner','admin','manager'), async (c) => {
   try {
     const statusOptionId = c.req.param('statusOptionId');
     const body = await c.req.json<{
@@ -128,7 +129,7 @@ richMenuStatus.put('/api/rich-menus/auto-switch/:statusOptionId', async (c) => {
 // POST /api/rich-menus/auto-switch/rebind — リッチメニュー差し替え時に、旧 richMenuId を
 // 指す全マッピングを新 richMenuId へ付け替える。LINE のリッチメニューは作成後に編集できず
 // 「複製→差し替え」運用になるため、ステータス連動が新メニューに引き継がれるようにする。
-richMenuStatus.post('/api/rich-menus/auto-switch/rebind', async (c) => {
+richMenuStatus.post('/api/rich-menus/auto-switch/rebind', requireRole('owner','admin','manager'), async (c) => {
   try {
     const body = await c.req.json<{
       fromRichMenuId: string;
@@ -161,7 +162,7 @@ richMenuStatus.post('/api/rich-menus/auto-switch/rebind', async (c) => {
 });
 
 // DELETE /api/rich-menus/auto-switch/:statusOptionId — remove mapping
-richMenuStatus.delete('/api/rich-menus/auto-switch/:statusOptionId', async (c) => {
+richMenuStatus.delete('/api/rich-menus/auto-switch/:statusOptionId', requireRole('owner','admin','manager'), async (c) => {
   try {
     const statusOptionId = c.req.param('statusOptionId');
     const lineAccountId = c.req.query('lineAccountId') ?? null;

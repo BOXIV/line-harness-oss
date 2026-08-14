@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 import { syncStatusOptionsFromNotion, type StatusSource } from '../services/notion-status.boxiv.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const friendStatus = new Hono<Env>();
 
@@ -57,7 +58,7 @@ friendStatus.get('/api/status-options', async (c) => {
 });
 
 // POST /api/status-options/sync — body: { sources?: ('seller'|'buyer')[] }
-friendStatus.post('/api/status-options/sync', async (c) => {
+friendStatus.post('/api/status-options/sync', requireRole('owner','admin','manager'), async (c) => {
   try {
     let body: { sources?: StatusSource[] } = {};
     try { body = await c.req.json(); } catch { /* body optional */ }

@@ -2,11 +2,12 @@ import { Hono } from 'hono';
 import { LineClient } from '@line-crm/line-sdk';
 import { getFriendById } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const richMenus = new Hono<Env>();
 
 // BOXIV: GET /api/rich-menus/:id/image-content — download the image LINE has stored for this rich menu (debug)
-richMenus.get('/api/rich-menus/:id/image-content', async (c) => {
+richMenus.get('/api/rich-menus/:id/image-content', requireRole('owner','admin','manager'), async (c) => {
   try {
     const richMenuId = c.req.param('id');
     const res = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, {
@@ -25,7 +26,7 @@ richMenus.get('/api/rich-menus/:id/image-content', async (c) => {
 });
 
 // BOXIV: GET /api/rich-menus/default — return the LINE platform's currently configured default rich menu ID
-richMenus.get('/api/rich-menus/default', async (c) => {
+richMenus.get('/api/rich-menus/default', requireRole('owner','admin','manager'), async (c) => {
   try {
     const res = await fetch('https://api.line.me/v2/bot/user/all/richmenu', {
       headers: { Authorization: `Bearer ${c.env.LINE_CHANNEL_ACCESS_TOKEN}` },
@@ -41,7 +42,7 @@ richMenus.get('/api/rich-menus/default', async (c) => {
 });
 
 // GET /api/rich-menus — list all rich menus from LINE API
-richMenus.get('/api/rich-menus', async (c) => {
+richMenus.get('/api/rich-menus', requireRole('owner','admin','manager'), async (c) => {
   try {
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
     const result = await lineClient.getRichMenuList();
@@ -56,7 +57,7 @@ richMenus.get('/api/rich-menus', async (c) => {
 // BOXIV: GET /api/rich-menus/:id/image-content — proxy the image LINE stores for this rich menu.
 // 管理 UI のプレビュー/編集キャンバスに「実際のクリエイティブ」を表示するため。
 // LINE Data API は Bearer 認証が必要なので Worker 経由で取得し、バイナリをそのまま返す。
-richMenus.get('/api/rich-menus/:id/image-content', async (c) => {
+richMenus.get('/api/rich-menus/:id/image-content', requireRole('owner','admin','manager'), async (c) => {
   try {
     const richMenuId = c.req.param('id');
     const res = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, {
@@ -83,7 +84,7 @@ richMenus.get('/api/rich-menus/:id/image-content', async (c) => {
 
 // BOXIV: GET /api/rich-menus/default — LINE Platform で現在アカウント既定に設定されている richMenuId を返す。
 // 編集=差し替え時に「旧メニューが本当にアカウント既定か」を判定するため（menu.selected は別概念で当てにならない）。
-richMenus.get('/api/rich-menus/default', async (c) => {
+richMenus.get('/api/rich-menus/default', requireRole('owner','admin','manager'), async (c) => {
   try {
     const res = await fetch('https://api.line.me/v2/bot/user/all/richmenu', {
       headers: { Authorization: `Bearer ${c.env.LINE_CHANNEL_ACCESS_TOKEN}` },
@@ -101,7 +102,7 @@ richMenus.get('/api/rich-menus/default', async (c) => {
 });
 
 // POST /api/rich-menus — create a rich menu via LINE API
-richMenus.post('/api/rich-menus', async (c) => {
+richMenus.post('/api/rich-menus', requireRole('owner','admin','manager'), async (c) => {
   try {
     const body = await c.req.json();
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
@@ -115,7 +116,7 @@ richMenus.post('/api/rich-menus', async (c) => {
 });
 
 // DELETE /api/rich-menus/:id — delete a rich menu
-richMenus.delete('/api/rich-menus/:id', async (c) => {
+richMenus.delete('/api/rich-menus/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const richMenuId = c.req.param('id');
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
@@ -129,7 +130,7 @@ richMenus.delete('/api/rich-menus/:id', async (c) => {
 });
 
 // POST /api/rich-menus/:id/default — set rich menu as default for all users
-richMenus.post('/api/rich-menus/:id/default', async (c) => {
+richMenus.post('/api/rich-menus/:id/default', requireRole('owner','admin','manager'), async (c) => {
   try {
     const richMenuId = c.req.param('id');
     const lineClient = new LineClient(c.env.LINE_CHANNEL_ACCESS_TOKEN);
@@ -143,7 +144,7 @@ richMenus.post('/api/rich-menus/:id/default', async (c) => {
 });
 
 // GET /api/friends/:friendId/rich-menu — get rich menu currently assigned to a friend
-richMenus.get('/api/friends/:friendId/rich-menu', async (c) => {
+richMenus.get('/api/friends/:friendId/rich-menu', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('friendId');
     const db = c.env.DB;
@@ -173,7 +174,7 @@ richMenus.get('/api/friends/:friendId/rich-menu', async (c) => {
 });
 
 // POST /api/friends/:friendId/rich-menu — link rich menu to a specific friend
-richMenus.post('/api/friends/:friendId/rich-menu', async (c) => {
+richMenus.post('/api/friends/:friendId/rich-menu', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('friendId');
     const body = await c.req.json<{ richMenuId: string }>();
@@ -200,7 +201,7 @@ richMenus.post('/api/friends/:friendId/rich-menu', async (c) => {
 });
 
 // DELETE /api/friends/:friendId/rich-menu — unlink rich menu from a specific friend
-richMenus.delete('/api/friends/:friendId/rich-menu', async (c) => {
+richMenus.delete('/api/friends/:friendId/rich-menu', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('friendId');
     const db = c.env.DB;
@@ -224,7 +225,7 @@ richMenus.delete('/api/friends/:friendId/rich-menu', async (c) => {
 export { richMenus };
 
 // POST /api/rich-menus/:id/image — upload rich menu image (accepts base64 body or binary)
-richMenus.post('/api/rich-menus/:id/image', async (c) => {
+richMenus.post('/api/rich-menus/:id/image', requireRole('owner','admin','manager'), async (c) => {
   try {
     const richMenuId = c.req.param('id');
     const contentType = c.req.header('content-type') ?? '';
