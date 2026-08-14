@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { getTags, createTag, deleteTag } from '@line-crm/db';
 import type { Tag as DbTag } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const tags = new Hono<Env>();
 
@@ -26,7 +27,7 @@ tags.get('/api/tags', async (c) => {
 });
 
 // POST /api/tags - create tag
-tags.post('/api/tags', async (c) => {
+tags.post('/api/tags', requireRole('owner','admin','manager'), async (c) => {
   try {
     const body = await c.req.json<{ name: string; color?: string }>();
 
@@ -47,7 +48,7 @@ tags.post('/api/tags', async (c) => {
 });
 
 // DELETE /api/tags/:id - delete tag
-tags.delete('/api/tags/:id', async (c) => {
+tags.delete('/api/tags/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     await deleteTag(c.env.DB, id);
