@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api } from '@/lib/api'
 import type { FriendWithTags } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FriendTable from '@/components/friends/friend-table'
 import { useAccount } from '@/contexts/account-context'
+import { SOURCE_LABELS, SOURCE_TAG_NAMES } from '@/lib/friend-source'
 
 const PAGE_SIZE = 20
 
@@ -90,9 +91,47 @@ export default function FriendsPage() {
     setSelectedTagId(tagId)
   }
 
+  // 出品者/購入者タブ。判別の実体は分類タグなので、タブはタグ絞り込みへ委譲する
+  // （= サーバ側で絞る＝ページングと件数がそのまま正しい）。タグ未作成なら押せない。
+  const sourceTabs = useMemo(
+    () => {
+      const idOf = (name: string) => allTags.find((t) => t.name === name)?.id ?? ''
+      return [
+        { key: 'all' as const, label: '全て', tagId: '' },
+        { key: 'seller' as const, label: SOURCE_LABELS.seller, tagId: idOf(SOURCE_TAG_NAMES.seller) },
+        { key: 'buyer' as const, label: SOURCE_LABELS.buyer, tagId: idOf(SOURCE_TAG_NAMES.buyer) },
+      ]
+    },
+    [allTags],
+  )
+
   return (
     <div>
       <Header title="友だち管理" />
+
+      {/* 出品者 / 購入者タブ。分類タグでの絞り込み（= タグ絞り込みのショートカット）なので
+          タグ選択と同じ state を動かす。タグがまだ無い環境では押せない。 */}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 max-w-sm" role="tablist" aria-label="友だちの区分">
+        {sourceTabs.map((tab) => {
+          const disabled = tab.key !== 'all' && !tab.tagId
+          const active = !disabled && selectedTagId === tab.tagId
+          return (
+            <button
+              key={tab.key}
+              role="tab"
+              aria-selected={active}
+              disabled={disabled}
+              title={disabled ? `タグ「${tab.label}」がまだありません` : undefined}
+              onClick={() => handleTagFilter(tab.tagId)}
+              className={`flex-1 px-3 py-1.5 min-h-[36px] rounded-md text-sm font-medium transition-colors ${
+                active ? 'bg-white text-slate-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+              } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+            >
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
 
       {/* Filters */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-4 flex-wrap">
