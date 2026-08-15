@@ -3,6 +3,7 @@ import { buildMessage } from '../services/step-delivery.js';
 import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
+import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
 import {
   getOperators,
   getOperatorById,
@@ -140,9 +141,21 @@ chats.get('/api/chats', async (c) => {
     const statusOptionId = c.req.query('statusOptionId') ?? undefined;
 
     // JOIN friends to get display_name / picture / metadata + current Notion-synced status.
+    //
+    // BOXIV: friend_source は分類タグ（出品者/購入者）から解決した source。
+    // 管理UIの「全て / 出品者 / 購入者」タブの絞り込みと並び順に使う。判定順は web 側
+    // friend-source.ts と同じ（出品者を先に見る）。タグ一覧を別途引かずに済むよう
+    // 相関サブクエリで1回に畳んでいる（タグ名は SOURCE_TAG_NAMES を bind）。
     let sql = `SELECT c.*, f.display_name, f.managed_name, f.picture_url, f.line_user_id, f.metadata,
                       so.id AS status_option_id, so.name AS status_option_name,
                       so.color AS status_option_color, so.source AS status_option_source,
+                      (SELECT CASE
+                                WHEN MAX(CASE WHEN t.name = ? THEN 1 ELSE 0 END) = 1 THEN 'seller'
+                                WHEN MAX(CASE WHEN t.name = ? THEN 1 ELSE 0 END) = 1 THEN 'buyer'
+                              END
+                         FROM friend_tags ft
+                         JOIN tags t ON t.id = ft.tag_id
+                        WHERE ft.friend_id = c.friend_id) AS friend_source,
                       (SELECT COUNT(*) FROM messages_log m
                          WHERE m.friend_id = c.friend_id AND m.direction = 'incoming'
                            AND (c.last_read_at IS NULL OR m.created_at > c.last_read_at)) AS unread_count
@@ -151,7 +164,8 @@ chats.get('/api/chats', async (c) => {
                LEFT JOIN friend_status_assignments fsa ON fsa.friend_id = f.id
                LEFT JOIN status_options so ON so.id = fsa.status_option_id`;
     const conditions: string[] = [];
-    const bindings: unknown[] = [];
+    // SELECT 側のプレースホルダが先に来るので、WHERE 条件より前に積む。
+    const bindings: unknown[] = [SOURCE_TAG_NAMES.seller, SOURCE_TAG_NAMES.buyer];
 
     if (status) {
       conditions.push('c.status = ?');
@@ -175,10 +189,7 @@ chats.get('/api/chats', async (c) => {
     }
     sql += ' ORDER BY c.last_message_at DESC';
 
-    const stmt = bindings.length > 0
-      ? c.env.DB.prepare(sql).bind(...bindings)
-      : c.env.DB.prepare(sql);
-    const result = await stmt.all();
+    const result = await c.env.DB.prepare(sql).bind(...bindings).all();
 
     return c.json({
       success: true,
@@ -189,6 +200,8 @@ chats.get('/api/chats', async (c) => {
         managedName: ch.managed_name ?? null,
         friendPictureUrl: ch.picture_url || null,
         notion: parseFriendNotion(ch.metadata),
+        // 分類タグ由来の出品者/購入者。どちらのタグも無ければ null（未分類）。
+        source: (ch.friend_source as 'seller' | 'buyer' | null) ?? null,
         customerStatus: ch.status_option_id
           ? {
               id: ch.status_option_id,
