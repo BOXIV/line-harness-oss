@@ -1,11 +1,11 @@
-// BOXIV-only: 購入エントリー（lightning.boxiv.co.jp /car/details/{掲載ID}#entry）の LINE 連携。
+// BOXIV-only: 購入エントリー（lightning.boxiv.co.jp /car/detail/{掲載ID}#entry）の LINE 連携。
 // 出品者フォーム（listing-form-line.ts）の購入者版で、フローも2段構成で同一:
 //
 //   1. 購入エントリーを送信 → クライアントが match_key(UUID) を採番
 //   2. POST /buyer-form/submit で D1 台帳(listing_entries, source='buyer') へ upsert
 //      ＋ Notion 購入者DB へ即ミラー起票（未連携）＋ Slack #pj-lightning-buy へカード投稿
 //   3. 着地ページ /car/buy/line-connect の「LINEで連携」ボタン → GET /buyer-form/start
-//   4. LINE Login OAuth（bot_prompt=aggressive）→ 共有 callback /link/callback
+//   4. LINE Login OAuth（bot_prompt=aggressive）→ 共有 callback（buildLinkCallbackUrl で解決）
 //      （callback URL はフロー非依存の1本なので LINE Developers 側の追加登録は不要）
 //   5. buyerFormFlow.complete が markLinked → Notion PATCH → タグ「購入者」付与
 //      → buyer_link_completed 発火 → Slack 更新 → 終端ページ/return_to
@@ -31,7 +31,7 @@ import { createOrUpdateBuyerRow, linkBuyerRow } from '../services/buyer-notion.b
 import { ensureBuyerTag } from '../services/buyer-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText, slackChannelFor } from '../services/slack.boxiv.js';
-import { packSignedState, isAllowedReturnTo, escapeHtml } from '../services/line-login.boxiv.js';
+import { packSignedState, isAllowedReturnTo, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import type { Env } from '../index.js';
 
@@ -101,9 +101,11 @@ buyerFormLine.get('/buyer-form/start', async (c) => {
     c.env.SESSION_SECRET,
   );
 
-  // 共有 callback（フロー非依存の /link/callback）。出品者フローと同じ URL を使うので
-  // LINE Login チャネル側の Callback URL 追加登録は不要。
-  const callbackUrl = `${workerBase}/link/callback`;
+  // 共有 callback（フロー非依存）。出品者フローと同じ URL を使うので追加登録は不要だが、
+  // ⚠️ redirect_uri は LINE Login チャネルに**登録済みの文字列と完全一致**でないと authorize が
+  // 400 になり連携が全滅する（出品者フローで実障害あり）。prod は /link/callback が未登録なので
+  // env LINE_LOGIN_CALLBACK_PATH で登録済みパスへ退避している。必ず共通ヘルパー経由で組み立てる。
+  const callbackUrl = buildLinkCallbackUrl(c.env, workerBase);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
