@@ -19,7 +19,7 @@ import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import { enqueueBurstNotify } from '../services/slack-burst-notify.boxiv.js';
 import { getLinkedEntryByLineUserId, hasLinkCompletedNotified, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
-import { ensureBuyerTag } from '../services/buyer-tag.boxiv.js';
+import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { firstSentMessageId } from '../utils/quote.js';
 import type { Env } from '../index.js';
 
@@ -180,7 +180,7 @@ async function handleEvent(
 
     // BOXIV: 友だち追加完了フロー — フォーム連携済みかで分岐する。
     //   連携済み(listing_entries.status='linked') → 連携完了イベントを送信。
-    //     source='seller' → 出品価格お知らせ(listing_link_completed)
+    //     source='seller' → 出品価格お知らせ(listing_link_completed)＋タグ「出品者」付与
     //     source='buyer'  → 購入エントリー完了(buyer_link_completed)＋タグ「購入者」付与
     //     OAuth 時に未フォロー/ブロックで送れなかった分の救済になり、後から友だち追加した人にも届く。
     //     二重送信は friend.metadata フラグ(source ごとに別キー)で防止。
@@ -197,12 +197,11 @@ async function handleEvent(
     if (linkedEntry) {
       const entrySource = linkedEntry.source === 'buyer' ? 'buyer' : 'seller';
       if (!(await hasLinkCompletedNotified(db, friend.id, entrySource))) {
-        // 購入者は分類タグを先に付ける（automation の条件がタグを見ても間に合うように）。
-        if (entrySource === 'buyer') {
-          await ensureBuyerTag(db, friend.id).catch((err) =>
-            console.error(`follow: ensureBuyerTag failed (friend=${friend.id})`, err),
-          );
-        }
+        // 分類タグ（出品者/購入者）を先に付ける（automation の条件がタグを見ても間に合うように）。
+        // 台帳の source が確定している連携済み行なので誤タグにならない。
+        await ensureSourceTag(db, friend.id, entrySource).catch((err) =>
+          console.error(`follow: ensureSourceTag(${entrySource}) failed (friend=${friend.id})`, err),
+        );
         const eventType = entrySource === 'buyer' ? 'buyer_link_completed' : 'listing_link_completed';
         await fireEvent(
           db,

@@ -28,7 +28,7 @@ import {
   markLinkCompletedNotified,
 } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateBuyerRow, linkBuyerRow } from '../services/buyer-notion.boxiv.js';
-import { ensureBuyerTag } from '../services/buyer-tag.boxiv.js';
+import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText, slackChannelFor } from '../services/slack.boxiv.js';
 import { packSignedState, isAllowedReturnTo, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
@@ -285,8 +285,8 @@ export const buyerFormFlow: LinkFlow<BuyerStateV1> = {
     // タグ「購入者」を付与。/chats のステータス選択（購入者DBの options）と
     // リッチメニュー自動切替がこのタグを見るので、automation 設定に依存せずコードで確定させる。
     if (friend) {
-      await ensureBuyerTag(c.env.DB, friend.id).catch((err) =>
-        console.error(`buyer-form callback: ensureBuyerTag failed (friend=${friend.id})`, err),
+      await ensureSourceTag(c.env.DB, friend.id, 'buyer').catch((err) =>
+        console.error(`buyer-form callback: ensureSourceTag failed (friend=${friend.id})`, err),
       );
     }
 
