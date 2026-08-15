@@ -30,7 +30,7 @@ import {
 import { createOrUpdateBuyerRow, linkBuyerRow } from '../services/buyer-notion.boxiv.js';
 import { ensureBuyerTag } from '../services/buyer-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
-import { slackPost, slackUpdate, buildSlackCard, escapeSlackText, slackChannelFor } from '../services/slack.boxiv.js';
+import { slackPost, slackUpdate, buildSlackCard, escapeSlackText, slackChannelFor, slackTokenFor } from '../services/slack.boxiv.js';
 import { packSignedState, isAllowedReturnTo, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import type { Env } from '../index.js';
@@ -235,6 +235,7 @@ buyerFormLine.post('/buyer-form/submit', async (c) => {
     const r = await slackPost(c.env, card.fallback as string, {
       attachments: [card],
       channel: slackChannelFor(c.env, 'buyer'),
+      token: slackTokenFor(c.env, 'buyer'),
     });
     if (r.ok && r.ts) await setSlackThreadTs(c.env.DB, matchKey, r.ts);
   } catch (e) {
@@ -296,6 +297,7 @@ export const buyerFormFlow: LinkFlow<BuyerStateV1> = {
     });
 
     const buyerChannel = slackChannelFor(c.env, 'buyer');
+    const buyerToken = slackTokenFor(c.env, 'buyer');
 
     // Slack: エントリー通知を「（LINE連携待ち）」→「（LINE連携済み）」に更新。非致命。
     if (slackThreadTs && linkedEntry) {
@@ -312,6 +314,7 @@ export const buyerFormFlow: LinkFlow<BuyerStateV1> = {
         await slackUpdate(c.env, slackThreadTs, updated.fallback as string, {
           attachments: [updated],
           channel: buyerChannel,
+          token: buyerToken,
         });
       } catch (err) {
         console.error(`buyer-form callback: slack update (連携済み) threw (form_id=${ctx.form_id})`, err);
@@ -336,6 +339,7 @@ export const buyerFormFlow: LinkFlow<BuyerStateV1> = {
         threadTs: slackThreadTs,
         attachments: [card],
         channel: buyerChannel,
+        token: buyerToken,
       });
     } catch (err) {
       console.error(`buyer-form callback: slack post threw (form_id=${ctx.form_id})`, err);

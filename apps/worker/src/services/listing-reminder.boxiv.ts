@@ -17,7 +17,7 @@
 import { listFormOnlyForReminder, markStepSent, markEscalated } from './listing-entry.boxiv.js';
 import { sendEmail } from './sendgrid.boxiv.js';
 import { sendSms, twilioConfigured } from './sms-twilio.boxiv.js';
-import { slackPost, buildSlackCard, escapeSlackText, slackChannelFor } from './slack.boxiv.js';
+import { slackPost, buildSlackCard, escapeSlackText, slackChannelFor, slackTokenFor } from './slack.boxiv.js';
 import { buildReminderEmail, buildReminderSms, buildBuyerReminderEmail, buildBuyerReminderSms } from './listing-email.boxiv.js';
 import type { ListingEntry, EntrySource } from './listing-entry.boxiv.js';
 import type { SendGridEnv } from './sendgrid.boxiv.js';
@@ -120,12 +120,15 @@ async function mirror(
   stepIdx: number,
   steps: number[],
 ): Promise<void> {
-  const channel = slackChannelFor(env, entrySource(entry));
+  const src = entrySource(entry);
+  const channel = slackChannelFor(env, src);
+  const token = slackTokenFor(env, src);
   const attachment = buildMirrorAttachment(kind, to, entry, stepIdx, steps);
   const head = await slackPost(env, attachment.fallback as string, {
     threadTs: entry.slack_thread_ts,
     attachments: [attachment],
     channel,
+    token,
   });
   if (!head.ok) {
     console.error(`listing reminder: slack mirror head failed: ${head.error}`);
@@ -133,7 +136,7 @@ async function mirror(
   }
   // 本文はスレッド内へ（フォーム通知スレッド優先、無ければ見出しの ts をスレッド親に）。
   const parent = entry.slack_thread_ts ?? head.ts ?? null;
-  const r = await slackPost(env, `\`\`\`\n${body}\n\`\`\``, { threadTs: parent, channel });
+  const r = await slackPost(env, `\`\`\`\n${body}\n\`\`\``, { threadTs: parent, channel, token });
   if (!r.ok) console.error(`listing reminder: slack mirror body failed: ${r.error}`);
 }
 
@@ -169,6 +172,7 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
 
     const source = entrySource(e);
     const channel = slackChannelFor(env, source);
+    const token = slackTokenFor(env, source);
     const formLabel = source === 'buyer' ? '購入エントリー' : '出品フォーム';
 
     // 72h エスカレ（Slack・内部通知なので夜間も送る。フォーム通知スレッドに返信）
@@ -187,6 +191,7 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
         threadTs: e.slack_thread_ts,
         attachments: [card],
         channel,
+        token,
       });
       if (r.ok) await markEscalated(env.DB, e.match_key);
     }

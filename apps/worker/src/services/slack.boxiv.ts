@@ -1,19 +1,32 @@
 // BOXIV-only: Slack chat.postMessage ヘルパー。
 // 出品フォーム/購入エントリー連携の「フォーム通知（親）／連携完了・72hエスカレ（スレッド返信）」に使う。
-// bot=claude-sellentry (SELLENTRY_SLACK_BOT_TOKEN)。
-// 投稿先は既定 SLACK_LISTING_LINK_CHANNEL_ID(#pj-lightning-sell)、
-// 購入者は SLACK_BUYER_LINK_CHANNEL_ID(#pj-lightning-buy) を opts.channel で明示指定する。
+// 出品者: bot=claude-sellentry (SELLENTRY_SLACK_BOT_TOKEN) → SLACK_LISTING_LINK_CHANNEL_ID(#pj-lightning-sell)
+// 購入者: bot=BUYER_SLACK_BOT_TOKEN（未設定なら sellentry を流用）→ SLACK_BUYER_LINK_CHANNEL_ID(#pj-lightning-buy)
+// 宛先・bot はいずれも呼び出し側が opts で明示指定する（slackChannelFor / slackTokenFor を使う）。
 
 export interface SlackEnv {
   SELLENTRY_SLACK_BOT_TOKEN?: string;
   SLACK_LISTING_LINK_CHANNEL_ID?: string;
   /** 購入エントリー通知先(#pj-lightning-buy)。未設定なら購入者側の Slack 通知はスキップされる。 */
   SLACK_BUYER_LINK_CHANNEL_ID?: string;
+  /** 購入エントリー専用 bot。未設定なら SELLENTRY_SLACK_BOT_TOKEN を流用する。 */
+  BUYER_SLACK_BOT_TOKEN?: string;
 }
 
 /** source に対応する投稿先チャンネル ID を返す（未設定なら undefined＝呼び出し側でスキップ）。 */
 export function slackChannelFor(env: SlackEnv, source: 'seller' | 'buyer'): string | undefined {
   return source === 'buyer' ? env.SLACK_BUYER_LINK_CHANNEL_ID : env.SLACK_LISTING_LINK_CHANNEL_ID;
+}
+
+/**
+ * source に対応する bot トークンを返す。
+ * 購入者に専用 bot（BUYER_SLACK_BOT_TOKEN）があればそれを使い、無ければ共有の sellentry に落ちる。
+ * ⚠️ トークンは「未設定なら共有へフォールバック」でよい（チャンネルと違い、誤爆先が生まれないため）。
+ * チャンネルの方は明示指定時にフォールバックさせない（別チャンネルへ紛れ込むのを防ぐ）。
+ */
+export function slackTokenFor(env: SlackEnv, source: 'seller' | 'buyer'): string | undefined {
+  if (source === 'buyer' && env.BUYER_SLACK_BOT_TOKEN) return env.BUYER_SLACK_BOT_TOKEN;
+  return env.SELLENTRY_SLACK_BOT_TOKEN;
 }
 
 export interface SlackWebhookEnv {
@@ -71,13 +84,14 @@ export function buildSlackCard(opts: {
 export async function slackPost(
   env: SlackEnv,
   text: string,
-  opts: { threadTs?: string | null; attachments?: unknown[]; channel?: string | null } = {},
+  opts: { threadTs?: string | null; attachments?: unknown[]; channel?: string | null; token?: string | null } = {},
 ): Promise<SlackPostResult> {
   // channel キーを渡した時点で「宛先は呼び出し側が決める」。値が undefined でも
   // 既定チャンネルへフォールバックしない（購入者チャンネル未設定のときに
   // 購入者カードが #pj-lightning-sell へ紛れ込むのを防ぐ）。
   const channel = 'channel' in opts ? opts.channel : env.SLACK_LISTING_LINK_CHANNEL_ID;
-  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !channel) {
+  const token = opts.token || env.SELLENTRY_SLACK_BOT_TOKEN;  // bot は共有へフォールバックしてよい
+  if (!token || !channel) {
     return { ok: false, error: 'slack not configured' };
   }
   const body: Record<string, unknown> = {
@@ -92,7 +106,7 @@ export async function slackPost(
     const res = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify(body),
@@ -114,11 +128,12 @@ export async function slackUpdate(
   env: SlackEnv,
   ts: string | null | undefined,
   text: string,
-  opts: { attachments?: unknown[]; channel?: string | null } = {},
+  opts: { attachments?: unknown[]; channel?: string | null; token?: string | null } = {},
 ): Promise<SlackPostResult> {
   // slackPost と同じ規約: channel キーを渡したら既定へフォールバックしない。
   const channel = 'channel' in opts ? opts.channel : env.SLACK_LISTING_LINK_CHANNEL_ID;
-  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !channel || !ts) {
+  const token = opts.token || env.SELLENTRY_SLACK_BOT_TOKEN;
+  if (!token || !channel || !ts) {
     return { ok: false, error: 'slack update not configured (token/channel/ts)' };
   }
   const body: Record<string, unknown> = {
@@ -131,7 +146,7 @@ export async function slackUpdate(
     const res = await fetch('https://slack.com/api/chat.update', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${env.SELLENTRY_SLACK_BOT_TOKEN}`,
+        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify(body),

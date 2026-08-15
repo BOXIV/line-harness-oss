@@ -157,6 +157,7 @@ export type Env = {
     NOTION_BUYER_LINK_STATUS_UNLINKED?: string; // default: 1_フォーム入力
     NOTION_BUYER_LINK_STATUS_LINKED?: string;   // default: 3_連携済
     SLACK_BUYER_LINK_CHANNEL_ID?: string;       // #pj-lightning-buy（未設定なら購入者 Slack 通知は無効）
+    BUYER_SLACK_BOT_TOKEN?: string;             // 購入者通知の専用 bot（未設定なら SELLENTRY_SLACK_BOT_TOKEN を流用）
     BUYER_REMINDER_RETURN_TO?: string;          // default: https://lightning.boxiv.co.jp/car/buy/thanks
     GOOGLE_GEOCODING_API_KEY?: string;         // 住所→郵便番号（任意）
     SENDGRID_API_KEY?: string;                 // 催促メール
