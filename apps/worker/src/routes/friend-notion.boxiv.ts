@@ -16,6 +16,7 @@ import {
   NotionCandidateNotFoundError,
   type NotionFriendLink,
 } from '../services/notion-friend-link.boxiv.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const friendNotion = new Hono<Env>();
 
@@ -61,7 +62,7 @@ friendNotion.get('/api/friends/:id/notion-candidates', async (c) => {
   }
 });
 
-friendNotion.post('/api/friends/:id/notion-link', async (c) => {
+friendNotion.post('/api/friends/:id/notion-link', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const friend = await c.env.DB

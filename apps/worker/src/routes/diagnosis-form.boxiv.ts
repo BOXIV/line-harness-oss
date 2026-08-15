@@ -26,14 +26,14 @@
 import { Hono } from 'hono';
 import { LineClient } from '@line-crm/line-sdk';
 import { createDiagnosisLeadRow } from '../services/diagnosis-notion.boxiv.js';
+import {
+  fetchVehicleSpec,
+  extractSpecFields,
+  isTeslaVin,
+  specApiKey,
+} from '../services/diagnosis-spec.boxiv.js';
 import { renderFormPage } from './diagnosis-form-page.boxiv.js';
 import type { Env } from '../index.js';
-
-const SPEC_API_DEFAULT_URL =
-  'https://asia-northeast1-boxiv-share.cloudfunctions.net/getVehicleSpecs';
-
-// テスラの WMI（VIN 先頭3桁）: 米国/セミ・上海・ベルリン・その他
-const TESLA_WMI = ['5YJ', '7SA', 'LRW', 'XP7', 'SFZ', '7G2'];
 
 export const diagnosisForm = new Hono<Env>();
 
@@ -91,48 +91,39 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
   if (!consent) errors.push('同意にチェックしてください');
   if (errors.length > 0) return c.json({ success: false, error: errors.join(' / ') }, 400);
 
-  const isTesla = TESLA_WMI.includes(vin.slice(0, 3));
+  const isTesla = isTeslaVin(vin);
   const leadId = crypto.randomUUID();
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
   // --- spec_API（getVehicleSpecs）: テスラ VIN かつ API キー設定時のみ。失敗は非致命 ---
-  // キー/URL は listing パイプライン（fetch-spec-api.mjs / .env.example）と同じ VEHICLE_SPECS_* を正とし、
-  // 旧 SPEC_* も後方互換で許容する。
-  const specApiKey = c.env.VEHICLE_SPECS_API_KEY || c.env.SPEC_API_KEY || '';
-  const specApiUrl = c.env.VEHICLE_SPECS_API_URL || c.env.SPEC_API_URL || SPEC_API_DEFAULT_URL;
+  // 上流はコールドスタート時に 8 秒以上かかることがあるので、10 秒 × 最大 2 回・合計 20 秒の
+  // 予算で打ち切る（フォーム送信をこれ以上待たせない）。ここで取り切れなくても
+  // status='API取得不可' として残し、cron の後追いバックフィルが指数バックオフで補完する。
+  const hasSpecKey = specApiKey(c.env) !== '';
   let specJson: string | null = null;
   let spec: Record<string, unknown> = {};
-  if (isTesla && specApiKey) {
-    try {
-      const url = `${specApiUrl}?vin=${encodeURIComponent(vin)}`;
-      const res = await fetch(url, { headers: { 'x-api-key': specApiKey } });
-      if (res.ok) {
-        const data = (await res.json()) as Record<string, unknown>;
-        // レスポンスは { specsResponse: { response: { ...fields... } } }。生 JSON は specsResponse ごと保存し
-        // （listing の spec_api.json と同形式）、フィールド抽出は response 階層から行う。
-        const sr = (data.specsResponse ?? data) as Record<string, unknown>;
-        const resp = (sr.response ?? sr) as Record<string, unknown>;
-        specJson = JSON.stringify(sr).slice(0, 30000);
-        spec = resp;
-      } else {
-        console.error('diagnosis-form: spec_API status', res.status);
-      }
-    } catch (e) {
-      console.error('diagnosis-form: spec_API error', e);
+  let specError: string | null = null;
+  // spec_attempts は「取得サイクル数」（送信時=1／バックフィル1回=1）。バックオフ段数の指標で、
+  // 1 サイクル内の HTTP 試行回数は spec_error の "attemptN/M" 側に残る。
+  let specTried = false;
+  if (isTesla && hasSpecKey) {
+    const result = await fetchVehicleSpec(c.env, vin, {
+      attempts: 2,
+      timeoutMs: 10_000,
+      budgetMs: 20_000,
+    });
+    specTried = true;
+    if (result.ok) {
+      specJson = result.specJson;
+      spec = result.spec;
+    } else {
+      specError = result.error;
+      console.error('diagnosis-form: spec_API failed', leadId, vin, result.error);
     }
   }
 
-  // spec の数値フィールドは "95.3%" / "60.0kWh" / "520 km" のように単位付き文字列のことがある。
-  // 先頭に現れる数値だけを取り出す（既に number の modelYear/totalPrice はそのまま通る）。
-  const num = (v: unknown): number | null => {
-    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-    if (typeof v !== 'string') return null;
-    const m = v.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
-    return m ? Number(m[0]) : null;
-  };
-  const batterySoH = num(spec.batterySoH);
-  const degradation = batterySoH === null ? null : Math.round((100 - batterySoH) * 10) / 10;
-  const status = !isTesla ? '非テスラ' : specJson === null ? (specApiKey ? 'API取得不可' : '診断依頼') : '診断依頼';
+  const f = extractSpecFields(spec);
+  const status = !isTesla ? '非テスラ' : specJson === null ? (hasSpecKey ? 'API取得不可' : '診断依頼') : '診断依頼';
 
   // --- 重複エントリー判定（起票前に照会。高頻度の再エントリーは Slack で黄色警告する） ---
   // 同一顧客/車両の指標: メール / 電話 / VIN / LINEユーザーID のいずれか一致を「重複」とみなす。
@@ -162,22 +153,20 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
          odometer_km, shaken_month, consent, consented_at, utm,
          spec_json, model, trim, model_year, type_of_drive,
          battery_soh, degradation_pct, battery_capacity_kwh, battery_soh_at, msrp, production_date,
-         status
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         status, spec_error, spec_attempts, spec_last_try_at, spec_derived
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
       .bind(
         leadId, lineUserId, displayName, name, email, phone, vin, isTesla ? 1 : 0,
         odometerKm, shakenMonth, 1, now, utm,
         specJson,
-        (spec.model as string) ?? null,
-        (spec.trim as string) ?? null,
-        num(spec.modelYear),
-        (spec.typeOfDrive as string) ?? null,
-        batterySoH, degradation, num(spec.batteryCapacityKwh),
-        (spec.batterySoHTimestamp as string) ?? null,
-        num(spec.totalPrice),
-        (spec.productionDate as string) ?? null,
-        status
+        f.model, f.trim, f.modelYear, f.typeOfDrive,
+        f.batterySoH, f.degradationPct, f.batteryCapacityKwh,
+        f.batterySoHAt, f.msrp, f.productionDate,
+        // 失敗理由と試行回数を残す（cron のバックオフ計算と事後の原因切り分けに使う）
+        status, specError, specTried ? 1 : 0, specTried ? now : null,
+        // trim/駆動をオプションコードから復元した行は印を付ける（API 実値と区別する）
+        f.derived ? 1 : 0
       )
       .run();
   } catch (e) {
@@ -192,13 +181,14 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
       leadId, name, email, phone, vin,
       odometerKm, shakenMonth, consentedAt: now, status,
       lineUserId, displayName, utm,
-      model: (spec.model as string) ?? null,
-      trim: (spec.trim as string) ?? null,
-      modelYear: num(spec.modelYear),
-      typeOfDrive: (spec.typeOfDrive as string) ?? null,
-      batterySoH, degradationPct: degradation,
-      batteryCapacityKwh: num(spec.batteryCapacityKwh),
-      msrp: num(spec.totalPrice),
+      model: f.model,
+      trim: f.trim,
+      modelYear: f.modelYear,
+      typeOfDrive: f.typeOfDrive,
+      batterySoH: f.batterySoH,
+      degradationPct: f.degradationPct,
+      batteryCapacityKwh: f.batteryCapacityKwh,
+      msrp: f.msrp,
       specJson,
     });
     if (notionPageId) {
@@ -231,10 +221,18 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
         `VIN: ${code(vin)}${isTesla ? '' : '（⚠️ 非テスラ）'}`,
         `走行距離: ${code(odometerKm.toLocaleString() + ' km')} ／ 次回車検: ${code(shakenMonth)}`,
         `お名前: ${code(name)} ／ LINE: ${code(displayName ?? '未連携')}`,
-        batterySoH !== null
-          ? `SoH: ${code(batterySoH + '%')}（劣化率 ${degradation}%）`
+        f.batterySoH !== null
+          ? `SoH: ${code(f.batterySoH + '%')}（劣化率 ${f.degradationPct}%）`
           : `spec_API: ${code(status === 'API取得不可' ? '取得不可 ⚠️' : '未実行')}`
       );
+      // 取得不可の時は原因と「自動で再取得する」ことを明示する（運用が手を出す前に待てるように）
+      if (status === 'API取得不可') {
+        lines.push(`原因: ${code(specError ?? '不明')}`, '⏳ 自動で再取得を試みます（最大6回・24時間まで）');
+      }
+      // 推定で埋めた場合は運用が裏取りできるよう明示する（API の実値ではない）
+      if (f.derived) {
+        lines.push(`ℹ️ グレード/駆動は API が空のためオプションコードから推定: ${code(f.trim ?? '-')}`);
+      }
       await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${slackToken}` },

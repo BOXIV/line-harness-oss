@@ -55,6 +55,7 @@ import { linkCallback } from './routes/link-callback.boxiv.js';
 import { diagnosisForm } from './routes/diagnosis-form.boxiv.js';
 // 最安EVピックアップ日次更新 (BOXIV)
 import { refreshCheapestListings } from './services/cheapest-listings.boxiv.js';
+import { backfillDiagnosisSpecs } from './services/diagnosis-spec-backfill.boxiv.js';
 // 顧客ステータス (Notion 同期, BOXIV)
 import { friendStatus } from './routes/friend-status.boxiv.js';
 // 個別チャット送信予約 (BOXIV)
@@ -86,6 +87,9 @@ export type Env = {
     LINE_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
+    // authorize の redirect_uri に使うパス。Login チャネルに登録済みの文字列と一致必須
+    // （未設定なら /link/callback。不一致だと LINE が authorize を 400 で弾く）。
+    LINE_LOGIN_CALLBACK_PATH?: string;
     WORKER_URL: string;
     CHAT_ALERT_SLACK_BOT_TOKEN?: string;   // BOXIV: 受信メッセージを Slack 通知する Bot トークン（未設定なら無効）
     CHAT_ALERT_SLACK_CHANNEL_ID?: string;  // BOXIV: 同上 通知先チャンネル ID
@@ -378,6 +382,18 @@ async function scheduled(
     await refreshCheapestListings(env, { init: minute === 0 && hour === 21 });
   } catch (e) {
     console.error('scheduled: refreshCheapestListings failed', e);
+  }
+
+  // BOXIV: spec_API 取得に失敗した診断リードの後追い補完（毎時 15分/45分）。
+  // 上のクロールや配信ジョブと同時に走らせない（同時 D1 書き込み競合の回避）。
+  // 1 tick 最大3件・指数バックオフ（5分→30分→2h→6h→24h）で再取得し、
+  // 6回で打ち切って Slack に手動対応を促す。分岐は 0/30 分の重い tick を避けている。
+  if (minute % 30 === 15) {
+    try {
+      await backfillDiagnosisSpecs(env);
+    } catch (e) {
+      console.error('scheduled: backfillDiagnosisSpecs failed', e);
+    }
   }
 }
 

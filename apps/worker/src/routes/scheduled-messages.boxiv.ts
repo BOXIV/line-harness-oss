@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
 import { jstNow } from '@line-crm/db';
+import { requireRole } from '../middleware/role-guard.js';
 
 const scheduledMessages = new Hono<Env>();
 
@@ -38,7 +39,7 @@ function serialize(r: ScheduledMessageRow) {
 }
 
 // GET /api/friends/:friendId/scheduled-messages
-scheduledMessages.get('/api/friends/:friendId/scheduled-messages', async (c) => {
+scheduledMessages.get('/api/friends/:friendId/scheduled-messages', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('friendId');
     const status = c.req.query('status');
@@ -63,7 +64,7 @@ scheduledMessages.get('/api/friends/:friendId/scheduled-messages', async (c) => 
 });
 
 // POST /api/friends/:friendId/scheduled-messages — body: { scheduledAt, messageType, content }
-scheduledMessages.post('/api/friends/:friendId/scheduled-messages', async (c) => {
+scheduledMessages.post('/api/friends/:friendId/scheduled-messages', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('friendId');
     const body = await c.req.json<{ scheduledAt: string; messageType: 'text' | 'image' | 'flex'; content: string }>();
@@ -111,7 +112,7 @@ scheduledMessages.post('/api/friends/:friendId/scheduled-messages', async (c) =>
 });
 
 // DELETE /api/scheduled-messages/:id — キャンセル (sent / failed は変更不可)
-scheduledMessages.delete('/api/scheduled-messages/:id', async (c) => {
+scheduledMessages.delete('/api/scheduled-messages/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     const row = await c.env.DB

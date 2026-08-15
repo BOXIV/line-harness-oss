@@ -251,7 +251,14 @@ export default function ChatsPage() {
   const [markingRead, setMarkingRead] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null)
+  // メッセージ欄がマウント／再マウントされた時点で最下部（最新）に寄せる保険。
+  // 下のスクロール effect は chatDetail.id / messages.length に依存するため、
+  // 内容が同じまま要素だけ作り直されると発火せず、最上部（最古）で止まってしまう。
+  const attachMessagesContainer = useCallback((el: HTMLDivElement | null) => {
+    messagesContainerRef.current = el
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
 
   useEffect(() => {
@@ -323,13 +330,17 @@ export default function ChatsPage() {
     }).catch(() => { /* non-blocking */ })
   }, [])
 
-  const loadChatDetail = useCallback(async (chatId: string, opts?: { silent?: boolean }) => {
+  // opts.silent: 「読み込み中...」に差し替えず（=メッセージ欄を unmount させず）に再取得する。
+  //   スピナー表示は要素を作り直すため、戻ってきた時にスクロールが最上部（最古）へ飛ぶ。
+  //   ポーリングと手動更新の両方で silent を使い、表示中の位置を保つ。
+  // opts.reportError: 手動操作起点のときだけ失敗を画面に出す（ポーリングは黙って次回に任せる）。
+  const loadChatDetail = useCallback(async (chatId: string, opts?: { silent?: boolean; reportError?: boolean }) => {
     if (!opts?.silent) setDetailLoading(true)
     try {
       const res = await api.chats.get(chatId)
       if (res.success) {
         const next = res.data as unknown as ChatDetail
-        // ポーリング(silent)時は内容に変化が無ければ同一参照を返して再描画を抑止する。
+        // silent 時は内容に変化が無ければ同一参照を返して再描画を抑止する。
         // → ちらつき防止 + スクロール位置（最新=最下部）を維持。新着があれば更新され、
         //   length 変化で下部スクロール effect が発火する。
         setChatDetail((prev) =>
@@ -337,7 +348,7 @@ export default function ChatsPage() {
         )
       }
     } catch {
-      if (!opts?.silent) setError('チャット詳細の読み込みに失敗しました。')
+      if (!opts?.silent || opts?.reportError) setError('チャット詳細の読み込みに失敗しました。')
     } finally {
       if (!opts?.silent) setDetailLoading(false)
     }
@@ -564,7 +575,9 @@ export default function ChatsPage() {
             <button
               onClick={() => {
                 loadChats()
-                if (selectedChatId) loadChatDetail(selectedChatId)
+                // silent = メッセージ欄を作り直さない → 表示中のスクロール位置を保つ。
+                // 新着があれば messages.length 変化で最下部へ自動スクロールする。
+                if (selectedChatId) loadChatDetail(selectedChatId, { silent: true, reportError: true })
               }}
               disabled={loading}
               className="px-3 py-2 min-h-[44px] text-sm font-medium text-gray-700 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
@@ -839,7 +852,7 @@ export default function ChatsPage() {
               )}
 
               {/* Messages — LINE-style chat bubbles */}
-              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
+              <div ref={attachMessagesContainer} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
                 {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
                   <div className="text-center py-8">
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>
