@@ -564,22 +564,24 @@ export default function ChatsPage() {
     }
   }
 
-  // 名前検索を適用したチャット。タブのバッジ件数もこれを数えるので、
-  // 検索中はバッジと一覧の件数が一致する。
+  // 名前検索を適用したチャット。タブのバッジもこれを集計するので、
+  // 検索中はバッジと一覧の中身が一致する。
   const searchedChats = useMemo(() => {
     const q = nameQuery.trim().toLowerCase()
     if (!q) return chats
     return chats.filter((chat) => formatChatLabel(chat).toLowerCase().includes(q))
   }, [chats, nameQuery])
 
-  const sourceCounts = useMemo(
-    () => ({
-      all: searchedChats.length,
-      seller: searchedChats.filter((c) => c.source === 'seller').length,
-      buyer: searchedChats.filter((c) => c.source === 'buyer').length,
-    }),
-    [searchedChats],
-  )
+  // タブのバッジは「その区分の未読メッセージ数」。チャット行の赤バッジと同じ意味にして、
+  // 総件数と取り違えられないようにする（0 のときは出さない）。
+  const unreadCounts = useMemo(() => {
+    const sum = (list: Chat[]) => list.reduce((n, c) => n + (c.unreadCount ?? 0), 0)
+    return {
+      all: sum(searchedChats),
+      seller: sum(searchedChats.filter((c) => c.source === 'seller')),
+      buyer: sum(searchedChats.filter((c) => c.source === 'buyer')),
+    }
+  }, [searchedChats])
 
   // 開いているチャットの出品者/購入者。一覧の source（worker がタグから解決・全件分ある）を
   // 優先し、一覧に無いチャットだけ友だち一覧のタグから判定する。ステータス選択が
@@ -669,6 +671,7 @@ export default function ChatsPage() {
                 { key: 'buyer', label: SOURCE_LABELS.buyer },
               ] as const).map((tab) => {
                 const active = sourceTab === tab.key
+                const unread = unreadCounts[tab.key]
                 return (
                   <button
                     key={tab.key}
@@ -680,13 +683,15 @@ export default function ChatsPage() {
                     }`}
                   >
                     {tab.label}
-                    <span
-                      className={`inline-flex items-center justify-center min-w-[18px] px-1 rounded-full text-[10px] leading-4 ${
-                        active ? 'bg-slate-900 text-white' : 'bg-gray-200 text-gray-600'
-                      }`}
-                    >
-                      {sourceCounts[tab.key]}
-                    </span>
+                    {unread > 0 && (
+                      <span
+                        className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
+                        title={`未読 ${unread} 件`}
+                        aria-label={`未読 ${unread} 件`}
+                      >
+                        {unread > 99 ? '99+' : unread}
+                      </span>
+                    )}
                   </button>
                 )
               })}
