@@ -1,10 +1,19 @@
 // BOXIV-only: Slack chat.postMessage ヘルパー。
-// 出品フォーム連携の「フォーム通知（親）／連携完了・72hエスカレ（スレッド返信）」に使う。
-// bot=claude-sellentry (SELLENTRY_SLACK_BOT_TOKEN), 投稿先=SLACK_LISTING_LINK_CHANNEL_ID(#pj-lightning-sell)。
+// 出品フォーム/購入エントリー連携の「フォーム通知（親）／連携完了・72hエスカレ（スレッド返信）」に使う。
+// bot=claude-sellentry (SELLENTRY_SLACK_BOT_TOKEN)。
+// 投稿先は既定 SLACK_LISTING_LINK_CHANNEL_ID(#pj-lightning-sell)、
+// 購入者は SLACK_BUYER_LINK_CHANNEL_ID(#pj-lightning-buy) を opts.channel で明示指定する。
 
 export interface SlackEnv {
   SELLENTRY_SLACK_BOT_TOKEN?: string;
   SLACK_LISTING_LINK_CHANNEL_ID?: string;
+  /** 購入エントリー通知先(#pj-lightning-buy)。未設定なら購入者側の Slack 通知はスキップされる。 */
+  SLACK_BUYER_LINK_CHANNEL_ID?: string;
+}
+
+/** source に対応する投稿先チャンネル ID を返す（未設定なら undefined＝呼び出し側でスキップ）。 */
+export function slackChannelFor(env: SlackEnv, source: 'seller' | 'buyer'): string | undefined {
+  return source === 'buyer' ? env.SLACK_BUYER_LINK_CHANNEL_ID : env.SLACK_LISTING_LINK_CHANNEL_ID;
 }
 
 export interface SlackWebhookEnv {
@@ -55,19 +64,24 @@ export function buildSlackCard(opts: {
 }
 
 /**
- * #pj-lightning-sell へ投稿。threadTs を渡すとそのスレッドへ返信。
- * 未設定なら ok=false（呼び出し側はログのみ・非致命）。throw しない。
+ * Slack へ投稿。threadTs を渡すとそのスレッドへ返信。
+ * 投稿先は opts.channel（省略時 #pj-lightning-sell）。未設定なら ok=false
+ * （呼び出し側はログのみ・非致命）。throw しない。
  */
 export async function slackPost(
   env: SlackEnv,
   text: string,
-  opts: { threadTs?: string | null; attachments?: unknown[] } = {},
+  opts: { threadTs?: string | null; attachments?: unknown[]; channel?: string | null } = {},
 ): Promise<SlackPostResult> {
-  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !env.SLACK_LISTING_LINK_CHANNEL_ID) {
+  // channel キーを渡した時点で「宛先は呼び出し側が決める」。値が undefined でも
+  // 既定チャンネルへフォールバックしない（購入者チャンネル未設定のときに
+  // 購入者カードが #pj-lightning-sell へ紛れ込むのを防ぐ）。
+  const channel = 'channel' in opts ? opts.channel : env.SLACK_LISTING_LINK_CHANNEL_ID;
+  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !channel) {
     return { ok: false, error: 'slack not configured' };
   }
   const body: Record<string, unknown> = {
-    channel: env.SLACK_LISTING_LINK_CHANNEL_ID,
+    channel,
     text, // attachments 指定時も通知用フォールバックとして必須
     unfurl_links: false,
     unfurl_media: false,
@@ -100,13 +114,15 @@ export async function slackUpdate(
   env: SlackEnv,
   ts: string | null | undefined,
   text: string,
-  opts: { attachments?: unknown[] } = {},
+  opts: { attachments?: unknown[]; channel?: string | null } = {},
 ): Promise<SlackPostResult> {
-  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !env.SLACK_LISTING_LINK_CHANNEL_ID || !ts) {
+  // slackPost と同じ規約: channel キーを渡したら既定へフォールバックしない。
+  const channel = 'channel' in opts ? opts.channel : env.SLACK_LISTING_LINK_CHANNEL_ID;
+  if (!env.SELLENTRY_SLACK_BOT_TOKEN || !channel || !ts) {
     return { ok: false, error: 'slack update not configured (token/channel/ts)' };
   }
   const body: Record<string, unknown> = {
-    channel: env.SLACK_LISTING_LINK_CHANNEL_ID,
+    channel,
     ts,
     text,
   };

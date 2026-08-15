@@ -27,6 +27,7 @@ import {
 import type { FlowId, LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { listingFormFlow } from './listing-form-line.js';
 import { appListingFlow } from './app-listing.boxiv.js';
+import { buyerFormFlow } from './buyer-form-line.js';
 import type { Env } from '../index.js';
 
 const linkCallback = new Hono<Env>();
@@ -34,11 +35,11 @@ const linkCallback = new Hono<Env>();
 /**
  * 連携フローのレジストリ。callback は ctx.flow でここを引くだけ（本体は flow 非依存）。
  * フロー追加時はハンドラを実装してここに1エントリ足す（callback 本体は変更しない）。
- * app_listing はステージ③で追加予定。
  */
 const LINK_FLOWS: Partial<Record<FlowId, LinkFlow>> = {
   listing_form: listingFormFlow,
   app_listing: appListingFlow,
+  buyer_form: buyerFormFlow,
 };
 
 /**

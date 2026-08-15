@@ -1,10 +1,15 @@
-// BOXIV-only: 出品フォーム台帳（listing_entries）の D1 アクセス層。
+// BOXIV-only: 出品/購入フォーム台帳（listing_entries）の D1 アクセス層。
 //
 // form_submit で行を作り（status='form_only'）、LINE 連携で line_user_id を追記し
 // （status='linked'）、催促 CRON が未連携を抽出する。Notion は本テーブルのミラー。
-// migration: 905_listing_entries.sql
+// 出品者（source='seller'）と購入者（source='buyer'）は同一フローなので同じ表を共有し、
+// Notion 書き込み先・Slack 通知先・催促文面だけを source で切り替える。
+// migration: 905_listing_entries.sql / 916_listing_entries_source.sql
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+
+/** 台帳の由来。出品者フォーム(/listing-form/*) と 購入者エントリー(/buyer-form/*)。 */
+export type EntrySource = 'seller' | 'buyer';
 
 export interface ListingEntry {
   match_key: string;
@@ -16,6 +21,7 @@ export interface ListingEntry {
   display_name: string | null;
   notion_page_id: string | null;
   status: 'form_only' | 'linked';
+  source: EntrySource;
   reminder_count: number;
   email_sent_at: string | null;
   sms_sent_at: string | null;
@@ -34,6 +40,8 @@ export interface SubmitInput {
   phone?: string | null;
   email?: string | null;
   returnTo?: string | null;
+  /** 既定 'seller'（既存の出品フォーム呼び出しを壊さない）。購入者エントリーは 'buyer'。 */
+  source?: EntrySource;
 }
 
 /**
@@ -46,14 +54,15 @@ export async function upsertOnSubmit(db: D1Database, input: SubmitInput): Promis
   const formJson = JSON.stringify(input.formData ?? {});
   await db
     .prepare(
-      `INSERT INTO listing_entries (match_key, form_data, name, phone, email, return_to, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'form_only', ${NOW}, ${NOW})
+      `INSERT INTO listing_entries (match_key, form_data, name, phone, email, return_to, source, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'form_only', ${NOW}, ${NOW})
        ON CONFLICT(match_key) DO UPDATE SET
          form_data  = excluded.form_data,
          name       = COALESCE(excluded.name, listing_entries.name),
          phone      = COALESCE(excluded.phone, listing_entries.phone),
          email      = COALESCE(excluded.email, listing_entries.email),
          return_to  = COALESCE(excluded.return_to, listing_entries.return_to),
+         source     = excluded.source,
          updated_at = ${NOW}`,
     )
     .bind(
@@ -63,6 +72,7 @@ export async function upsertOnSubmit(db: D1Database, input: SubmitInput): Promis
       input.phone ?? null,
       input.email ?? null,
       input.returnTo ?? null,
+      input.source ?? 'seller',
     )
     .run();
   return getEntry(db, input.matchKey);
@@ -97,17 +107,18 @@ export async function insertOrphanLink(
   matchKey: string,
   lineUserId: string,
   displayName: string | null,
+  source: EntrySource = 'seller',
 ): Promise<ListingEntry | null> {
   await db
     .prepare(
-      `INSERT INTO listing_entries (match_key, line_user_id, display_name, status, created_at, linked_at, updated_at)
-       VALUES (?, ?, ?, 'linked', ${NOW}, ${NOW}, ${NOW})
+      `INSERT INTO listing_entries (match_key, line_user_id, display_name, source, status, created_at, linked_at, updated_at)
+       VALUES (?, ?, ?, ?, 'linked', ${NOW}, ${NOW}, ${NOW})
        ON CONFLICT(match_key) DO UPDATE SET
          line_user_id = excluded.line_user_id,
          display_name = COALESCE(excluded.display_name, listing_entries.display_name),
          status = 'linked', linked_at = ${NOW}, updated_at = ${NOW}`,
     )
-    .bind(matchKey, lineUserId, displayName)
+    .bind(matchKey, lineUserId, displayName, source)
     .run();
   return getEntry(db, matchKey);
 }
@@ -136,18 +147,23 @@ export async function setNotionPageId(db: D1Database, matchKey: string, pageId: 
  */
 export async function listFormOnlyForReminder(
   db: D1Database,
-  opts: { minElapsedMinutes: number; limit: number },
+  opts: { minElapsedMinutes: number; limit: number; source?: EntrySource },
 ): Promise<ListingEntry[]> {
+  const sourceClause = opts.source ? `AND source = ?` : '';
+  const binds: unknown[] = [`-${opts.minElapsedMinutes}`];
+  if (opts.source) binds.push(opts.source);
+  binds.push(opts.limit);
   const res = await db
     .prepare(
       `SELECT * FROM listing_entries
         WHERE status = 'form_only'
           AND created_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' minutes')
+          ${sourceClause}
           AND (reminder_count < 3 OR escalated_at IS NULL)
         ORDER BY created_at ASC
         LIMIT ?`,
     )
-    .bind(`-${opts.minElapsedMinutes}`, opts.limit)
+    .bind(...binds)
     .all<ListingEntry>();
   return res.results ?? [];
 }
@@ -188,8 +204,9 @@ export async function setSlackThreadTs(db: D1Database, matchKey: string, ts: str
 }
 
 /**
- * lineUserId で「連携済み(status='linked')」の出品台帳行を返す（友だち追加完了時の連携済み判定用）。
- * 同一 lineUserId で複数 match_key が連携されている場合は最新の連携を返す。未連携なら null。
+ * lineUserId で「連携済み(status='linked')」の台帳行を返す（友だち追加完了時の連携済み判定用）。
+ * 同一 lineUserId で複数 match_key が連携されている場合は最新の連携を返す（出品/購入は問わない —
+ * 呼び出し側が row.source を見て送るイベントを決める）。未連携なら null。
  */
 export async function getLinkedEntryByLineUserId(db: D1Database, lineUserId: string): Promise<ListingEntry | null> {
   return db
@@ -198,19 +215,40 @@ export async function getLinkedEntryByLineUserId(db: D1Database, lineUserId: str
     .first<ListingEntry>();
 }
 
-/** 出品価格お知らせ(listing_link_completed)を既に送信済みか（friend.metadata フラグ）。二重送信防止。 */
-export async function hasListingPriceNotified(db: D1Database, friendId: string): Promise<boolean> {
+/**
+ * 連携完了通知の「送信済み」フラグ名（friend.metadata のキー）。
+ * OAuth 完了時と follow webhook 救済の二重送信を防ぐ。source ごとに別フラグにしているので、
+ * 出品者として連携済みの人が後から購入エントリーしても購入者向けの通知は1回届く。
+ */
+// JSON パスは SQL リテラルとして埋め込む（値バインドではなくコード内定数の二択）。
+const LINK_NOTIFIED_PATH: Record<EntrySource, string> = {
+  seller: '$.listing_price_notified', // 歴史的な名前（出品価格お知らせ）。既存 friend の値を引き継ぐため変えない
+  buyer: '$.buyer_link_notified',
+};
+
+/** 連携完了通知（seller=listing_link_completed / buyer=buyer_link_completed）を送信済みか。二重送信防止。 */
+export async function hasLinkCompletedNotified(
+  db: D1Database,
+  friendId: string,
+  source: EntrySource = 'seller',
+): Promise<boolean> {
   const row = await db
-    .prepare(`SELECT json_extract(metadata, '$.listing_price_notified') AS f FROM friends WHERE id = ?`)
+    .prepare(`SELECT json_extract(metadata, '${LINK_NOTIFIED_PATH[source]}') AS f FROM friends WHERE id = ?`)
     .bind(friendId)
     .first<{ f: unknown }>();
   return !!(row && row.f);
 }
 
-/** 出品価格お知らせ送信済みフラグを friend.metadata に立てる。 */
-export async function markListingPriceNotified(db: D1Database, friendId: string): Promise<void> {
+/** 連携完了通知の送信済みフラグを friend.metadata に立てる。 */
+export async function markLinkCompletedNotified(
+  db: D1Database,
+  friendId: string,
+  source: EntrySource = 'seller',
+): Promise<void> {
   await db
-    .prepare(`UPDATE friends SET metadata = json_set(COALESCE(metadata, '{}'), '$.listing_price_notified', json('true')) WHERE id = ?`)
+    .prepare(
+      `UPDATE friends SET metadata = json_set(COALESCE(metadata, '{}'), '${LINK_NOTIFIED_PATH[source]}', json('true')) WHERE id = ?`,
+    )
     .bind(friendId)
     .run();
 }

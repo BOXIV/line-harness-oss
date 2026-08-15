@@ -15,7 +15,7 @@ import type { Env } from '../index.js';
 // ─── フロー Strategy の契約（フロー横断・特定フローに依存しない） ─────
 
 /** 連携フロー識別子。省略時（旧 state・後方互換）は 'listing_form' 扱い。 */
-export type FlowId = 'listing_form' | 'app_listing';
+export type FlowId = 'listing_form' | 'app_listing' | 'buyer_form';
 
 /**
  * 全フロー共通の署名 state。共有 callback が「検証」と「終端 redirect」に使う最小フィールドのみ。

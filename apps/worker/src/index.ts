@@ -48,6 +48,7 @@ import { staffAvailability } from './routes/staff-availability.js';
 import { listingFormLine } from './routes/listing-form-line.js';
 // アプリ出品 LINE 連携（Portal アプリ・BOXIV）
 import { appListing } from './routes/app-listing.boxiv.js';
+import { buyerFormLine } from './routes/buyer-form-line.js';
 // LINE Login 共有コールバック（フロー非依存の司令塔・BOXIV）
 import { linkCallback } from './routes/link-callback.boxiv.js';
 // バッテリー劣化診断 LIFF フォーム (BOXIV)
@@ -141,6 +142,22 @@ export type Env = {
     NOTION_SELLER_LINK_STATUS_LINKED?: string;   // default: 3_連携済
     NOTION_LISTING_ID_MIN?: string;            // default: 10000
     NOTION_LISTING_ID_MAX?: string;            // default: 19999
+    // 購入エントリー台帳→Notion 購入者DB 即起票 + 連携 (BOXIV)
+    // 出品者側と対になる設定。DB ID は既存の NOTION_BUYER_DB_ID を共有する。
+    NOTION_BUYER_MATCH_KEY_PROP?: string;       // default: match_key
+    NOTION_BUYER_LINE_USER_ID_PROP?: string;    // default: LINE User ID
+    NOTION_BUYER_TITLE_PROP?: string;           // default: 名前
+    NOTION_BUYER_PHONE_PROP?: string;           // default: [Form]電話番号
+    NOTION_BUYER_EMAIL_PROP?: string;           // default: [Form]メールアドレス
+    NOTION_BUYER_MEMO_PROP?: string;            // default: その他詳細備考
+    NOTION_BUYER_LISTING_ID_PROP?: string;      // default: 掲載ID
+    NOTION_BUYER_ZIP_PROP?: string;             // default: 郵便番号
+    NOTION_BUYER_STATUS_VALUE?: string;         // default: 0_LINE登録（連携時付与）
+    NOTION_BUYER_LINK_STATUS_PROP?: string;     // default: 連携ステータス
+    NOTION_BUYER_LINK_STATUS_UNLINKED?: string; // default: 1_フォーム入力
+    NOTION_BUYER_LINK_STATUS_LINKED?: string;   // default: 3_連携済
+    SLACK_BUYER_LINK_CHANNEL_ID?: string;       // #pj-lightning-buy（未設定なら購入者 Slack 通知は無効）
+    BUYER_REMINDER_RETURN_TO?: string;          // default: https://lightning.boxiv.co.jp/car/buy/thanks
     GOOGLE_GEOCODING_API_KEY?: string;         // 住所→郵便番号（任意）
     SENDGRID_API_KEY?: string;                 // 催促メール
     SENDGRID_FROM_EMAIL?: string;
@@ -220,6 +237,8 @@ app.route('/', staffAvailability);
 app.route('/', listingFormLine);
 // アプリ出品 LINE 連携（/app-listing/start・BOXIV）
 app.route('/', appListing);
+// 購入エントリー LINE 連携（/buyer-form/*・BOXIV）
+app.route('/', buyerFormLine);
 // LINE Login 共有コールバック（/link/callback ＋ 旧 /listing-form/callback エイリアス・BOXIV）
 app.route('/', linkCallback);
 
