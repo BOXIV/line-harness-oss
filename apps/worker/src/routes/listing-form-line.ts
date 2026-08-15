@@ -29,6 +29,7 @@ import type { Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
+import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText } from '../services/slack.boxiv.js';
 import {
@@ -270,6 +271,14 @@ export const listingFormFlow: LinkFlow<ListingStateV1> = {
       });
     } catch (err) {
       console.error(`link callback: Notion linkSellerRow failed (form_id=${ctx.form_id})`, err);
+    }
+
+    // タグ「出品者」を付与。/chats のステータス選択（出品者DBの options）・出品者/購入者タブ・
+    // リッチメニュー自動切替がこのタグを見るので、automation 設定に依存せずコードで確定させる。
+    if (friend) {
+      await ensureSourceTag(c.env.DB, friend.id, 'seller').catch((err) =>
+        console.error(`link callback: ensureSourceTag failed (friend=${friend.id})`, err),
+      );
     }
 
     // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
