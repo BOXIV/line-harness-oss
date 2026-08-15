@@ -31,33 +31,56 @@ import type { RichMenu, CreateRichMenuInput } from '@line-crm/shared'
 /** Broadcast type from API (now camelCase after worker serialization) */
 export type ApiBroadcast = Broadcast
 
-/** BOXIV: friend.metadata.notion（連携中の Notion 出品者DB 行） */
+/** BOXIV: 連携先の Notion DB。出品者リスト / 購入者リスト。 */
+export type NotionLinkSource = 'seller' | 'buyer'
+
+/** BOXIV: friend.metadata の Notion 連携（出品者DB or 購入者DB の1行） */
 export interface NotionSellerLink {
-  source: 'seller'
+  source: NotionLinkSource
   pageId: string
-  /** 掲載ID */
+  /** 出品者: 掲載ID / 購入者: 商談ID */
   label: string | null
   realName: string | null
+  /** 出品タイプ（出品者のみ） */
   listingType?: string | null
-  /** オペレーターが掲載IDを明示選択した連携（他の掲載ID行のステータスは反映されない） */
+  /** 車両（購入者のみ） */
+  vehicle?: string | null
+  /** オペレーターが行を明示選択した連携（同じDBの他の行のステータスは反映されない） */
   pinned?: boolean
   candidateCount?: number
   linkedAt?: string
 }
 
-/** BOXIV: 連携先の候補（Notion 出品者DB の行） */
+/** BOXIV: 出品者/購入者それぞれの連携（1人が両方を持ち得る） */
+export type NotionFriendLinks = Partial<Record<NotionLinkSource, NotionSellerLink>>
+
+/** BOXIV: 連携先の候補（Notion 出品者DB / 購入者DB の行） */
 export interface NotionSellerCandidate {
+  source: NotionLinkSource
   pageId: string
-  /** 掲載ID */
+  /** 出品者: 掲載ID / 購入者: 商談ID */
   label: string | null
   realName: string | null
+  /** 出品タイプ（出品者のみ） */
   listingType: string | null
+  /** 車両（購入者のみ） */
+  vehicle: string | null
   status: string | null
   /** 'name' は LINE User ID 未記入の行を名前で拾った弱い一致 */
   matchedBy: 'lineUserId' | 'name'
   createdTime: string | null
   lastEditedTime: string | null
   url: string | null
+}
+
+/** BOXIV: DB 1つ分の候補。出品者/購入者を常に併記するため group 単位で返る。 */
+export interface NotionCandidateGroup {
+  source: NotionLinkSource
+  candidates: NotionSellerCandidate[]
+  /** そのDBだけ取得に失敗したときの理由（もう片方は表示できる） */
+  error: string | null
+  linkedPageId: string | null
+  pinned: boolean
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL
@@ -432,21 +455,25 @@ export const api = {
         method: 'POST',
       }),
     /**
-     * Notion 出品者DB との連携。pageId を渡すとその掲載ID行に固定する（pinned）。
-     * 省略時は自動判定（既にオペレーターが選択済みならその行を維持）。
+     * Notion 出品者DB / 購入者DB との連携。pageId を渡すとその行に固定する（pinned）。
+     * source は問い合わせ先DBのヒント（省略時は pageId から判定、pageId も無ければ出品者の自動判定）。
      */
-    notionLink: (friendId: string, pageId?: string) =>
+    notionLink: (friendId: string, pageId?: string, source?: NotionLinkSource) =>
       fetchApi<ApiResponse<{
         linked: boolean
         message?: string
         link?: NotionSellerLink
       }>>(`/api/friends/${friendId}/notion-link`, {
         method: 'POST',
-        ...(pageId ? { body: JSON.stringify({ pageId }) } : {}),
+        ...(pageId ? { body: JSON.stringify({ pageId, ...(source ? { source } : {}) }) } : {}),
       }),
-    /** 連携先の候補（掲載IDが複数ある出品者の紐付け先選択用） */
+    /**
+     * 連携先の候補。出品者リスト / 購入者リストの両方を groups で常に併記して返す。
+     * candidates / linkedPageId / pinned は旧 web 互換の出品者分（worker 先行デプロイ時の保険）。
+     */
     notionCandidates: (friendId: string) =>
       fetchApi<ApiResponse<{
+        groups?: NotionCandidateGroup[]
         candidates: NotionSellerCandidate[]
         linkedPageId: string | null
         pinned: boolean

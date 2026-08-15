@@ -1,6 +1,11 @@
 import { Hono } from 'hono';
 import { buildMessage } from '../services/step-delivery.js';
-import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
+import {
+  linkFriendToNotion,
+  readNotionLinks,
+  primaryLink,
+  type NotionFriendLinks,
+} from '../services/notion-friend-link.boxiv.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
 import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
@@ -112,25 +117,11 @@ chats.delete('/api/operators/:id', requireRole('owner','admin'), async (c) => {
 
 // ========== チャットCRUD ==========
 
-type FriendNotionLink = {
-  source: string;
-  pageId: string;
-  label: string | null;
-  realName: string | null;
-  listingType?: string | null;
-  /** オペレーターが掲載IDを明示選択した連携 */
-  pinned?: boolean;
-  candidateCount?: number;
-};
-
-function parseFriendNotion(metadataJson: unknown): FriendNotionLink | null {
-  if (typeof metadataJson !== 'string' || !metadataJson) return null;
-  try {
-    const meta = JSON.parse(metadataJson) as { notion?: FriendNotionLink };
-    return meta.notion ?? null;
-  } catch {
-    return null;
-  }
+// BOXIV: friends.metadata の Notion 連携（出品者DB / 購入者DB）。
+// `notion` は primary（出品者優先・無ければ購入者）の1件で、一覧の表示名に使う。
+// `notionLinks` は両方を持つ（チャット詳細のピル表示用）。
+function parseFriendNotionLinks(metadataJson: unknown): NotionFriendLinks {
+  return readNotionLinks(typeof metadataJson === 'string' ? metadataJson : null);
 }
 
 chats.get('/api/chats', async (c) => {
@@ -199,7 +190,7 @@ chats.get('/api/chats', async (c) => {
         friendName: ch.display_name || '名前なし',
         managedName: ch.managed_name ?? null,
         friendPictureUrl: ch.picture_url || null,
-        notion: parseFriendNotion(ch.metadata),
+        notion: primaryLink(parseFriendNotionLinks(ch.metadata)),
         // 分類タグ由来の出品者/購入者。どちらのタグも無ければ null（未分類）。
         source: (ch.friend_source as 'seller' | 'buyer' | null) ?? null,
         customerStatus: ch.status_option_id
@@ -255,7 +246,9 @@ chats.get('/api/chats/:id', async (c) => {
         managedName: friend?.managed_name ?? null,
         lineUserId: friend?.line_user_id ?? null,
         friendPictureUrl: friend?.picture_url || null,
-        notion: parseFriendNotion(friend?.metadata ?? null),
+        notion: primaryLink(parseFriendNotionLinks(friend?.metadata ?? null)),
+        // 出品者/購入者それぞれの連携（両方持ち得る）。詳細ヘッダのピル表示に使う。
+        notionLinks: parseFriendNotionLinks(friend?.metadata ?? null),
         operatorId: item.operator_id,
         status: item.status,
         notes: item.notes,
@@ -431,13 +424,10 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     // チャットの最終メッセージ日時を更新。返信＝既読とみなし last_read_at も now にして未読数を 0 に戻す。
     await updateChat(c.env.DB, chatId, { status: 'in_progress', lastMessageAt: jstNow(), lastReadAt: jstNow() });
 
-    // BOXIV: Notion 出品者DB との初回自動連携 (metadata.notion 未設定のときだけ)
-    let needsNotionLink = true;
-    try {
-      const meta = friend.metadata ? JSON.parse(friend.metadata) : {};
-      if (meta.notion?.pageId) needsNotionLink = false;
-    } catch { /* malformed metadata — try anyway */ }
-    if (needsNotionLink) {
+    // BOXIV: Notion 出品者DB との初回自動連携（出品者リンク未設定のときだけ）。
+    // 購入者は1人が複数の商談行を持ち自動選択を誤ると反映先が固定されるため、自動連携しない
+    // （購入者リンクはチャットの Notion連携ピッカーからオペレーターが明示的に張る）。
+    if (!readNotionLinks(friend.metadata)['seller']?.pageId) {
       const promise = linkFriendToNotion(c.env.DB, c.env, friend.id, friend.line_user_id)
         .catch((err) => console.error('auto notion link failed for', friend.id, err));
       c.executionCtx.waitUntil(promise);
