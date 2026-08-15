@@ -119,9 +119,59 @@ function normalizePrefecture(v: unknown): string | null {
 }
 
 /**
+ * フォームの select 値 → Notion の select 値。**表記が微妙に違う**ので明示的に対応表を持つ
+ * （実測: フォーム `AIのオススメ` / Notion `AIのおすすめ`、フォーム `YouTube広告` / Notion `Youtube広告` 等）。
+ * 対応表に無い値は書かず備考へ回す。Notion の select は未知の値を渡すと**選択肢自体が増えてしまい**、
+ * 運用中のDBに near-duplicate なオプションを作ってしまうため。
+ */
+const PAYMENT_MAP: Record<string, string> = {
+  'ローン (オリコ)': 'BOXIV：オリコ',
+  '銀行系ローン': '他社：ローン',
+  '現金': '現金',
+};
+const CHANNEL_MAP: Record<string, string> = {
+  '僕テス(YouTube)': '僕テス（youtube）',
+  '僕テス(Xの投稿)': '僕テス(Xの投稿)',
+  'Google検索': 'Google検索',
+  'X広告': 'X広告',
+  'Facebook広告': 'Facebook広告',
+  'Instagram広告': 'Instagram広告',
+  'YouTube広告': 'Youtube広告',
+  'テスカスフォーラム': 'テスカスフォーラム',
+  'Webメディア': 'Webメディア',
+  '知り合いの口コミ': '知り合いの口コミ',
+  'テスラストアのセールスマン': 'テスラストアのセールスマン',
+  'EVイベント/展示会': 'EVイベント/展示会',
+  'AIのオススメ': 'AIのおすすめ',
+  'それ以外': 'それ以外',
+};
+
+/** フォームのフィールド名（input の name 属性。**表示ラベルとは別物**）。実フォームで実測した値。 */
+const F = {
+  name: 'お名前',
+  kana: 'カタカナ',
+  phone: '電話番号',
+  email: 'メールアドレス',
+  zip: '郵便番号',
+  address: 'ご住所',
+  prefecture: '都道府県',       // 納車先の都道府県
+  city: '市町村区',
+  plateWanted: '希望ナンバー有無',
+  plateNo: '希望ナンバー',
+  etc: 'ETC再セットアップ',
+  garageCert: '車庫証明取得代行',
+  arcAid: 'ArcAid相談希望',
+  shopWanted: 'BOXIV shop 購入希望',
+  shopItems: 'BOXIV shop 購入希望商品',
+  payment: 'お支払い方法',
+  channel: 'サービスを知ったきっかけ',
+  listingId: '掲載ID',
+  consent: '同意ボタン',
+} as const;
+
+/**
  * 既存行の `エントリー情報` と同じ体裁でエントリー内容を1つのテキストにまとめる。
- * 専用プロパティに載らない項目（納車希望日・土日祝日納車・アクセサリー等）はここに集約するので、
- * フォームに項目が増えても値が落ちない。
+ * 専用プロパティに載らない項目はここに集約するので、フォームに項目が増えても値が落ちない。
  */
 function buildEntryInfo(fields: Record<string, unknown>, listingId: string | null, vehicle: string | null): string {
   const lines: string[] = ['通知タイプ：購入エントリー'];
@@ -131,22 +181,28 @@ function buildEntryInfo(fields: Record<string, unknown>, listingId: string | nul
     const v = fields[key];
     if (v !== null && v !== undefined && String(v).trim() !== '') lines.push(`${label}：${String(v).trim()}`);
   };
-  push('納車する都道府県', '納車先の指定');
-  push('納車する市町村区', '市町村区');
-  push('納車希望日', '納車希望日');
-  if ('希望ナンバー' in fields) lines.push(`希望ナンバー有無：${toAriNashi(fields['希望ナンバー']) === '有り' ? 'あり' : 'なし'}`);
-  push('希望ナンバー', '希望ナンバー');
-  if ('土日祝日納車' in fields) lines.push(`土日祝日納車：${toAriNashi(fields['土日祝日納車'])}`);
-  if ('車庫証明取得代行' in fields) lines.push(`車庫証明取得代行：${toAriNashi(fields['車庫証明取得代行'])}`);
-  push('アクセサリー希望', 'BOXIV shop 20%オフ');
-  push('お名前(カナ)', 'お名前 (カナ)');
+  push('納車する都道府県', F.prefecture);
+  push('納車する市町村区', F.city);
+  if (F.plateWanted in fields) lines.push(`希望ナンバー有無：${toAriNashi(fields[F.plateWanted]) === '有り' ? 'あり' : 'なし'}`);
+  push('希望ナンバー', F.plateNo);
+  if (F.etc in fields) lines.push(`ETC再セットアップ：${toAriNashi(fields[F.etc])}`);
+  if (F.garageCert in fields) lines.push(`車庫証明取得代行：${toAriNashi(fields[F.garageCert])}`);
+  if (F.arcAid in fields) lines.push(`テスラ専用保険の相談：${toAriNashi(fields[F.arcAid])}`);
+  if (F.shopWanted in fields) lines.push(`BOXIV shop 購入希望：${toAriNashi(fields[F.shopWanted])}`);
+  push('BOXIV shop 希望商品', F.shopItems);
+  push('お支払い方法', F.payment);
+  push('認知経路', F.channel);
+  push('お名前(カナ)', F.kana);
 
-  // 上記で拾えなかった項目も落とさず末尾に足す（フォームの項目追加に追従するため）
-  const KNOWN = new Set([
-    'match_key', 'Match Key', '同意ボタン', '利用規約', '掲載ID', '車両',
-    'お名前 (漢字)', 'お名前', 'お名前 (カナ)', '電話番号', 'メールアドレス', '郵便番号', 'ご住所',
-    '納車先の指定', '市町村区', '納車希望日', '希望ナンバー', '土日祝日納車', '車庫証明取得代行',
-    'BOXIV shop 20%オフ',
+  // 上記で拾えなかった項目も落とさず末尾に足す（フォームの項目追加に追従するため）。
+  // 旧フィールド名も念のため既知扱いにして二重掲載を防ぐ。
+  const KNOWN = new Set<string>([
+    'match_key', 'Match Key', '利用規約', '車両',
+    F.name, F.kana, F.phone, F.email, F.zip, F.address, F.prefecture, F.city,
+    F.plateWanted, F.plateNo, F.etc, F.garageCert, F.arcAid, F.shopWanted, F.shopItems,
+    F.payment, F.channel, F.listingId, F.consent,
+    // 旧名（フォーム改訂前）
+    'お名前 (漢字)', 'お名前 (カナ)', '納車先の指定', '土日祝日納車', 'BOXIV shop 20%オフ',
   ]);
   for (const [label, raw] of Object.entries(fields)) {
     if (KNOWN.has(label)) continue;
@@ -177,22 +233,30 @@ function buildBuyerProps(
   if (input.email) props[cfg.emailProp] = { email: input.email };
   if (input.zip) props[cfg.zipProp] = richText(input.zip);
 
-  const address = pick('ご住所');
+  const address = pick(F.address);
   if (address) props[cfg.addressProp] = richText(address);
 
-  // 都道府県は「納車先の都道府県」を入れる（既存行もその運用）。判別できなければ書かない。
-  const pref = normalizePrefecture(fields['納車先の指定']) ?? normalizePrefecture(address);
+  // 都道府県は「納車先の都道府県」を入れる（既存行もその運用）。判別できなければ住所から拾う。
+  const pref = normalizePrefecture(fields[F.prefecture]) ?? normalizePrefecture(address);
   if (pref) props[cfg.prefectureProp] = richText(pref);
 
   // 掲載ID + 車両サマリ。掲載IDを含めておくと Notion 上で車両が一意に辿れる。
   const vehicleText = [input.listingId, input.vehicle].filter(Boolean).join(' ');
   if (vehicleText) props[cfg.vehicleProp] = richText(vehicleText);
 
-  // select は選択肢が固定（有り / 無し / 不明）。フォームのチェック状態を寄せる。
-  if ('希望ナンバー' in fields) props['希望ナンバー'] = { select: { name: toAriNashi(fields['希望ナンバー']) } };
-  const plateNo = pick('希望ナンバー');
+  // 有り/無し の select 群。チェックボックスの状態を寄せる。
+  if (F.plateWanted in fields) props['希望ナンバー'] = { select: { name: toAriNashi(fields[F.plateWanted]) } };
+  const plateNo = pick(F.plateNo);
   if (plateNo && !/^(on|true|1|有り|あり)$/i.test(plateNo)) props['希望ナンバー 番号'] = richText(plateNo);
-  if ('車庫証明取得代行' in fields) props['車庫証明取得代行'] = { select: { name: toAriNashi(fields['車庫証明取得代行']) } };
+  if (F.garageCert in fields) props['車庫証明取得代行'] = { select: { name: toAriNashi(fields[F.garageCert]) } };
+  if (F.etc in fields) props['ETCセットアップ'] = { select: { name: toAriNashi(fields[F.etc]) } };
+
+  // 表記が違う select は対応表で正規化し、**既知の値に解決できたときだけ**書く。
+  // 未知の値を渡すと Notion が選択肢を新規作成してしまい、運用中のDBを汚すため。
+  const payment = PAYMENT_MAP[pick(F.payment) ?? ''];
+  if (payment) props['支払い方法'] = { select: { name: payment } };
+  const channel = CHANNEL_MAP[pick(F.channel) ?? ''];
+  if (channel) props['認知経路'] = { select: { name: channel } };
 
   props[cfg.memoProp] = richText(buildEntryInfo(fields, input.listingId ?? null, input.vehicle ?? null));
   return props;

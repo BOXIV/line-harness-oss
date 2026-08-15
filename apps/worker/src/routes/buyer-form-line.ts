@@ -191,12 +191,13 @@ buyerFormLine.post('/buyer-form/submit', async (c) => {
     const v = fields[k];
     return typeof v === 'string' && v.trim() ? v.trim() : undefined;
   };
-  const name = (body.name ? String(body.name) : (pick('お名前 (漢字)') || pick('お名前'))) || null;
+  // フォームの name 属性は 'お名前'（表示ラベルは「お名前 (漢字)」）。旧名もフォールバックで拾う。
+  const name = (body.name ? String(body.name) : (pick('お名前') || pick('お名前 (漢字)'))) || null;
   const emailRaw = (body.email ? String(body.email) : pick('メールアドレス')) || '';
   const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailRaw) ? emailRaw : null;
   const phoneRaw = (body.phone ? String(body.phone) : pick('電話番号')) || '';
   const phone = phoneRaw.replace(/[^\d+-]/g, '') || null;
-  // 掲載ID（購入エントリーは車両ごと。/car/details/{掲載ID} 由来）
+  // 掲載ID（購入エントリーは車両ごと。/car/detail/{掲載ID} 由来。フォーム自身も hidden で持つ）
   const listingIdRaw = String(body.listing_id ?? body.listingId ?? pick('掲載ID') ?? '').trim();
   const listingId = /^[A-Za-z0-9_-]{1,32}$/.test(listingIdRaw) ? listingIdRaw : null;
   const vehicleRaw = String(body.vehicle ?? pick('車両') ?? '').trim();
