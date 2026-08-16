@@ -152,6 +152,7 @@ export type Env = {
     NOTION_BUYER_PHONE_PROP?: string;           // default: [Form]電話番号
     NOTION_BUYER_EMAIL_PROP?: string;           // default: [Form]メールアドレス
     NOTION_BUYER_MEMO_PROP?: string;            // default: その他詳細備考
+    NOTION_BUYER_CONTACT_MEMO_PROP?: string;    // default: コンタクトメモ（上書き履歴）
     NOTION_BUYER_LISTING_ID_PROP?: string;      // default: 掲載ID
     NOTION_BUYER_ZIP_PROP?: string;             // default: 郵便番号
     NOTION_BUYER_STATUS_VALUE?: string;         // default: 0_LINE登録（連携時付与）

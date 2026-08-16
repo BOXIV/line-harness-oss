@@ -31,6 +31,7 @@ export interface BuyerNotionEnv {
   NOTION_BUYER_PHONE_PROP?: string;            // default '電話番号'
   NOTION_BUYER_EMAIL_PROP?: string;            // default 'メールアドレス'
   NOTION_BUYER_MEMO_PROP?: string;             // default 'エントリー情報'
+  NOTION_BUYER_CONTACT_MEMO_PROP?: string;     // default 'コンタクトメモ'（上書き履歴を残す）
   NOTION_BUYER_ADDRESS_PROP?: string;          // default '住所'
   NOTION_BUYER_PREFECTURE_PROP?: string;       // default '都道府県'
   NOTION_BUYER_ZIP_PROP?: string;              // default '郵便番号'
@@ -50,6 +51,7 @@ interface Cfg {
   phoneProp: string;
   emailProp: string;
   memoProp: string;
+  contactMemoProp: string;
   addressProp: string;
   prefectureProp: string;
   zipProp: string;
@@ -72,6 +74,7 @@ export function notionBuyerConfig(env: BuyerNotionEnv): Cfg | null {
     phoneProp: env.NOTION_BUYER_PHONE_PROP || '電話番号',
     emailProp: env.NOTION_BUYER_EMAIL_PROP || 'メールアドレス',
     memoProp: env.NOTION_BUYER_MEMO_PROP || 'エントリー情報',
+    contactMemoProp: env.NOTION_BUYER_CONTACT_MEMO_PROP || 'コンタクトメモ',
     addressProp: env.NOTION_BUYER_ADDRESS_PROP || '住所',
     prefectureProp: env.NOTION_BUYER_PREFECTURE_PROP || '都道府県',
     zipProp: env.NOTION_BUYER_ZIP_PROP || '郵便番号',
@@ -244,12 +247,17 @@ function buildBuyerProps(
   const vehicleText = [input.listingId, input.vehicle].filter(Boolean).join(' ');
   if (vehicleText) props[cfg.vehicleProp] = richText(vehicleText);
 
-  // 有り/無し の select 群。チェックボックスの状態を寄せる。
-  if (F.plateWanted in fields) props['希望ナンバー'] = { select: { name: toAriNashi(fields[F.plateWanted]) } };
+  // 有り/無し の select 群。
+  // ⚠️ チェックが外れたチェックボックスは**フォーム送信に含まれない**（クライアント側の
+  // collectFields が unchecked を落とす）。そのため「キーがあるときだけ書く」にすると
+  // 未チェック時に Notion が空欄のままになる（実際に本番の行が空欄で起票された）。
+  // 購入エントリーではこれらの項目は必ず存在するので、**キーの有無に関わらず 有り/無し を書く**
+  // （＝ 存在しない = 未チェック = 無し）。
+  props['希望ナンバー'] = { select: { name: toAriNashi(fields[F.plateWanted]) } };
+  props['車庫証明取得代行'] = { select: { name: toAriNashi(fields[F.garageCert]) } };
+  props['ETCセットアップ'] = { select: { name: toAriNashi(fields[F.etc]) } };
   const plateNo = pick(F.plateNo);
   if (plateNo && !/^(on|true|1|有り|あり)$/i.test(plateNo)) props['希望ナンバー 番号'] = richText(plateNo);
-  if (F.garageCert in fields) props['車庫証明取得代行'] = { select: { name: toAriNashi(fields[F.garageCert]) } };
-  if (F.etc in fields) props['ETCセットアップ'] = { select: { name: toAriNashi(fields[F.etc]) } };
 
   // 表記が違う select は対応表で正規化し、**既知の値に解決できたときだけ**書く。
   // 未知の値を渡すと Notion が選択肢を新規作成してしまい、運用中のDBを汚すため。
@@ -260,6 +268,134 @@ function buildBuyerProps(
 
   props[cfg.memoProp] = richText(buildEntryInfo(fields, input.listingId ?? null, input.vehicle ?? null));
   return props;
+}
+
+// ─── 商談ID（{掲載ID}-T{エントリー順}）と重複照合 ─────────────
+
+/**
+ * 通知タイプの優先度。**低い方を高い方が上書きしてよい**。
+ * お問い合わせ(1) < 値下げ依頼(2) < 購入エントリー(3)。
+ * 実データに表記ゆれがあるので既知の綴りを全て拾う（不明は 0 = 常に上書きされる側）。
+ */
+const ENTRY_PRIORITY: Record<string, number> = {
+  'お問い合わせ': 1, '問い合わせ': 1, '問合せ': 1, 'クルマのお問い合わせ': 1,
+  '値下げ依頼': 2, '値下げ交渉': 2,
+  '購入エントリー': 3, '[Garage]購入オファー': 3,
+};
+/** この writer が起票するのは購入エントリー（最上位）。 */
+export const BUYER_ENTRY_TYPE = '購入エントリー';
+
+function priorityOf(entryInfo: string | null | undefined): number {
+  const m = String(entryInfo ?? '').match(/通知タイプ[：:]\s*(.+)/);
+  if (!m) return 0;
+  const key = m[1].trim().split(/\s/)[0];
+  return ENTRY_PRIORITY[key] ?? 0;
+}
+
+/**
+ * 商談ID をパースする。実データには `10369 -T3` ` 10380-T1` のような**空白混じり**があるため、
+ * 空白を全て落としてから判定する（starts_with の Notion フィルタだけでは取りこぼす）。
+ */
+function parseDealId(v: string | null | undefined): { listingId: string; seq: number } | null {
+  const s = String(v ?? '').replace(/\s+/g, '');
+  const m = s.match(/^(.+)-T(\d+)$/i);
+  return m ? { listingId: m[1], seq: Number(m[2]) } : null;
+}
+
+interface NotionRow { id: string; properties: Record<string, any>; }
+
+function plain(prop: any): string {
+  if (!prop) return '';
+  switch (prop.type) {
+    case 'title': return (prop.title || []).map((t: any) => t.plain_text).join('').trim();
+    case 'rich_text': return (prop.rich_text || []).map((t: any) => t.plain_text).join('').trim();
+    case 'email': return (prop.email || '').trim();
+    case 'phone_number': return (prop.phone_number || '').trim();
+    default: return '';
+  }
+}
+
+/**
+ * 同じ掲載IDの行を集める。商談ID の空白ゆれで Notion 側 filter が当てにならないので、
+ * `contains 掲載ID` で粗く絞ってからクライアント側で厳密に判定する。
+ */
+async function listRowsForListing(cfg: Cfg, listingId: string): Promise<NotionRow[]> {
+  const out: NotionRow[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < 5; i++) {
+    const body: Record<string, unknown> = {
+      filter: { property: cfg.dealIdProp, rich_text: { contains: listingId } },
+      page_size: 100,
+    };
+    if (cursor) body.start_cursor = cursor;
+    const q = await notionApi(cfg, `/databases/${cfg.dbId}/query`, 'POST', body);
+    out.push(...((q.results || []) as NotionRow[]));
+    if (!q.has_more) break;
+    cursor = q.next_cursor;
+  }
+  return out.filter((r) => parseDealId(plain(r.properties[cfg.dealIdProp]))?.listingId === listingId);
+}
+
+/** 掲載IDの次の商談ID（既存の最大 T番号 + 1）。既存が無ければ T1。 */
+function nextDealId(rows: NotionRow[], cfg: Cfg, listingId: string): string {
+  let max = 0;
+  for (const r of rows) {
+    const d = parseDealId(plain(r.properties[cfg.dealIdProp]));
+    if (d && d.seq > max) max = d.seq;
+  }
+  return `${listingId}-T${max + 1}`;
+}
+
+/**
+ * 同一人物の判定。掲載IDで絞った行の中から探す。
+ * 1人が複数の車にエントリーするため、必ず掲載IDで絞った集合に対してのみ使う。
+ *
+ * 強度の違う識別子を段階的に使う:
+ *   1. LINE User ID 完全一致 … 最も強い。氏名が違っても同一人物とみなす
+ *   2. メール一致 … ただし**双方に氏名があって食い違う場合は別人として扱う**。
+ *      実データに「同じメールで 今野正利 / 今野遼太」という家族とみられるケースがあり、
+ *      メール単独一致で寄せると別人の取引を上書きしてしまうため。
+ *   3. 氏名一致（空白差は無視）
+ */
+function findSamePerson(
+  rows: NotionRow[],
+  cfg: Cfg,
+  who: { lineUserId?: string | null; email?: string | null; name?: string | null },
+): NotionRow | null {
+  const norm = (v: string | null | undefined) => String(v ?? '').trim().toLowerCase();
+  const squash = (v: string | null | undefined) => String(v ?? '').replace(/[\s　]+/g, '');
+  const luid = norm(who.lineUserId), mail = norm(who.email), name = squash(who.name);
+
+  if (luid) {
+    const hit = rows.find((r) => norm(plain(r.properties[cfg.lineUserIdProp])) === luid);
+    if (hit) return hit;
+  }
+  if (mail) {
+    const hit = rows.find((r) => {
+      if (norm(plain(r.properties[cfg.emailProp])) !== mail) return false;
+      const rowName = squash(plain(r.properties[cfg.titleProp]));
+      if (name && rowName && name !== rowName) return false; // 同メール別名義は別人扱い
+      return true;
+    });
+    if (hit) return hit;
+  }
+  if (name) {
+    const hit = rows.find((r) => squash(plain(r.properties[cfg.titleProp])) === name);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** コンタクトメモへ「いつ上書きしたか」を追記（既存運用の書式 `M/D 内容（担当）`・新しい行が先頭）。 */
+function prependContactMemo(existing: string, line: string): string {
+  const body = String(existing ?? '').trim();
+  return body ? `${line}\n${body}` : line;
+}
+
+/** JST の M/D。 */
+function jstMonthDay(nowMs: number): string {
+  const d = new Date(nowMs + 9 * 60 * 60 * 1000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 }
 
 // ─── 既存行の探索（重複行を作らないための照合） ─────────────────
@@ -322,31 +458,70 @@ export interface CreateBuyerInput {
 }
 
 /**
- * 購入エントリー送信時の起票/更新。既存行があれば PATCH、無ければ新規作成（未連携）。
+ * 購入エントリー送信時の起票/更新。
+ *
+ * 購入者リストには**購入エントリー以外**（クルマのお問い合わせ / 値下げ依頼 等）も起票されるため、
+ * 作る前に必ず重複を見る。照合は **掲載ID ＋ 同一人物**（LINE User ID / メール / 氏名のいずれか）。
+ * 1人が複数の車にエントリーするので、掲載IDで絞った集合の中でのみ人物照合する。
+ *
+ * 見つかったとき:
+ *   - 既存の通知タイプの優先度 <= 購入エントリー(3) なら**上書き**し、コンタクトメモに
+ *     「M/D 購入エントリーで上書き（AI）」を追記する（既存運用の書式に合わせ新しい行を先頭へ）。
+ *   - 既存の方が優先度が高い場合は上書きしない（現状 購入エントリーが最上位なので通常起きない）。
+ *   - 商談ID は**既存の値を維持**する（エントリー順を表す通し番号なので振り直さない）。
+ *
+ * 見つからないとき: 新規作成し、**商談ID = {掲載ID}-T{既存最大+1}** を採番する。
+ *
  * 返り値: Notion pageId（失敗・未設定なら null）。
  */
 export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateBuyerInput): Promise<string | null> {
   const cfg = notionBuyerConfig(env);
   if (!cfg) return null;
   const props = buildBuyerProps(input.formData, input, cfg);
+  const listingId = (input.listingId ?? '').trim();
 
-  const existing = await findExistingPage(cfg, {
-    matchKey: input.matchKey,
-    email: input.email,
-    listingId: input.listingId,
-  });
-  if (existing) {
-    // 既存行には match_key だけ足す（title は運用が付けた値を尊重して上書きしない）。
-    await notionApi(cfg, `/pages/${existing}`, 'PATCH', {
-      properties: { ...props, [cfg.matchKeyProp]: richText(input.matchKey) },
-    });
-    return existing;
+  // 1) 自分が過去に起票した行（match_key）は最優先で引き当てる（同一エントリーの再送信）。
+  const byMatchKey = await queryPageId(cfg, byRichText(cfg.matchKeyProp, input.matchKey));
+  if (byMatchKey) {
+    await notionApi(cfg, `/pages/${byMatchKey}`, 'PATCH', { properties: props });
+    return byMatchKey;
   }
 
+  // 掲載IDが無いと車両を特定できず、別取引へ誤って紐付ける危険があるので照合も採番もしない。
+  if (!listingId) {
+    const createProps: Record<string, unknown> = { ...props };
+    createProps[cfg.matchKeyProp] = richText(input.matchKey);
+    createProps[cfg.titleProp] = title(input.name || input.matchKey);
+    createProps[cfg.linkStatusProp] = { select: { name: cfg.linkStatusUnlinked } };
+    const created = await notionApi(cfg, `/pages`, 'POST', { parent: { database_id: cfg.dbId }, properties: createProps });
+    return created.id ?? null;
+  }
+
+  const rows = await listRowsForListing(cfg, listingId);
+
+  // 2) 同じ掲載ID × 同一人物 の既存行（お問い合わせ / 値下げ依頼 で先に起票されている場合を含む）
+  const dup = findSamePerson(rows, cfg, { lineUserId: null, email: input.email, name: input.name });
+  if (dup) {
+    const prevInfo = plain(dup.properties[cfg.memoProp]);
+    if (priorityOf(prevInfo) > ENTRY_PRIORITY[BUYER_ENTRY_TYPE]) return dup.id; // 上位を格下げしない
+    const prevType = (String(prevInfo).match(/通知タイプ[：:]\s*(.+)/)?.[1] ?? '').trim().split(/\s/)[0];
+    const note = `${jstMonthDay(Date.now())} ${prevType ? `${prevType}を` : ''}購入エントリーで上書き（AI）`;
+    await notionApi(cfg, `/pages/${dup.id}`, 'PATCH', {
+      properties: {
+        ...props,
+        [cfg.matchKeyProp]: richText(input.matchKey),
+        [cfg.contactMemoProp]: richText(prependContactMemo(plain(dup.properties[cfg.contactMemoProp]), note)),
+      },
+    });
+    return dup.id;
+  }
+
+  // 3) 新規作成。商談ID を採番する（掲載IDごとの通し番号）。
   const createProps: Record<string, unknown> = { ...props };
   createProps[cfg.matchKeyProp] = richText(input.matchKey);
   createProps[cfg.titleProp] = title(input.name || input.matchKey);
   createProps[cfg.linkStatusProp] = { select: { name: cfg.linkStatusUnlinked } };
+  createProps[cfg.dealIdProp] = richText(nextDealId(rows, cfg, listingId));
 
   const created = await notionApi(cfg, `/pages`, 'POST', { parent: { database_id: cfg.dbId }, properties: createProps });
   return created.id ?? null;
