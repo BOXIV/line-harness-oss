@@ -147,6 +147,8 @@ export type Env = {
     NOTION_BUYER_MATCH_KEY_PROP?: string;       // default: match_key
     NOTION_BUYER_LINE_USER_ID_PROP?: string;    // default: LINE User ID
     NOTION_BUYER_TITLE_PROP?: string;           // default: 名前
+    NOTION_BUYER_DEAL_ID_PROP?: string;         // default: 商談ID（連携先候補の表示用。読み取り専用）
+    NOTION_BUYER_VEHICLE_PROP?: string;         // default: 車両（連携先候補の表示用）
     NOTION_BUYER_PHONE_PROP?: string;           // default: [Form]電話番号
     NOTION_BUYER_EMAIL_PROP?: string;           // default: [Form]メールアドレス
     NOTION_BUYER_MEMO_PROP?: string;            // default: その他詳細備考

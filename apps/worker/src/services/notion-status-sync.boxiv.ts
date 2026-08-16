@@ -10,14 +10,16 @@
 //             → friend_status_assignments.status_option_id へ upsert（assigned_by='notion'）
 //   Notion 側でステータス未設定 → ローカル割当を解除（delete）。
 //
-// 掲載ID の多重化ガード（重要）:
-//   1人の出品者が複数の掲載ID行を持つ場合（プレミアム出品 → アプリ出品へ変更 等）、
-//   friends.metadata.notion.pageId で選ばれている行以外のステータス変更は反映しない。
-//   これが無いと「旧プレミアム出品行を取引停止にすると LINE Connect 側も取引停止になる」
-//   （さらに 12h reconcile で行間のステータスが交互に上書きされる）。
-//   連携が無い友だちは従来どおり LINE User ID 一致だけで反映する。
+// 行の多重化ガード（重要）:
+//   1人が同じDB内に複数行を持つ場合（出品者: プレミアム出品 → アプリ出品へ変更 /
+//   購入者: 1人が複数の商談行）、friends.metadata の連携先に選ばれている行以外の
+//   ステータス変更は反映しない。これが無いと「旧プレミアム出品行を取引停止にすると
+//   LINE Connect 側も取引停止になる」（さらに 12h reconcile で行間のステータスが交互に
+//   上書きされる）。判定は source ごとに独立（出品者リンクは購入者DBの行を縛らない）。
+//   その source の連携が無い友だちは従来どおり LINE User ID 一致だけで反映する。
 
 import { jstNow } from '@line-crm/db';
+import { readNotionLinks } from './notion-friend-link.boxiv.js';
 
 const NOTION_API = 'https://api.notion.com/v1';
 const NOTION_VERSION = '2022-06-28';
@@ -97,17 +99,6 @@ function extractFromPage(
   return { lineUserId, optionId, optionName };
 }
 
-// friends.metadata.notion（連携先の掲載ID行）を読む。
-function parseLinkedNotion(metadataJson: string | null): { source?: string; pageId?: string } | null {
-  if (!metadataJson) return null;
-  try {
-    const meta = JSON.parse(metadataJson) as { notion?: { source?: string; pageId?: string } };
-    return meta.notion ?? null;
-  } catch {
-    return null;
-  }
-}
-
 // friend_status_assignments を Notion 値で upsert（未設定なら delete）。
 async function applyStatus(
   db: D1Database,
@@ -123,15 +114,11 @@ async function applyStatus(
     .first<{ id: string; metadata: string | null }>();
   if (!friend) return 'skip-no-friend';
 
-  // 連携先の掲載ID行が決まっているなら、その行以外のステータス変更は無視する。
-  // source 違い（購入者DB由来）は連携情報が出品者行なので比較しない。
+  // その source の連携先行が決まっているなら、同じDBの他の行のステータス変更は無視する。
+  // 出品者リンクと購入者リンクは独立に持てるので、比較は必ず同 source 同士で行う。
   if (sourcePageId) {
-    const linked = parseLinkedNotion(friend.metadata);
-    if (
-      linked?.pageId &&
-      (linked.source ?? 'seller') === source &&
-      normalizeId(linked.pageId) !== normalizeId(sourcePageId)
-    ) {
+    const linked = readNotionLinks(friend.metadata)[source];
+    if (linked?.pageId && normalizeId(linked.pageId) !== normalizeId(sourcePageId)) {
       return 'skip-other-listing';
     }
   }

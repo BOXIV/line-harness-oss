@@ -104,13 +104,19 @@ friends.get('/api/friends', requireRole('owner','admin','manager'), async (c) =>
       // 「{notion.label} {notion.realName} (nickname)」になる。display_name(=nickname) だけだと
       // 例「10472 〇〇（〇〇）」の「10472」(=notion.label) や Notion実名(realName) が引っかからないため、
       // それらも検索対象に含める（metadata 内 JSON は json_extract で参照）。
+      // 出品者リンクと購入者リンクは両方持ち得るので notionLinks.* も対象にする
+      // （$.notion は primary の写しなので、もう片方は notionLinks でしか引けない）。
       conditions.push(
         '(f.display_name LIKE ? OR f.managed_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?'
         + " OR json_extract(f.metadata, '$.notion.label') LIKE ?"
-        + " OR json_extract(f.metadata, '$.notion.realName') LIKE ?)",
+        + " OR json_extract(f.metadata, '$.notion.realName') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.seller.label') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.seller.realName') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.buyer.label') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.buyer.realName') LIKE ?)",
       );
       const like = `%${search}%`;
-      binds.push(like, like, like, like, like, like);
+      binds.push(like, like, like, like, like, like, like, like, like, like);
     }
     // Metadata filters: ?metadata.key=value (e.g. ?metadata.monthly_cost=〜100万円)
     const url = new URL(c.req.url);

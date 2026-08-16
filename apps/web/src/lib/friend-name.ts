@@ -9,6 +9,19 @@ export interface NotionFriendLink {
   realName?: string | null
 }
 
+/** BOXIV: 出品者/購入者それぞれの連携（metadata.notionLinks）。 */
+interface NotionMeta {
+  notion?: NotionFriendLink
+  notionLinks?: Partial<Record<'seller' | 'buyer', NotionFriendLink>>
+}
+
+/** 表示に使う 1 件を選ぶ。metadata.notion（primary の写し）が無い場合の保険。 */
+function pickFromMeta(meta: NotionMeta | null | undefined): NotionFriendLink | null {
+  if (!meta) return null
+  if (meta.notion) return meta.notion
+  return meta.notionLinks?.seller ?? meta.notionLinks?.buyer ?? null
+}
+
 /** Pull the Notion link out of either:
  *  - a Friend object with metadata: { notion: ... } (parsed JSON object, friends API)
  *  - a Chat object with notion: { ... } (already extracted, chats API)
@@ -23,14 +36,14 @@ function pickNotion(input: unknown): NotionFriendLink | null {
   }
   // Friend shape: { metadata: {...} } (object after JSON.parse)
   if (obj.metadata && typeof obj.metadata === 'object') {
-    const meta = obj.metadata as { notion?: NotionFriendLink }
-    if (meta.notion) return meta.notion
+    const hit = pickFromMeta(obj.metadata as NotionMeta)
+    if (hit) return hit
   }
   // Legacy: metadata is a JSON string
   if (typeof obj.metadata === 'string') {
     try {
-      const parsed = JSON.parse(obj.metadata) as { notion?: NotionFriendLink }
-      if (parsed.notion) return parsed.notion
+      const hit = pickFromMeta(JSON.parse(obj.metadata) as NotionMeta)
+      if (hit) return hit
     } catch { /* ignore */ }
   }
   return null

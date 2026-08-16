@@ -17,14 +17,26 @@ import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 interface NotionFriendLink {
   source: 'seller' | 'buyer'
   pageId: string
-  /** 掲載ID */
+  /** 出品者: 掲載ID / 購入者: 商談ID */
   label: string | null
   realName: string | null
+  /** 出品タイプ（出品者のみ） */
   listingType?: string | null
-  /** オペレーターが掲載IDを明示選択した連携（他の掲載ID行のステータスは反映されない） */
+  /** 車両（購入者のみ） */
+  vehicle?: string | null
+  /** オペレーターが行を明示選択した連携（同じDBの他の行のステータスは反映されない） */
   pinned?: boolean
   candidateCount?: number
   linkedAt?: string
+}
+
+/** 出品者/購入者それぞれの連携。1人が両方を持ち得る。 */
+type NotionFriendLinks = Partial<Record<'seller' | 'buyer', NotionFriendLink>>
+
+/** ヘッダのピル表示。出品者は掲載ID、購入者は商談ID。 */
+const NOTION_PILL_PREFIX: Record<'seller' | 'buyer', string> = {
+  seller: '掲載',
+  buyer: '取引',
 }
 
 interface CustomerStatus {
@@ -75,6 +87,8 @@ interface ChatDetail extends Chat {
   friendName: string
   lineUserId: string | null
   friendPictureUrl: string | null
+  /** 出品者/購入者それぞれの連携。旧 worker と繋がったときは undefined。 */
+  notionLinks?: NotionFriendLinks
   messages?: ChatMessage[]
 }
 
@@ -857,19 +871,25 @@ export default function ChatsPage() {
                         preferredSource={detailSource}
                         compact
                       />
-                      {chatDetail.notion?.label && (
+                      {/* 出品者リンクと購入者リンクは両方持ち得るので、あるものを全て出す。
+                          旧 worker（notionLinks 無し）と繋がったときは notion 1件にフォールバック。 */}
+                      {(chatDetail.notionLinks
+                        ? (['seller', 'buyer'] as const).map((s) => chatDetail.notionLinks?.[s]).filter(Boolean)
+                        : [chatDetail.notion].filter(Boolean)
+                      ).map((link) => link && link.label && (
                         <span
+                          key={link.source}
                           className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600"
                           title={[
-                            chatDetail.notion.listingType,
-                            chatDetail.notion.pinned ? '掲載IDを選択して固定済み（他の掲載ID行のステータスは反映されません）' : '自動判定で連携中',
-                            (chatDetail.notion.candidateCount ?? 0) > 1 ? `候補 ${chatDetail.notion.candidateCount} 件` : null,
+                            link.source === 'seller' ? link.listingType : link.vehicle,
+                            link.pinned ? '行を選択して固定済み（同じDBの他の行のステータスは反映されません）' : '自動判定で連携中',
+                            (link.candidateCount ?? 0) > 1 ? `候補 ${link.candidateCount} 件` : null,
                           ].filter(Boolean).join(' / ')}
                         >
-                          {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}
-                          {chatDetail.notion.pinned && <span className="ml-1">📌</span>}
+                          {NOTION_PILL_PREFIX[link.source]} {link.label}
+                          {link.pinned && <span className="ml-1">📌</span>}
                         </span>
-                      )}
+                      ))}
                       <RichMenuPicker friendId={chatDetail.friendId} />
                     </div>
                   </div>
