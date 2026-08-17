@@ -37,6 +37,8 @@ export interface BuyerNotionEnv {
   NOTION_BUYER_ZIP_PROP?: string;              // default '郵便番号'
   NOTION_BUYER_VEHICLE_PROP?: string;          // default '車両'
   NOTION_BUYER_DEAL_ID_PROP?: string;          // default '商談ID'（読み取り専用。照合にのみ使う）
+  NOTION_BUYER_SELLER_RELATION_PROP?: string;  // default '出品者'（出品者リストへの relation）
+  NOTION_SELLER_LISTING_ID_PROP?: string;      // default '掲載ID'（出品者リスト側の掲載ID列）
 }
 
 interface Cfg {
@@ -57,6 +59,8 @@ interface Cfg {
   zipProp: string;
   vehicleProp: string;
   dealIdProp: string;
+  sellerRelationProp: string;
+  sellerListingIdProp: string;
 }
 
 export function notionBuyerConfig(env: BuyerNotionEnv): Cfg | null {
@@ -80,6 +84,8 @@ export function notionBuyerConfig(env: BuyerNotionEnv): Cfg | null {
     zipProp: env.NOTION_BUYER_ZIP_PROP || '郵便番号',
     vehicleProp: env.NOTION_BUYER_VEHICLE_PROP || '車両',
     dealIdProp: env.NOTION_BUYER_DEAL_ID_PROP || '商談ID',
+    sellerRelationProp: env.NOTION_BUYER_SELLER_RELATION_PROP || '出品者',
+    sellerListingIdProp: env.NOTION_SELLER_LISTING_ID_PROP || '掲載ID',
   };
 }
 
@@ -434,13 +440,17 @@ function jstMonthDay(nowMs: number): string {
 
 // ─── 既存行の探索（重複行を作らないための照合） ─────────────────
 
-async function queryPageId(cfg: Cfg, filter: Record<string, unknown>): Promise<string | null> {
+async function queryRow(cfg: Cfg, filter: Record<string, unknown>): Promise<NotionRow | null> {
   try {
     const q = await notionApi(cfg, `/databases/${cfg.dbId}/query`, 'POST', { filter, page_size: 1 });
-    return q.results?.[0]?.id || null;
+    return (q.results?.[0] as NotionRow) ?? null;
   } catch {
     return null;
   }
+}
+
+async function queryPageId(cfg: Cfg, filter: Record<string, unknown>): Promise<string | null> {
+  return (await queryRow(cfg, filter))?.id ?? null;
 }
 
 const byRichText = (prop: string, value: string) => ({ property: prop, rich_text: { equals: value } });
@@ -478,6 +488,83 @@ async function findExistingPage(
   return null;
 }
 
+// ─── 「出品者」リレーション（購入者リスト → 出品者リスト） ─────────
+
+interface SellerRelation {
+  /** 購入者リスト側の relation プロパティ名 */
+  prop: string;
+  /** リレーション先＝出品者リストの database_id */
+  dbId: string;
+}
+
+/**
+ * リレーション先の DB は **env ではなくリレーション定義から引く**。
+ * `NOTION_SELLER_DB_ID` は test では test 用の出品者リストを指すが、(Dev)購入者リストの
+ * 「出品者」は**本番の出品者リスト**を向いている。env から引くと別DBのページIDを渡すことになり
+ * Notion に弾かれる（relation は対象DBのページしか受け付けない）。
+ * スキーマは変わらないので isolate 単位でキャッシュする。
+ */
+const sellerRelationCache = new Map<string, SellerRelation | null>();
+
+async function resolveSellerRelation(cfg: Cfg): Promise<SellerRelation | null> {
+  const cached = sellerRelationCache.get(cfg.dbId);
+  if (cached !== undefined) return cached;
+  let out: SellerRelation | null = null;
+  try {
+    const db = await notionApi(cfg, `/databases/${cfg.dbId}`, 'GET');
+    const p = db?.properties?.[cfg.sellerRelationProp];
+    if (p?.type === 'relation' && p.relation?.database_id) {
+      out = { prop: cfg.sellerRelationProp, dbId: p.relation.database_id };
+    }
+    sellerRelationCache.set(cfg.dbId, out);   // プロパティが無いという結論もキャッシュしてよい
+  } catch {
+    return null;                              // 一時的な失敗はキャッシュしない（次回引き直す）
+  }
+  return out;
+}
+
+/** 空白を全て落とす。掲載IDには実データで末尾スペースがある（出品者リストに `"10389 "`）。 */
+const squashWs = (v: string) => String(v ?? '').replace(/[\s　]+/g, '');
+
+/**
+ * 掲載ID に一致する出品者リストの行を引く。
+ * 空白ゆれで `equals` が当てにならないので `contains` で粗く絞り、クライアント側で厳密比較する
+ * （`contains:'10504'` は `105041` にも当たるため、この絞り込みだけで確定させない）。
+ */
+async function findSellerPageId(cfg: Cfg, rel: SellerRelation, listingId: string): Promise<string | null> {
+  try {
+    const q = await notionApi(cfg, `/databases/${rel.dbId}/query`, 'POST', {
+      filter: { property: cfg.sellerListingIdProp, rich_text: { contains: listingId } },
+      page_size: 50,
+    });
+    const want = squashWs(listingId);
+    const hit = ((q.results || []) as NotionRow[])
+      .find((r) => squashWs(plain(r.properties[cfg.sellerListingIdProp])) === want);
+    return hit?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 「出品者」に入れる relation プロパティを組み立てる（該当が無ければ空 = 書かない）。
+ *
+ * **既に入っている行は触らない。** 運用が手で直した紐付け（再掲載で掲載IDが変わった等）を
+ * 機械的に上書きしないため。空欄のときだけ埋める。
+ */
+async function sellerRelationPatch(
+  cfg: Cfg,
+  listingId: string,
+  existing?: NotionRow | null,
+): Promise<Record<string, unknown>> {
+  if (!listingId) return {};
+  const rel = await resolveSellerRelation(cfg);
+  if (!rel) return {};
+  if (existing && ((existing.properties?.[rel.prop]?.relation as unknown[]) || []).length) return {};
+  const pageId = await findSellerPageId(cfg, rel, listingId);
+  return pageId ? { [rel.prop]: { relation: [{ id: pageId }] } } : {};
+}
+
 export interface CreateBuyerInput {
   matchKey: string;
   formData: Record<string, unknown>;
@@ -508,6 +595,9 @@ export interface CreateBuyerInput {
  *
  * 見つからないとき: 新規作成し、**商談ID = {掲載ID}-T{既存最大+1}** を採番する。
  *
+ * どの経路でも「出品者」リレーションを掲載ID一致の出品者リスト行へ張る（既存運用と同じ紐付け）。
+ * 既に入っている行は触らない。
+ *
  * 返り値: Notion pageId（失敗・未設定なら null）。
  */
 export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateBuyerInput): Promise<string | null> {
@@ -520,10 +610,12 @@ export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateB
   const listingId = (input.listingId ?? '').trim();
 
   // 1) 自分が過去に起票した行（match_key）は最優先で引き当てる（同一エントリーの再送信）。
-  const byMatchKey = await queryPageId(cfg, byRichText(cfg.matchKeyProp, input.matchKey));
+  const byMatchKey = await queryRow(cfg, byRichText(cfg.matchKeyProp, input.matchKey));
   if (byMatchKey) {
-    await notionApi(cfg, `/pages/${byMatchKey}`, 'PATCH', { properties: props });
-    return byMatchKey;
+    await notionApi(cfg, `/pages/${byMatchKey.id}`, 'PATCH', {
+      properties: { ...props, ...(await sellerRelationPatch(cfg, listingId, byMatchKey)) },
+    });
+    return byMatchKey.id;
   }
 
   // 掲載IDが無いと車両を特定できず、別取引へ誤って紐付ける危険があるので照合も採番もしない。
@@ -544,13 +636,19 @@ export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateB
     const prevInfo = plain(dup.properties[cfg.memoProp]);
     // 優先度: お問い合わせ(1) < 値下げ依頼(2) < 購入エントリー(3)。
     // 既存の方が上位なら**格下げしない**（例: 購入エントリー済みの人が後から問い合わせても上書きしない）。
-    if (priorityOf(prevInfo) > myPriority) return dup.id;
+    if (priorityOf(prevInfo) > myPriority) {
+      // 格下げはしないが、「出品者」が空なら埋めるだけはしておく（追記のみで既存値は壊さない）。
+      const relOnly = await sellerRelationPatch(cfg, listingId, dup);
+      if (Object.keys(relOnly).length) await notionApi(cfg, `/pages/${dup.id}`, 'PATCH', { properties: relOnly });
+      return dup.id;
+    }
     const prevType = (String(prevInfo).match(/通知タイプ[：:]\s*(.+)/)?.[1] ?? '').trim().split(/\s/)[0];
     const from = prevType && prevType !== typeLabel ? `${prevType}を` : '';
     const note = `${jstMonthDay(Date.now())} ${from}${typeLabel}で上書き（AI）`;
     await notionApi(cfg, `/pages/${dup.id}`, 'PATCH', {
       properties: {
         ...props,
+        ...(await sellerRelationPatch(cfg, listingId, dup)),
         [cfg.matchKeyProp]: richText(input.matchKey),
         [cfg.contactMemoProp]: richText(prependContactMemo(plain(dup.properties[cfg.contactMemoProp]), note)),
       },
@@ -564,6 +662,7 @@ export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateB
   createProps[cfg.titleProp] = title(input.name || input.matchKey);
   createProps[cfg.linkStatusProp] = { select: { name: cfg.linkStatusUnlinked } };
   createProps[cfg.dealIdProp] = richText(nextDealId(rows, cfg, listingId));
+  Object.assign(createProps, await sellerRelationPatch(cfg, listingId));
 
   const created = await notionApi(cfg, `/pages`, 'POST', { parent: { database_id: cfg.dbId }, properties: createProps });
   return created.id ?? null;
