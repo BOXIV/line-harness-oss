@@ -27,7 +27,8 @@ import {
   setSlackThreadTs,
   markLinkCompletedNotified,
 } from '../services/listing-entry.boxiv.js';
-import { createOrUpdateBuyerRow, linkBuyerRow } from '../services/buyer-notion.boxiv.js';
+import { createOrUpdateBuyerRow, linkBuyerRow, ENTRY_TYPE_LABEL } from '../services/buyer-notion.boxiv.js';
+import type { BuyerEntryType } from '../services/buyer-notion.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText, slackChannelFor } from '../services/slack.boxiv.js';
@@ -243,6 +244,131 @@ buyerFormLine.post('/buyer-form/submit', async (c) => {
 
   return c.json({ success: true }, 200);
 });
+
+buyerFormLine.options('/buyer-form/lead', (c) => {
+  applyCors(c);
+  return c.body(null, 204);
+});
+
+/**
+ * POST /buyer-form/lead
+ *
+ * 値下げ依頼 / お問い合わせ フォームの受け口。購入エントリーより手前の見込み客で、
+ * **LINE 連携は行わない**（連携ボタンも着地ページも無い）。
+ *
+ * 購入エントリー(/buyer-form/submit) との違い:
+ *   - D1 台帳 listing_entries に**書かない**。台帳は「LINE 連携待ち」を追跡するためのもので、
+ *     連携しないリードを載せると催促 cron（10分/24h/48h のメール・SMS）が誤って走るため。
+ *     二重送信の吸収は Notion 側の重複判定（掲載ID＋人物）が担う。
+ *   - Notion の通知タイプが 値下げ依頼 / クルマのお問い合わせ になり、優先度が下がる
+ *     （既に購入エントリー済みの人を格下げしない）。
+ *
+ * body: { type:'discount'|'inquiry', fields:{label:value}, listing_id?, vehicle?, name?, phone?, email? }
+ */
+buyerFormLine.post('/buyer-form/lead', async (c) => {
+  applyCors(c);
+
+  if (c.env.LISTING_FORM_SUBMIT_TOKEN && c.req.header('x-listing-token') !== c.env.LISTING_FORM_SUBMIT_TOKEN) {
+    return c.json({ success: false, error: 'forbidden' }, 403);
+  }
+
+  let body: Record<string, any>;
+  try { body = await c.req.json(); } catch { return c.json({ success: false, error: 'invalid json' }, 400); }
+
+  const rawType = String(body.type ?? '').trim();
+  if (rawType !== 'discount' && rawType !== 'inquiry') {
+    return c.json({ success: false, error: 'type must be discount|inquiry' }, 400);
+  }
+  const entryType = rawType as BuyerEntryType;
+
+  const fields: Record<string, unknown> = (body.fields && typeof body.fields === 'object') ? body.fields : {};
+  if (JSON.stringify(fields).length > 20000) {
+    return c.json({ success: false, error: 'payload too large' }, 413);
+  }
+  const pick = (k: string): string | undefined => {
+    const v = fields[k];
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  };
+  const name = (body.name ? String(body.name) : pick('お名前')) || null;
+  const emailRaw = (body.email ? String(body.email) : pick('メールアドレス')) || '';
+  const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailRaw) ? emailRaw : null;
+  const phoneRaw = (body.phone ? String(body.phone) : pick('電話番号')) || '';
+  const phone = phoneRaw.replace(/[^\d+-]/g, '') || null;
+  const listingIdRaw = String(body.listing_id ?? body.listingId ?? pick('掲載ID') ?? '').trim();
+  const listingId = /^[A-Za-z0-9_-]{1,32}$/.test(listingIdRaw) ? listingIdRaw : null;
+  const vehicleRaw = String(body.vehicle ?? '').trim();
+  const vehicle = vehicleRaw ? vehicleRaw.slice(0, 200) : null;
+
+  // 掲載IDが無いと重複判定も商談ID採番もできない（別の取引へ誤って紐付ける危険）。
+  if (!listingId) return c.json({ success: false, error: 'listing_id is required' }, 400);
+  if (!name && !email) return c.json({ success: false, error: 'name or email is required' }, 400);
+
+  const formData: Record<string, unknown> = { ...fields };
+  formData['掲載ID'] = listingId;
+  if (vehicle) formData['車両'] = vehicle;
+
+  // match_key は連携に使わないが、Notion 側で「この経路の起票」と分かる相関キーとして持たせる。
+  const matchKey = `lead-${entryType}-${listingId}-${crypto.randomUUID()}`;
+
+  let notionPageId: string | null = null;
+  try {
+    notionPageId = await createOrUpdateBuyerRow(c.env, {
+      matchKey, formData, name, phone, email, listingId, vehicle, entryType,
+    });
+  } catch (e) {
+    console.error(`buyer-form lead(${entryType}): Notion 起票 failed`, e);
+    return c.json({ success: false, error: 'notion write failed' }, 502);
+  }
+
+  // Slack 通知（非致命）
+  try {
+    const card = buildLeadCard({ entryType, name, phone, email, listingId, vehicle, fields, notionPageId });
+    await slackPost(c.env, card.fallback as string, {
+      attachments: [card],
+      channel: slackChannelFor(c.env, 'buyer'),
+    });
+  } catch (e) {
+    console.error(`buyer-form lead(${entryType}): Slack 通知 failed`, e);
+  }
+
+  return c.json({ success: true }, 200);
+});
+
+/** 値下げ依頼 / お問い合わせ の Slack カード。 */
+function buildLeadCard(opts: {
+  entryType: BuyerEntryType;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  listingId: string | null;
+  vehicle: string | null;
+  fields: Record<string, unknown>;
+  notionPageId: string | null;
+}): Record<string, unknown> {
+  const isDiscount = opts.entryType === 'discount';
+  const str = (k: string) => {
+    const v = opts.fields[k];
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  };
+  const notionUrl = opts.notionPageId ? `https://www.notion.so/${opts.notionPageId.replace(/-/g, '')}` : null;
+  const price = str('希望価格');
+  const message = str('Message');
+  return buildSlackCard({
+    title: `${isDiscount ? '💰 値下げ依頼' : '❓ クルマのお問い合わせ'}`,
+    color: isDiscount ? '#e8912d' : '#4a9fe0',
+    omitTitleBlock: true,
+    fields: [
+      { label: 'お名前', value: escapeSlackText(opts.name) || '—' },
+      { label: '連絡先', value: [opts.phone, opts.email].filter(Boolean).map(escapeSlackText).join(' / ') || '—' },
+      { label: '掲載ID', value: opts.listingId ? `\`${opts.listingId}\`` : null },
+      { label: '車両', value: opts.vehicle ? escapeSlackText(opts.vehicle) : null },
+      { label: '希望価格', value: isDiscount && price ? `¥${escapeSlackText(price)}` : null },
+      { label: 'Notion', value: notionUrl ? `<${notionUrl}|購入者リストを開く>` : null },
+      // 問い合わせ本文は長くなるので末尾にまとめて出す
+      { label: 'お問い合わせ内容', value: !isDiscount && message ? escapeSlackText(message).slice(0, 900) : null },
+    ],
+  });
+}
 
 // ─── フロー Strategy ─────────────────────────────────────────
 
