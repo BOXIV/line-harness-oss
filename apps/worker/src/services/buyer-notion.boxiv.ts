@@ -505,7 +505,9 @@ export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateB
     const prevInfo = plain(dup.properties[cfg.memoProp]);
     if (priorityOf(prevInfo) > ENTRY_PRIORITY[BUYER_ENTRY_TYPE]) return dup.id; // 上位を格下げしない
     const prevType = (String(prevInfo).match(/通知タイプ[：:]\s*(.+)/)?.[1] ?? '').trim().split(/\s/)[0];
-    const note = `${jstMonthDay(Date.now())} ${prevType ? `${prevType}を` : ''}購入エントリーで上書き（AI）`;
+    // 「購入エントリーを購入エントリーで上書き」と重複するので、同種のときは種別を省く。
+    const from = prevType && prevType !== BUYER_ENTRY_TYPE ? `${prevType}を` : '';
+    const note = `${jstMonthDay(Date.now())} ${from}購入エントリーで上書き（AI）`;
     await notionApi(cfg, `/pages/${dup.id}`, 'PATCH', {
       properties: {
         ...props,
