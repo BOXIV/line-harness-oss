@@ -170,20 +170,43 @@ const F = {
   channel: 'サービスを知ったきっかけ',
   listingId: '掲載ID',
   consent: '同意ボタン',
+  desiredPrice: '希望価格',   // 値下げ依頼フォーム
+  message: 'Message',        // お問い合わせフォーム
 } as const;
 
 /**
  * 既存行の `エントリー情報` と同じ体裁でエントリー内容を1つのテキストにまとめる。
  * 専用プロパティに載らない項目はここに集約するので、フォームに項目が増えても値が落ちない。
+ *
+ * 値下げ依頼 / お問い合わせは項目が少ないので、既存運用の書式に合わせた最小構成にする
+ *   値下げ依頼   … 通知タイプ / 掲載ID / 車両 / 希望価格
+ *   お問い合わせ … 通知タイプ / 掲載ID / 車両 / Message：<本文>
  */
-function buildEntryInfo(fields: Record<string, unknown>, listingId: string | null, vehicle: string | null): string {
-  const lines: string[] = ['通知タイプ：購入エントリー'];
+function buildEntryInfo(
+  fields: Record<string, unknown>,
+  listingId: string | null,
+  vehicle: string | null,
+  entryType: BuyerEntryType,
+): string {
+  const lines: string[] = [`通知タイプ：${ENTRY_TYPE_LABEL[entryType]}`];
   if (listingId) lines.push(`掲載ID：${listingId}`);
   if (vehicle) lines.push(`車両：${vehicle}`);
   const push = (label: string, key: string) => {
     const v = fields[key];
     if (v !== null && v !== undefined && String(v).trim() !== '') lines.push(`${label}：${String(v).trim()}`);
   };
+
+  if (entryType === 'discount') {
+    push('希望価格', F.desiredPrice);
+    return lines.join('\n');
+  }
+  if (entryType === 'inquiry') {
+    const msg = String(fields[F.message] ?? '').trim();
+    if (msg) lines.push('Message：', msg);
+    return lines.join('\n');
+  }
+
+  // ── 購入エントリー ──
   push('納車する都道府県', F.prefecture);
   push('納車する市町村区', F.city);
   if (F.plateWanted in fields) lines.push(`希望ナンバー有無：${toAriNashi(fields[F.plateWanted]) === '有り' ? 'あり' : 'なし'}`);
@@ -198,12 +221,11 @@ function buildEntryInfo(fields: Record<string, unknown>, listingId: string | nul
   push('お名前(カナ)', F.kana);
 
   // 上記で拾えなかった項目も落とさず末尾に足す（フォームの項目追加に追従するため）。
-  // 旧フィールド名も念のため既知扱いにして二重掲載を防ぐ。
   const KNOWN = new Set<string>([
     'match_key', 'Match Key', '利用規約', '車両',
     F.name, F.kana, F.phone, F.email, F.zip, F.address, F.prefecture, F.city,
     F.plateWanted, F.plateNo, F.etc, F.garageCert, F.arcAid, F.shopWanted, F.shopItems,
-    F.payment, F.channel, F.listingId, F.consent,
+    F.payment, F.channel, F.listingId, F.consent, F.desiredPrice, F.message,
     // 旧名（フォーム改訂前）
     'お名前 (漢字)', 'お名前 (カナ)', '納車先の指定', '土日祝日納車', 'BOXIV shop 20%オフ',
   ]);
@@ -224,6 +246,7 @@ function buildBuyerProps(
   formData: Record<string, unknown>,
   input: { name?: string | null; phone?: string | null; email?: string | null; zip?: string | null; listingId?: string | null; vehicle?: string | null },
   cfg: Cfg,
+  entryType: BuyerEntryType,
 ): Record<string, unknown> {
   const fields = formData || {};
   const props: Record<string, unknown> = {};
@@ -247,26 +270,29 @@ function buildBuyerProps(
   const vehicleText = [input.listingId, input.vehicle].filter(Boolean).join(' ');
   if (vehicleText) props[cfg.vehicleProp] = richText(vehicleText);
 
-  // 有り/無し の select 群。
-  // ⚠️ チェックが外れたチェックボックスは**フォーム送信に含まれない**（クライアント側の
-  // collectFields が unchecked を落とす）。そのため「キーがあるときだけ書く」にすると
-  // 未チェック時に Notion が空欄のままになる（実際に本番の行が空欄で起票された）。
-  // 購入エントリーではこれらの項目は必ず存在するので、**キーの有無に関わらず 有り/無し を書く**
-  // （＝ 存在しない = 未チェック = 無し）。
-  props['希望ナンバー'] = { select: { name: toAriNashi(fields[F.plateWanted]) } };
-  props['車庫証明取得代行'] = { select: { name: toAriNashi(fields[F.garageCert]) } };
-  props['ETCセットアップ'] = { select: { name: toAriNashi(fields[F.etc]) } };
-  const plateNo = pick(F.plateNo);
-  if (plateNo && !/^(on|true|1|有り|あり)$/i.test(plateNo)) props['希望ナンバー 番号'] = richText(plateNo);
+  // ⚠️ 以下のオプション系は**購入エントリーのフォームにしか存在しない**。
+  // 値下げ依頼 / お問い合わせで書くと「聞いていないのに 無し」という誤情報になるため、
+  // 購入エントリーのときだけ書く。
+  if (entryType === 'entry') {
+    // チェックが外れたチェックボックスは**フォーム送信に含まれない**（クライアント側の
+    // collectFields が unchecked を落とす）。「キーがあるときだけ書く」にすると未チェック時に
+    // Notion が空欄のままになる（実際に本番の行が空欄で起票された）。購入エントリーでは
+    // これらの項目は必ず存在するので、キーの有無に関わらず 有り/無し を書く（存在しない = 無し）。
+    props['希望ナンバー'] = { select: { name: toAriNashi(fields[F.plateWanted]) } };
+    props['車庫証明取得代行'] = { select: { name: toAriNashi(fields[F.garageCert]) } };
+    props['ETCセットアップ'] = { select: { name: toAriNashi(fields[F.etc]) } };
+    const plateNo = pick(F.plateNo);
+    if (plateNo && !/^(on|true|1|有り|あり)$/i.test(plateNo)) props['希望ナンバー 番号'] = richText(plateNo);
 
-  // 表記が違う select は対応表で正規化し、**既知の値に解決できたときだけ**書く。
-  // 未知の値を渡すと Notion が選択肢を新規作成してしまい、運用中のDBを汚すため。
-  const payment = PAYMENT_MAP[pick(F.payment) ?? ''];
-  if (payment) props['支払い方法'] = { select: { name: payment } };
-  const channel = CHANNEL_MAP[pick(F.channel) ?? ''];
-  if (channel) props['認知経路'] = { select: { name: channel } };
+    // 表記が違う select は対応表で正規化し、**既知の値に解決できたときだけ**書く。
+    // 未知の値を渡すと Notion が選択肢を新規作成してしまい、運用中のDBを汚すため。
+    const payment = PAYMENT_MAP[pick(F.payment) ?? ''];
+    if (payment) props['支払い方法'] = { select: { name: payment } };
+    const channel = CHANNEL_MAP[pick(F.channel) ?? ''];
+    if (channel) props['認知経路'] = { select: { name: channel } };
+  }
 
-  props[cfg.memoProp] = richText(buildEntryInfo(fields, input.listingId ?? null, input.vehicle ?? null));
+  props[cfg.memoProp] = richText(buildEntryInfo(fields, input.listingId ?? null, input.vehicle ?? null, entryType));
   return props;
 }
 
@@ -282,8 +308,16 @@ const ENTRY_PRIORITY: Record<string, number> = {
   '値下げ依頼': 2, '値下げ交渉': 2,
   '購入エントリー': 3, '[Garage]購入オファー': 3,
 };
-/** この writer が起票するのは購入エントリー（最上位）。 */
-export const BUYER_ENTRY_TYPE = '購入エントリー';
+/** この writer が扱うフォーム種別。Notion の「通知タイプ」に書く文字列と対応する。 */
+export type BuyerEntryType = 'entry' | 'discount' | 'inquiry';
+/** 種別 → Notion の通知タイプ表記（既存運用の表記に合わせる）。 */
+export const ENTRY_TYPE_LABEL: Record<BuyerEntryType, string> = {
+  entry: '購入エントリー',
+  discount: '値下げ依頼',
+  inquiry: 'クルマのお問い合わせ',
+};
+/** 後方互換（購入エントリー）。 */
+export const BUYER_ENTRY_TYPE = ENTRY_TYPE_LABEL.entry;
 
 function priorityOf(entryInfo: string | null | undefined): number {
   const m = String(entryInfo ?? '').match(/通知タイプ[：:]\s*(.+)/);
@@ -455,6 +489,8 @@ export interface CreateBuyerInput {
   listingId?: string | null;
   /** 車両サマリ（メーカー 車種 グレード 年式） */
   vehicle?: string | null;
+  /** フォーム種別。省略時は購入エントリー（後方互換）。 */
+  entryType?: BuyerEntryType;
 }
 
 /**
@@ -477,7 +513,10 @@ export interface CreateBuyerInput {
 export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateBuyerInput): Promise<string | null> {
   const cfg = notionBuyerConfig(env);
   if (!cfg) return null;
-  const props = buildBuyerProps(input.formData, input, cfg);
+  const entryType: BuyerEntryType = input.entryType ?? 'entry';
+  const typeLabel = ENTRY_TYPE_LABEL[entryType];
+  const myPriority = ENTRY_PRIORITY[typeLabel] ?? 0;
+  const props = buildBuyerProps(input.formData, input, cfg, entryType);
   const listingId = (input.listingId ?? '').trim();
 
   // 1) 自分が過去に起票した行（match_key）は最優先で引き当てる（同一エントリーの再送信）。
@@ -503,11 +542,12 @@ export async function createOrUpdateBuyerRow(env: BuyerNotionEnv, input: CreateB
   const dup = findSamePerson(rows, cfg, { lineUserId: null, email: input.email, name: input.name });
   if (dup) {
     const prevInfo = plain(dup.properties[cfg.memoProp]);
-    if (priorityOf(prevInfo) > ENTRY_PRIORITY[BUYER_ENTRY_TYPE]) return dup.id; // 上位を格下げしない
+    // 優先度: お問い合わせ(1) < 値下げ依頼(2) < 購入エントリー(3)。
+    // 既存の方が上位なら**格下げしない**（例: 購入エントリー済みの人が後から問い合わせても上書きしない）。
+    if (priorityOf(prevInfo) > myPriority) return dup.id;
     const prevType = (String(prevInfo).match(/通知タイプ[：:]\s*(.+)/)?.[1] ?? '').trim().split(/\s/)[0];
-    // 「購入エントリーを購入エントリーで上書き」と重複するので、同種のときは種別を省く。
-    const from = prevType && prevType !== BUYER_ENTRY_TYPE ? `${prevType}を` : '';
-    const note = `${jstMonthDay(Date.now())} ${from}購入エントリーで上書き（AI）`;
+    const from = prevType && prevType !== typeLabel ? `${prevType}を` : '';
+    const note = `${jstMonthDay(Date.now())} ${from}${typeLabel}で上書き（AI）`;
     await notionApi(cfg, `/pages/${dup.id}`, 'PATCH', {
       properties: {
         ...props,
