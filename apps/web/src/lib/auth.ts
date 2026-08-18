@@ -120,11 +120,40 @@ export function authHeaders(extra?: HeadersInit): Record<string, string> {
  * セッションは Worker 側で失効させられる（無効化・ロール変更・メール変更・ログアウト）ので、
  * 401 は「異常」ではなく通常の遷移として起きる。ここで捨てないと、死んだトークンで
  * 叩き続けて全画面がエラー表示になる。
+ *
+ * ⚠️ ログイン画面では **何も捨てずに** 返すこと。破棄を先に書いてはいけない。
+ *    /api/auth/email/verify はコード不一致・期限切れ・試行上限をすべて 401 で返すので、
+ *    破棄が先だと「移行期の人が /login で 6 桁を 1 回打ち間違えるだけで
+ *    旧 API キーまで消える」。画面に出るのは「コードが正しくありません」だけで、
+ *    鍵が消えた事実はどこにも出ず、キーは一覧で伏せ字なので自力復旧できない。
+ *    2026-08-15 の「403 が『APIキーが正しくありません』に化けた」のと同じ型。
  */
 export function handleUnauthorized(): void {
   if (typeof window === 'undefined') return
-  clearAuth()
   if (window.location.pathname.startsWith('/login')) return
+  clearAuth()
   const next = window.location.pathname + window.location.search
   window.location.href = `/login?next=${encodeURIComponent(next)}`
+}
+
+/**
+ * `?next=` の検証。同一オリジンに解決できるものだけを通し、パス部分だけを返す。
+ *
+ * `startsWith('/') && !startsWith('//')` の文字列判定では防げない:
+ *   new URL('/\evil.com', location.origin).href === 'https://evil.com/'
+ * バックスラッシュがスラッシュとして解釈されるため、正規ドメインで本物のログインを
+ * 終えた直後に偽の「セッションが切れました」へ着地させられる。
+ *
+ * next はセッション切れからの復帰先として実際に使っている（auth-guard.tsx / handleUnauthorized）
+ * ので、機能ごと消すのではなく URL として解決して検証する。
+ */
+export function safeNextPath(next: string | null | undefined): string | null {
+  if (!next || typeof window === 'undefined') return null
+  try {
+    const url = new URL(next, window.location.origin)
+    if (url.origin !== window.location.origin) return null
+    return url.pathname + url.search + url.hash
+  } catch {
+    return null
+  }
 }

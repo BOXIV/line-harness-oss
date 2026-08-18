@@ -49,7 +49,15 @@ export default function StaffPage() {
   // New API key banner
   const [newKey, setNewKey] = useState<NewApiKey | null>(null)
   /** 管理者が発行した救済用ログインコード（メールが届かない人に口頭 / LINE で伝える） */
-  const [issuedCode, setIssuedCode] = useState<{ code: string; expiresAt: string; name: string } | null>(null)
+  const [issuedCode, setIssuedCode] = useState<{
+    code: string
+    expiresAt: string
+    name: string
+    email: string | null
+  } | null>(null)
+  /** メールアドレスのインライン編集（オーナーのみ）。id → 入力中の値 */
+  const [editingEmail, setEditingEmail] = useState<{ id: string; value: string } | null>(null)
+  const [emailSaving, setEmailSaving] = useState(false)
   const [copied, setCopied] = useState(false)
 
   // Create form
@@ -66,6 +74,9 @@ export default function StaffPage() {
   // localStorage を直接読むと、権限を変えた直後の人が古い画面のままになる。
   const myRole = useDisplayRole()
   const isManager = myRole === 'manager'
+  // メール変更は Worker 側で owner のみ。ボタンを出すかどうかもそれに合わせる
+  // （出しても 403 になるだけだが、押せるのに必ず失敗するボタンは出さない）。
+  const isOwner = myRole === 'owner'
 
   const loadMembers = async () => {
     setLoading(true)
@@ -189,12 +200,44 @@ export default function StaffPage() {
     try {
       const res = await api.staff.issueLoginCode(member.id)
       if (res.success) {
-        setIssuedCode({ code: res.data.code, expiresAt: res.data.expiresAt, name: member.name })
+        setIssuedCode({
+          code: res.data.code,
+          expiresAt: res.data.expiresAt,
+          name: member.name,
+          email: res.data.staff.email,
+        })
       } else {
         setError(res.error ?? 'ログインコードの発行に失敗しました')
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'ログインコードの発行に失敗しました')
+    }
+  }
+
+  /**
+   * メールアドレスの変更（オーナーのみ）。
+   *
+   * メールはログインの本人確認そのものなので、Worker 側は owner にしか許可していない
+   * （マネージャーに開けると、撮影スタッフのアドレスを自分のものへ書き換えて成り代われる）。
+   * 一方で「メール未設定・重複のスタッフはログインも救済コードも成立しない」ため、
+   * 画面から直せる口が無いと詰む。ここがその唯一の口。
+   */
+  const handleSaveEmail = async () => {
+    if (!editingEmail) return
+    setEmailSaving(true)
+    setError('')
+    try {
+      const res = await api.staff.update(editingEmail.id, { email: editingEmail.value.trim() })
+      if (res.success) {
+        setEditingEmail(null)
+        await loadMembers()
+      } else {
+        setError(res.error ?? 'メールアドレスの更新に失敗しました')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'メールアドレスの更新に失敗しました')
+    } finally {
+      setEmailSaving(false)
     }
   }
 
@@ -265,6 +308,10 @@ export default function StaffPage() {
           <p className="text-xs text-amber-800 mb-3">
             本人だけに伝えてください。このコードで、その人として管理画面に入れます。
             発行した事実とあなたの名前は変更ログに残ります。
+          </p>
+          <p className="text-xs text-amber-800 mb-3">
+            このコードでログインするときに入力するメールアドレス:{' '}
+            <span className="font-mono">{issuedCode.email ?? '（未登録）'}</span>
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 text-lg bg-white border border-amber-300 rounded px-3 py-2 font-mono tracking-[0.3em] text-center">
@@ -436,7 +483,47 @@ export default function StaffPage() {
               {members.map((member) => (
                 <tr key={member.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{member.name}</td>
-                  <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{member.email ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
+                    {editingEmail?.id === member.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="email"
+                          value={editingEmail.value}
+                          onChange={(e) => setEditingEmail({ id: member.id, value: e.target.value })}
+                          className="w-48 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleSaveEmail}
+                          disabled={emailSaving || !editingEmail.value.trim()}
+                          className="px-2 py-1 text-xs text-green-700 border border-green-300 rounded hover:bg-green-50 disabled:opacity-50"
+                        >
+                          保存
+                        </button>
+                        <button
+                          onClick={() => setEditingEmail(null)}
+                          className="px-2 py-1 text-xs text-gray-500 border border-gray-200 rounded hover:bg-gray-50"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className={member.email ? '' : 'text-red-600'}>
+                          {member.email ?? '未登録（ログインできません）'}
+                        </span>
+                        {isOwner && (
+                          <button
+                            onClick={() => setEditingEmail({ id: member.id, value: member.email ?? '' })}
+                            className="text-[11px] text-blue-600 hover:underline"
+                            title="ログイン用メールアドレスを変更します。旧アドレスへ通知が飛び、全セッションが失効します"
+                          >
+                            変更
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <RoleBadge role={member.role} />
                   </td>

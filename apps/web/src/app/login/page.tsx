@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { api } from '@/lib/api'
-import { setLegacyApiKey, setSession, setStaffProfile } from '@/lib/auth'
+import { safeNextPath, setLegacyApiKey, setSession, setStaffProfile } from '@/lib/auth'
 
 /**
  * 管理画面ログイン（BOXIV）
@@ -46,21 +46,27 @@ function LoginForm() {
 
   /**
    * fetchApi は `API error: <status>: <サーバのメッセージ>` を throw する。
-   * 400（入力の形が違う）はサーバの文言をそのまま出す — ここを握り潰して
-   * 「送信に失敗しました」等の汎用文言に丸めると、入力の誤りを直しようがなくなる。
+   *
+   * サーバの文言をそのまま出すのは 400（入力の形が違う）と 429（試行が多すぎる）だけ。
+   * どちらも「利用者が次に何をすればいいか」が変わるので、汎用文言に丸めると直しようがなくなる。
+   * 429 は試行元 IP だけで判定していてメールアドレスの登録有無は見ていないため、出しても漏れない。
    * 401（資格情報が合わない）は理由を明かさない汎用文言に倒す。
    */
   function messageFor(err: unknown, fallback: string): string {
     const text = err instanceof Error ? err.message : ''
     const m = /^API error: (\d{3})(?:: (.*))?$/s.exec(text)
-    if (m && m[1] === '400' && m[2]) return m[2]
+    if (m && (m[1] === '400' || m[1] === '429') && m[2]) return m[2]
     return fallback
   }
 
-  /** ログイン後の着地先。撮影スタッフはシフト画面、それ以外はダッシュボード。 */
+  /**
+   * ログイン後の着地先。撮影スタッフはシフト画面、それ以外はダッシュボード。
+   * next は safeNextPath で同一オリジンに解決できるものだけを通す
+   * （`/\evil.com` が外部へ解決される穴があった。詳細は lib/auth.ts）。
+   */
   function landingFor(role: string): string {
-    const next = params.get('next')
-    if (next && next.startsWith('/') && !next.startsWith('//')) return next
+    const next = safeNextPath(params.get('next'))
+    if (next) return next
     return role === 'staff' ? '/staff-availability' : '/'
   }
 

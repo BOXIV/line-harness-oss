@@ -4,7 +4,7 @@
  * 「誰が入れるか」を決める経路なので、通る条件より **通らない条件** を厚く固定する。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { STAFF_FIXTURES, ENV_API_KEY, request, requestAs, testDb } from './support/fixtures.js';
+import { STAFF_FIXTURES, ENV_API_KEY, TEST_IP, request, requestAs, testDb } from './support/fixtures.js';
 
 const STAFF = STAFF_FIXTURES.staff;
 const MANAGER = STAFF_FIXTURES.manager;
@@ -13,20 +13,23 @@ const emailOf = (id: string) => `${id}@example.test`;
 beforeEach(async () => {
   await testDb.prepare('DELETE FROM staff_login_challenges').run();
   await testDb.prepare('DELETE FROM staff_sessions').run();
+  // 試行元スロットル（migration 920）はテスト間で持ち越さない。
+  // 消さないと、前のテストの失敗回数で後のテストが 401 に落ちる。
+  await testDb.prepare('DELETE FROM auth_throttle').run();
 });
 
-async function start(email: string): Promise<Response> {
+async function start(email: string, ip: string = TEST_IP): Promise<Response> {
   return request('/api/auth/email/start', null, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip },
     body: JSON.stringify({ email }),
   });
 }
 
-async function verify(email: string, code: string): Promise<Response> {
+async function verify(email: string, code: string, ip: string = TEST_IP): Promise<Response> {
   return request('/api/auth/email/verify', null, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip },
     body: JSON.stringify({ email, code }),
   });
 }
@@ -40,6 +43,28 @@ async function issueCode(staffId: string): Promise<string> {
     email: emailOf(staffId),
   });
   return code;
+}
+
+/**
+ * 一時スタッフを作って id を返し、コールバック終了後に必ず削除する。
+ * 「別の manager」を対象にするテストが複数あるので、生成と後片付けを 1 箇所に閉じる
+ * （2 箇所に書くと片方だけ直って、テスト名と実際の対象がズレる）。
+ */
+async function withTempStaff<T>(
+  input: { name: string; email: string; role: 'owner' | 'admin' | 'manager' | 'staff' },
+  fn: (id: string) => Promise<T>,
+): Promise<T> {
+  const created = await request('/api/staff', ENV_API_KEY, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+  expect(created.status, `一時スタッフの作成に失敗: ${input.email}`).toBe(201);
+  const id = (await created.json<{ data: { id: string } }>()).data.id;
+  try {
+    return await fn(id);
+  } finally {
+    await request(`/api/staff/${id}`, ENV_API_KEY, { method: 'DELETE' });
+  }
 }
 
 async function challengeCount(staffId: string): Promise<number> {
@@ -340,43 +365,87 @@ describe('POST /api/staff/:id/login-code — 管理者による救済発行', ()
     // 既存が禁じている相手に開くことになる。
     // 「別の manager」を実際に作って試す。自分自身を対象にするだけでは
     // 「同格へのなりすまし」を試したことにならない。
-    const other = await request('/api/staff', ENV_API_KEY, {
-      method: 'POST',
-      body: JSON.stringify({
-        name: '別マネージャー',
-        email: 'phase3-other-manager@example.test',
-        role: 'manager',
-      }),
-    });
-    const otherId = (await other.json<{ data: { id: string } }>()).data.id;
+    await withTempStaff(
+      { name: '別マネージャー', email: 'phase3-other-manager@example.test', role: 'manager' },
+      async (otherId) => {
+        const targets = [
+          { id: otherId, label: '別の manager' },
+          { id: STAFF_FIXTURES.manager.id, label: '自分自身(manager)' },
+          { id: STAFF_FIXTURES.admin.id, label: 'admin' },
+          { id: STAFF_FIXTURES.owner.id, label: 'owner' },
+        ];
+        for (const target of targets) {
+          const res = await requestAs('manager', `/api/staff/${target.id}/login-code`, {
+            method: 'POST',
+            body: '{}',
+          });
+          expect(res.status, target.label).toBe(403);
+        }
+      },
+    );
+  });
 
-    try {
-      const targets = [
-        { id: otherId, label: '別の manager' },
-        { id: STAFF_FIXTURES.manager.id, label: '自分自身(manager)' },
-        { id: STAFF_FIXTURES.admin.id, label: 'admin' },
-        { id: STAFF_FIXTURES.owner.id, label: 'owner' },
-      ];
-      for (const target of targets) {
-        const res = await requestAs('manager', `/api/staff/${target.id}/login-code`, {
+  it('参考: manager は他 manager のキー再生成もできない（2つの境界が揃っていること）', async () => {
+    // この 403 と上のテストが揃っていることが要点。片方だけ開いていると、
+    // より強くて静かな経路（救済コード）が既存の禁止（キー再生成）を迂回する。
+    // ⚠️ 対象は必ず **別の manager**。admin を対象にすると同じ条件で弾かれるので緑にはなるが、
+    //    「manager → manager」という要点のペアが固定されないまま通ってしまう。
+    await withTempStaff(
+      { name: '別マネージャー（キー再生成用）', email: 'phase3-other-manager2@example.test', role: 'manager' },
+      async (otherId) => {
+        for (const target of [
+          { id: otherId, label: '別の manager' },
+          { id: STAFF_FIXTURES.admin.id, label: 'admin' },
+          { id: STAFF_FIXTURES.owner.id, label: 'owner' },
+        ]) {
+          const res = await requestAs('manager', `/api/staff/${target.id}/regenerate-key`, {
+            method: 'POST',
+            body: '{}',
+          });
+          expect(res.status, target.label).toBe(403);
+        }
+      },
+    );
+  });
+
+  it('メール未登録のスタッフには発行できない（構造上使えないコードを成功として返さない）', async () => {
+    // verify は必ず findActiveStaffByEmail で解決するので、メールが無い行に発行しても
+    // そのコードはどのアドレスを打っても消費できない。発行前に落とすこと。
+    await withTempStaff(
+      { name: 'メール消去予定', email: 'phase3-will-clear@example.test', role: 'staff' },
+      async (id) => {
+        // API はメール必須なので、直接 D1 を空にして「過去に作られた欠損行」を再現する。
+        await testDb.prepare('UPDATE staff_members SET email = NULL WHERE id = ?').bind(id).run();
+        const res = await request(`/api/staff/${id}/login-code`, ENV_API_KEY, {
           method: 'POST',
           body: '{}',
         });
-        expect(res.status, target.label).toBe(403);
-      }
-    } finally {
-      await request(`/api/staff/${otherId}`, ENV_API_KEY, { method: 'DELETE' });
-    }
+        expect(res.status).toBe(400);
+      },
+    );
   });
 
-  it('参考: manager は他 manager のキー再生成もできない（既存の権限境界と揃っていること）', async () => {
-    // この 403 と上のテストが揃っていることが要点。片方だけ開いていると、
-    // より強くて静かな経路（救済コード）が既存の禁止（キー再生成）を迂回する。
-    const res = await requestAs('manager', `/api/staff/${STAFF_FIXTURES.admin.id}/regenerate-key`, {
-      method: 'POST',
-      body: '{}',
-    });
-    expect(res.status).toBe(403);
+  it('メールが重複しているスタッフには発行できない', async () => {
+    await withTempStaff(
+      { name: '重複予定A', email: 'phase3-dup-x@example.test', role: 'staff' },
+      async (idA) => {
+        await withTempStaff(
+          { name: '重複予定B', email: 'phase3-dup-y@example.test', role: 'staff' },
+          async (idB) => {
+            // API は重複を弾くので、直接 D1 で重複状態を作る。
+            await testDb
+              .prepare('UPDATE staff_members SET email = ? WHERE id = ?')
+              .bind('phase3-dup-x@example.test', idB)
+              .run();
+            const res = await request(`/api/staff/${idA}/login-code`, ENV_API_KEY, {
+              method: 'POST',
+              body: '{}',
+            });
+            expect(res.status).toBe(409);
+          },
+        );
+      },
+    );
   });
 
   it('撮影スタッフ自身は誰にも発行できない', async () => {
@@ -411,5 +480,119 @@ describe('POST /api/staff/:id/login-code — 管理者による救済発行', ()
       body: '{}',
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('第三者がメールアドレスだけでログインを封じられないこと（migration 920）', () => {
+  const ATTACKER = '198.51.100.7'; // TEST-NET-2
+  const VICTIM = '203.0.113.55';   // TEST-NET-3
+
+  async function codeFor(staffId: string): Promise<string> {
+    const { createLoginChallenge } = await import('@line-crm/db');
+    const { code } = await createLoginChallenge(testDb, { staffId, email: emailOf(staffId) });
+    return code;
+  }
+
+  it('攻撃者が失敗を続けても、本人が取り直したコードは焼かれない', async () => {
+    // 本人がコードを受け取っている状態。
+    const victimCode = await codeFor(STAFF.id);
+
+    // 攻撃者はメールアドレスだけ知っている。無効コードを投げて本人のコードを焼く。
+    // max_attempts 5 なので 5 回で焼き切れる。ここまでは防げない（防ぐ必要も無い）。
+    for (let i = 0; i < 5; i++) {
+      expect((await verify(emailOf(STAFF.id), '000001', ATTACKER)).status).toBe(401);
+    }
+    expect((await verify(emailOf(STAFF.id), victimCode, VICTIM)).status).toBe(401);
+
+    // 攻撃者が IP 単位の失敗上限（既定 10）に達するまで投げ続ける。
+    for (let i = 0; i < 6; i++) {
+      await verify(emailOf(STAFF.id), '000001', ATTACKER);
+    }
+
+    // 本人が取り直す。
+    const fresh = await codeFor(STAFF.id);
+
+    // ★ここが要点★ 攻撃者はさらに投げてくるが、上限に達しているので
+    //   チャレンジに一切触れずに落ちる。本人の新しいコードは無傷のまま。
+    //   IP 単位のスロットルが無いと、この 5 回で fresh も焼かれて
+    //   「本人は何度取り直してもログインできない」状態になる。
+    for (let i = 0; i < 5; i++) {
+      await verify(emailOf(STAFF.id), '000001', ATTACKER);
+    }
+
+    expect((await verify(emailOf(STAFF.id), fresh, VICTIM)).status).toBe(200);
+  });
+
+  it('攻撃者の失敗回数は IP 単位で上限に達し、それ以降はチャレンジに触れない', async () => {
+    const code = await codeFor(STAFF.id);
+
+    // 既定 ADMIN_LOGIN_FAIL_MAX_PER_IP = 10。11 回目以降は上限で落ちる。
+    for (let i = 0; i < 10; i++) {
+      expect((await verify(emailOf(STAFF.id), '000002', ATTACKER)).status).toBe(401);
+    }
+    // 上限を超えたら 401 ではなく 429。401 に混ぜると、正しいコードを持っている本人が
+    // 「コードが違う」と言われ続け、打ち直すほど状況が悪くなる。
+    expect((await verify(emailOf(STAFF.id), '000002', ATTACKER)).status).toBe(429);
+
+    const throttled = await testDb
+      .prepare("SELECT count FROM auth_throttle WHERE bucket = ?")
+      .bind(`login_fail:ip:${ATTACKER}`)
+      .first<{ count: number }>();
+    expect(throttled!.count).toBeGreaterThan(10);
+
+    // 別 IP（本人）は巻き添えにならない。上のループで焼かれたコードは通らないが、
+    // 取り直した分は通る＝IP 単位で分離できている。
+    const fresh = await codeFor(STAFF.id);
+    expect((await verify(emailOf(STAFF.id), fresh, VICTIM)).status).toBe(200);
+    expect(code).toMatch(/^\d{6}$/);
+  });
+
+  it('コード発行も IP 単位で上限がかかる（本人の発行枠を第三者が食い潰せない）', async () => {
+    // 攻撃者の IP から既定上限（5）まで発行させる
+    for (let i = 0; i < 8; i++) await start(emailOf(STAFF.id), ATTACKER);
+    const afterAttacker = await challengeCount(STAFF.id);
+    expect(afterAttacker).toBeLessThanOrEqual(5);
+
+    // 本人の IP からはまだ発行できる（アカウント単位の枠 10 が残っている）
+    await start(emailOf(STAFF.id), VICTIM);
+    expect(await challengeCount(STAFF.id)).toBeGreaterThan(afterAttacker);
+  });
+});
+
+describe('スロットルの鍵は詐称できないヘッダだけを使う', () => {
+  it('x-forwarded-for を変えても IP 単位の失敗枠はリセットされない', async () => {
+    const IP = '198.51.100.99';
+    // 上限（既定 10）まで失敗させる
+    for (let i = 0; i < 11; i++) {
+      await request('/api/auth/email/verify', null, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': IP },
+        body: JSON.stringify({ email: emailOf(STAFF.id), code: '000003' }),
+      });
+    }
+    const before = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail:ip:${IP}`)
+      .first<{ count: number }>();
+    expect(before!.count).toBeGreaterThan(10);
+
+    // 自称 XFF を毎回変えても、同じ cf-connecting-ip の枠が使われ続ける。
+    // XFF にフォールバックしていると、ここで新しい bucket が増えて枠が実質無限になる。
+    for (const spoof of ['1.2.3.4', '5.6.7.8', '9.10.11.12']) {
+      await request('/api/auth/email/verify', null, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'cf-connecting-ip': IP,
+          'x-forwarded-for': spoof,
+        },
+        body: JSON.stringify({ email: emailOf(STAFF.id), code: '000003' }),
+      });
+    }
+
+    const buckets = await testDb
+      .prepare("SELECT bucket FROM auth_throttle WHERE bucket LIKE 'login_fail:%'")
+      .all<{ bucket: string }>();
+    expect(buckets.results.map((b) => b.bucket)).toEqual([`login_fail:ip:${IP}`]);
   });
 });

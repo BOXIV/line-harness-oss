@@ -111,17 +111,30 @@ function onUnauthorized(): void {
   handleUnauthorized()
 }
 
-export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+export type FetchApiOptions = RequestInit & {
+  /**
+   * 401 を共通処理（トークン破棄 → /login）に流さない。
+   *
+   * ログイン API のように 401 が「資格情報の不一致」を意味するだけの口で使う。
+   * これを付けないと、6 桁の打ち間違いが「保存済みトークンの破棄」に化ける。
+   * handleUnauthorized 側でも /login では破棄しないようにしてあるが、
+   * ログイン API がログイン画面以外から呼ばれても壊れないよう二重に防いでいる。
+   */
+  skipUnauthorizedHandling?: boolean
+}
+
+export async function fetchApi<T>(path: string, options?: FetchApiOptions): Promise<T> {
+  const { skipUnauthorizedHandling, ...init } = options ?? {}
   const res = await fetch(`${API_URL}${path}`, {
-    ...options,
+    ...init,
     headers: {
       'Content-Type': 'application/json',
       ...authHeaders(),
-      ...options?.headers,
+      ...init.headers,
     },
   })
   if (!res.ok) {
-    if (res.status === 401) onUnauthorized()
+    if (res.status === 401 && !skipUnauthorizedHandling) onUnauthorized()
     // API の { error } 本文を拾って原因を出す（従来は status のみで「API error: 400」と原因不明だった）
     let detail = ''
     try {
@@ -687,6 +700,7 @@ export const api = {
       fetchApi<ApiResponse<{ message: string }>>('/api/auth/email/start', {
         method: 'POST',
         body: JSON.stringify({ email }),
+        skipUnauthorizedHandling: true,
       }),
     /** コードを検証してセッションを受け取る。失敗理由は区別せず 401 のみ。 */
     verify: (email: string, code: string) =>
@@ -697,6 +711,9 @@ export const api = {
       }>>('/api/auth/email/verify', {
         method: 'POST',
         body: JSON.stringify({ email, code }),
+        // 401 = コードが合わない、というだけ。ここを共通処理に流すと
+        // 打ち間違い 1 回で保存済みの旧 API キーまで消える。
+        skipUnauthorizedHandling: true,
       }),
     session: () =>
       fetchApi<ApiResponse<{

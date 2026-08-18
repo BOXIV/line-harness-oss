@@ -20,11 +20,36 @@ import type { StaffMember } from './staff';
 export const DEFAULT_CODE_TTL_MINUTES = 10;
 /** 1 チャレンジあたりのコード検証試行回数の上限 */
 export const DEFAULT_MAX_ATTEMPTS = 5;
-/** セッションの絶対期限（時間）。既定 14 日 */
-export const DEFAULT_SESSION_TTL_HOURS = 24 * 14;
-/** 同一スタッフがコード発行できる回数と窓（分）。総当たり用のコード量産を防ぐ */
-export const DEFAULT_ISSUE_MAX = 5;
+/**
+ * セッションの絶対期限（時間）。既定 7 日。
+ *
+ * iOS Safari はサイトを 7 日間触らないとブラウザの保存領域を消すため、
+ * それより長い期限は低頻度利用者（撮影スタッフ）には実効性が無い。
+ * 「端末が覚えている期間」と「サーバ側の期限」を揃えておくと、
+ * 切れた理由の説明が 1 つで済む。
+ */
+export const DEFAULT_SESSION_TTL_HOURS = 24 * 7;
+/**
+ * 同一スタッフがコード発行できる回数と窓（分）。
+ *
+ * この枠は **第三者に消費されうる**（start は認証不要でメールアドレスさえ知っていれば叩ける）。
+ * そのため枠自体は緩めに取り、実質的な抑止は下の IP 単位のスロットル（migration 920）で行う。
+ * ここを絞りすぎると、攻撃者が枠を食い潰して本人の「コードを送る」を無言で殺せる。
+ */
+export const DEFAULT_ISSUE_MAX = 10;
 export const DEFAULT_ISSUE_WINDOW_MINUTES = 15;
+/** 同一 IP からのコード発行回数の上限（窓は DEFAULT_ISSUE_WINDOW_MINUTES と共有） */
+export const DEFAULT_ISSUE_MAX_PER_IP = 5;
+/** 同一 IP からのコード検証失敗回数の上限と窓（分）。総当たりの実質的な上限はここ */
+export const DEFAULT_VERIFY_FAIL_MAX_PER_IP = 10;
+export const DEFAULT_VERIFY_FAIL_WINDOW_MINUTES = 15;
+
+/**
+ * verify が一度に照合する「生きているチャレンジ」の上限。
+ * 発行上限から導出する。別々の定数にすると、発行上限を上げたときに
+ * 古い方のコードが照合対象から静かに落ちる。
+ */
+const CANDIDATE_LIMIT = DEFAULT_ISSUE_MAX;
 
 /** セッショントークンのプレフィクス。既存 API キー（`lh_` + 32hex）と衝突しない。 */
 export const SESSION_TOKEN_PREFIX = 'lhs_';
@@ -109,6 +134,60 @@ export function isValidEmail(email: string): boolean {
  */
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// 試行元（IP）単位のスロットル — migration 920
+// ---------------------------------------------------------------------------
+
+export interface ThrottleResult {
+  /** 上限内なら true。**この試行を含めた**カウントで判定する。 */
+  allowed: boolean;
+  count: number;
+}
+
+/**
+ * bucket のカウンタを 1 進め、窓の中で上限を超えていないかを返す。
+ *
+ * 窓の切り替えと加算を **単一 UPSERT + RETURNING** で行う（read-then-write しない）。
+ * 同時リクエストが来ても数え漏らさないため、ここは 1 文であることが要件。
+ *
+ * アカウント単位ではなく試行元単位で数えるのが要点。start/verify は認証不要なので、
+ * アカウント単位のカウンタは「メールアドレスを知っているだけの第三者」に消費でき、
+ * 本人のログインを封じる手段になってしまう（migration 920 のコメント参照）。
+ */
+export async function hitThrottle(
+  db: D1Database,
+  bucket: string,
+  max: number,
+  windowMinutes: number,
+): Promise<ThrottleResult> {
+  const now = new Date();
+  const nowIso = jstIso(now);
+  const windowStart = addMinutes(now, -windowMinutes);
+
+  const row = await db
+    .prepare(
+      `INSERT INTO auth_throttle (bucket, count, window_started_at, updated_at)
+            VALUES (?, 1, ?, ?)
+       ON CONFLICT(bucket) DO UPDATE SET
+            count = CASE WHEN auth_throttle.window_started_at <= ? THEN 1
+                         ELSE auth_throttle.count + 1 END,
+            window_started_at = CASE WHEN auth_throttle.window_started_at <= ? THEN ?
+                                     ELSE auth_throttle.window_started_at END,
+            updated_at = ?
+       RETURNING count`,
+    )
+    .bind(bucket, nowIso, nowIso, windowStart, windowStart, nowIso, nowIso)
+    .first<{ count: number }>();
+
+  const count = row?.count ?? 1;
+  return { allowed: count <= max, count };
+}
+
+/** IP からスロットル bucket 名を作る。IP が取れない場合も同じ bucket にまとめる（緩いが無いよりまし）。 */
+export function throttleBucket(kind: 'login_issue' | 'login_fail', ip: string | null | undefined): string {
+  return `${kind}:ip:${ip && ip.trim() ? ip.trim() : 'unknown'}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,25 +282,34 @@ export async function countRecentChallenges(
 }
 
 export type VerifyCodeResult =
-  | { ok: true; challenge: StaffLoginChallengeRow }
+  | { ok: true; challenge: StaffLoginChallengeRow; session: CreatedSession | null }
   | { ok: false; reason: 'no_challenge' | 'locked' | 'invalid' };
 
 /**
- * コードを検証して消費する（単回）。
+ * コードを検証して消費する（単回）。session を渡すと、消費とセッション発行を
+ * **同一 batch（＝1 トランザクション）**で行う。
  *
- * 生きているチャレンジを新しい順に最大 5 件見て、ハッシュ一致した 1 件を
+ * 生きているチャレンジを新しい順に CANDIDATE_LIMIT 件見て、ハッシュ一致した 1 件を
  *   UPDATE ... WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts
  * の単一文で消費する。meta.changes === 1 のときだけ成功とみなすので、
  * 同じコードで同時に 2 本走っても 1 本しか通らない。
  *
- * 不一致のときは生きているチャレンジ全部の attempts を 1 つ進める。
- * 「発行し直せば試行回数がリセットされる」抜け道を塞ぐため、加算はチャレンジ単位ではなく
- * その時点で生きている全チャレンジに効かせる。
+ * ⚠️ 消費とセッション発行を分けて実行してはいけない。分けると、セッション発行が失敗した
+ *    ときに「コードは消費済みなのにログインできず、入れ直しても no_challenge」という
+ *    抜け出せない状態になる。INSERT 側にも同じ条件を WHERE EXISTS で持たせてあるので、
+ *    どちらか一方だけが成立することはない。
+ *
+ * 不一致のときは **この時点で生きていたチャレンジ**（candidates）の attempts を 1 つ進める。
+ * 加算対象を staff_id 全件にすると、リクエスト中に発行された本人の新しいコードまで
+ * 巻き添えで焼けるため、読み出した候補の id に限定する。
+ * 「発行し直せば試行枠がリセットされる」抜け道は、アカウント単位の attempts ではなく
+ * 試行元 IP 単位のスロットル（hitThrottle / migration 920）で塞ぐ。
  */
 export async function verifyAndConsumeLoginCode(
   db: D1Database,
   staffId: string,
   code: string,
+  session?: CreateSessionInput,
 ): Promise<VerifyCodeResult> {
   const now = jstNow();
 
@@ -230,9 +318,9 @@ export async function verifyAndConsumeLoginCode(
       `SELECT * FROM staff_login_challenges
         WHERE staff_id = ? AND used_at IS NULL AND expires_at > ?
         ORDER BY created_at DESC
-        LIMIT 5`,
+        LIMIT ?`,
     )
-    .bind(staffId, now)
+    .bind(staffId, now, CANDIDATE_LIMIT)
     .all<StaffLoginChallengeRow>();
 
   const rows = candidates.results ?? [];
@@ -245,29 +333,45 @@ export async function verifyAndConsumeLoginCode(
     const expected = await hashLoginCode(row.id, code);
     if (!timingSafeEqualHex(expected, row.code_hash)) continue;
 
-    const consumed = await db
-      .prepare(
-        `UPDATE staff_login_challenges
+    const consumeSql = `UPDATE staff_login_challenges
             SET used_at = ?, attempts = attempts + 1
-          WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`,
-      )
-      .bind(now, row.id, now)
-      .run();
+          WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`;
 
-    if (consumed.meta.changes === 1) {
-      return { ok: true, challenge: { ...row, used_at: now, attempts: row.attempts + 1 } };
+    if (!session) {
+      const consumed = await db.prepare(consumeSql).bind(now, row.id, now).run();
+      if (consumed.meta.changes === 1) {
+        return {
+          ok: true,
+          challenge: { ...row, used_at: now, attempts: row.attempts + 1 },
+          session: null,
+        };
+      }
+      // changes === 0 = 同時に別リクエストが消費した / 直前に期限切れ。使い回しは許さない。
+      return { ok: false, reason: 'invalid' };
     }
-    // changes === 0 = 同時に別リクエストが消費した / 直前に期限切れ。使い回しは許さない。
+
+    const pending = await buildSessionInsert(db, session, row.id, now);
+    const [inserted, consumed] = await db.batch([pending.statement, db.prepare(consumeSql).bind(now, row.id, now)]);
+
+    if (consumed.meta.changes === 1 && inserted.meta.changes === 1) {
+      return {
+        ok: true,
+        challenge: { ...row, used_at: now, attempts: row.attempts + 1 },
+        session: pending.session,
+      };
+    }
     return { ok: false, reason: 'invalid' };
   }
 
+  const ids = live.map((r) => r.id);
   await db
     .prepare(
       `UPDATE staff_login_challenges
           SET attempts = attempts + 1
-        WHERE staff_id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`,
+        WHERE id IN (${ids.map(() => '?').join(', ')})
+          AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`,
     )
-    .bind(staffId, now)
+    .bind(...ids, now)
     .run();
 
   return { ok: false, reason: 'invalid' };
@@ -317,36 +421,72 @@ export interface CreatedSession {
   expiresAt: string;
 }
 
+interface PendingSession {
+  session: CreatedSession;
+  statement: D1PreparedStatement;
+}
+
+/**
+ * セッションの INSERT 文とトークンを組み立てる（まだ実行しない）。
+ *
+ * challengeId を渡すと「そのチャレンジがまだ消費可能なときだけ挿入する」条件付き INSERT になる。
+ * これを同一 batch 内の消費 UPDATE と並べることで、**片方だけ成立することがなくなる**。
+ * 分けて実行すると、消費だけ通ってセッション発行が落ちたときに
+ * 「正しいコードを打ったのに 401、入れ直しても no_challenge」という抜け出せない状態になる。
+ */
+async function buildSessionInsert(
+  db: D1Database,
+  input: CreateSessionInput,
+  challengeId: string | null,
+  now: string,
+): Promise<PendingSession> {
+  const id = randomHex(16);
+  const secret = randomHex(32);
+  const secretHash = await sha256Hex(secret);
+  const createdAt = new Date();
+  const expiresAt = addHours(createdAt, input.ttlHours ?? DEFAULT_SESSION_TTL_HOURS);
+
+  const columns =
+    '(id, staff_id, secret_hash, issued_via, user_agent, ip, created_at, last_used_at, expires_at, revoked_at, revoked_reason)';
+  const values = [
+    id,
+    input.staffId,
+    secretHash,
+    input.issuedVia ?? 'email_code',
+    input.userAgent ?? null,
+    input.ip ?? null,
+    jstIso(createdAt),
+    expiresAt,
+  ];
+
+  const statement = challengeId
+    ? db
+        .prepare(
+          `INSERT INTO staff_sessions ${columns}
+           SELECT ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL
+            WHERE EXISTS (
+                  SELECT 1 FROM staff_login_challenges
+                   WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts
+                 )`,
+        )
+        .bind(...values, challengeId, now)
+    : db
+        .prepare(`INSERT INTO staff_sessions ${columns} VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`)
+        .bind(...values);
+
+  return {
+    session: { id, token: `${SESSION_TOKEN_PREFIX}${id}.${secret}`, expiresAt },
+    statement,
+  };
+}
+
 export async function createStaffSession(
   db: D1Database,
   input: CreateSessionInput,
 ): Promise<CreatedSession> {
-  const id = randomHex(16);
-  const secret = randomHex(32);
-  const secretHash = await sha256Hex(secret);
-  const now = new Date();
-  const expiresAt = addHours(now, input.ttlHours ?? DEFAULT_SESSION_TTL_HOURS);
-
-  await db
-    .prepare(
-      `INSERT INTO staff_sessions
-         (id, staff_id, secret_hash, issued_via, user_agent, ip,
-          created_at, last_used_at, expires_at, revoked_at, revoked_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
-    )
-    .bind(
-      id,
-      input.staffId,
-      secretHash,
-      input.issuedVia ?? 'email_code',
-      input.userAgent ?? null,
-      input.ip ?? null,
-      jstIso(now),
-      expiresAt,
-    )
-    .run();
-
-  return { id, token: `${SESSION_TOKEN_PREFIX}${id}.${secret}`, expiresAt };
+  const pending = await buildSessionInsert(db, input, null, jstNow());
+  await pending.statement.run();
+  return pending.session;
 }
 
 /** `lhs_<id>.<secret>` を分解する。形が違えば null。 */
@@ -587,8 +727,12 @@ export function staffAuthCascadeStatements(db: D1Database, staffId: string): D1P
 /** 期限切れ行の掃除（cron から呼ぶ想定。呼ばなくても機能は壊れない）。 */
 export async function pruneExpiredStaffAuthRows(db: D1Database, keepDays = 90): Promise<void> {
   const cutoff = addHours(new Date(), -24 * keepDays);
+  // auth_throttle は bucket が IP 単位なので放置すると際限なく増える。
+  // 窓（分オーダー）を大きく超えた行は残しておく意味が無いので、1 日で切る。
+  const throttleCutoff = addHours(new Date(), -24);
   await db.batch([
     db.prepare('DELETE FROM staff_login_challenges WHERE expires_at < ?').bind(cutoff),
     db.prepare('DELETE FROM staff_sessions WHERE expires_at < ?').bind(cutoff),
+    db.prepare('DELETE FROM auth_throttle WHERE updated_at < ?').bind(throttleCutoff),
   ]);
 }

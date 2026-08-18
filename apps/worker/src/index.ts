@@ -116,9 +116,12 @@ export type Env = {
     ADMIN_BASE_URL?: string;                // 管理画面の URL。メール本文のリンクに使う（未設定ならリンクを出さない）
     ADMIN_LOGIN_CODE_TTL_MINUTES?: string;  // default: 10
     ADMIN_LOGIN_MAX_ATTEMPTS?: string;      // default: 5（1発行あたりのコード検証回数の上限）
-    ADMIN_LOGIN_ISSUE_MAX?: string;         // default: 5（下の窓の中で発行できる回数）
+    ADMIN_LOGIN_ISSUE_MAX?: string;         // default: 10（アカウント単位。第三者に消費されうるので緩め）
+    ADMIN_LOGIN_ISSUE_MAX_PER_IP?: string;  // default: 5（試行元 IP 単位。実質的な抑止はこちら）
     ADMIN_LOGIN_ISSUE_WINDOW_MINUTES?: string; // default: 15
-    ADMIN_SESSION_TTL_HOURS?: string;       // default: 336（14日）
+    ADMIN_LOGIN_FAIL_MAX_PER_IP?: string;   // default: 10（コード検証失敗の IP 単位上限）
+    ADMIN_LOGIN_FAIL_WINDOW_MINUTES?: string;  // default: 15
+    ADMIN_SESSION_TTL_HOURS?: string;       // default: 168（7日。iOS Safari の保存期間に合わせる）
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;
     NOTION_BUYER_DB_ID?: string;
