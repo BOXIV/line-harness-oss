@@ -52,12 +52,14 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
   const staff = await getStaffByApiKey(c.env.DB, token);
   if (staff) {
     c.set('staff', { id: staff.id, name: staff.name, role: staff.role });
+    c.set('authVia', 'api_key');
     return next();
   }
 
   // Fallback: env API_KEY acts as owner
   if (token === c.env.API_KEY) {
     c.set('staff', { id: 'env-owner', name: 'Owner', role: 'owner' as const });
+    c.set('authVia', 'env_key');
     return next();
   }
 

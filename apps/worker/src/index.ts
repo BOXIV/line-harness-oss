@@ -109,6 +109,9 @@ export type Env = {
     SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;
     SLACK_REMINDER_WEBHOOK_URL?: string;   // BOXIV: 催促メール/SMS の送信状況を流す監視用 Slack Incoming Webhook（未設定なら無効）
+    // 管理画面ログイン (BOXIV) — メール認証コード方式
+    SLACK_ADMIN_ALERT_WEBHOOK_URL?: string; // ログイン系の異常（コードメール失敗 等）の通報先。未設定なら SLACK_REMINDER_WEBHOOK_URL を流用
+    ADMIN_BASE_URL?: string;                // 管理画面の URL。メール本文のリンクに使う（未設定ならリンクを出さない）
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;
     NOTION_BUYER_DB_ID?: string;
@@ -181,7 +184,14 @@ export type Env = {
     TWILIO_FROM?: string;                           // Twilio番号(+81…) or Messaging Service SID(MG…)
   };
   Variables: {
+    // ⚠️ この staff の形（id / name / role）は 74 箇所の requireRole と
+    //    audit_log(migration 910) が依存している。変えないこと。
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
+    // BOXIV: どの経路で認証されたか（migration 919 の audit_log.actor_via に記録）。
+    // 'session'=管理画面のメールログイン / 'api_key'=staff_members.api_key /
+    // 'env_key'=env API_KEY の env-owner。旧方式をいつ止めてよいかを実データで判断するために要る。
+    authVia?: 'session' | 'api_key' | 'env_key';
+    authSessionId?: string;
   };
 };
 
