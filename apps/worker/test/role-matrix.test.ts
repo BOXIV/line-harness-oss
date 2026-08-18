@@ -45,6 +45,11 @@ const MATRIX: Case[] = [
     why: '管理画面のログイン検証に使う唯一のロール非依存の口。requireRole を付けてはいけない',
   },
   {
+    path: '/api/auth/session',
+    expect: ALL(200),
+    why: '自分のログイン状態を返す口。ロール非依存（認証は必要＝認証スキップ一覧には入れない）',
+  },
+  {
     path: '/api/staff-availability',
     expect: ALL(200),
     why: '撮影スタッフが自分のシフトを登録する画面。staff は自分の行に絞られる（ハンドラ内で強制）',

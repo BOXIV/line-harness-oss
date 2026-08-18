@@ -36,6 +36,54 @@ export async function alertAdminAuth(env: AdminAuthEmailEnv, text: string): Prom
 }
 
 /**
+ * ログイン用の 6 桁コードを送る。
+ *
+ * 本文は「コードが主・リンクが従」の順で書く。リンクを主導線にするとメールスキャナ
+ * (Microsoft SafeLinks / 社内ゲートウェイ) の先読みで単回リンクが消費される事故が起きる。
+ * リンクを載せる場合もコードは消費せず、着地ページで人が押して初めて POST される
+ * （GET でコードを消費しない）。
+ */
+export async function sendLoginCodeEmail(
+  env: AdminAuthEmailEnv,
+  input: { to: string; staffName: string; code: string; ttlMinutes: number; loginUrl?: string | null },
+): Promise<{ ok: boolean; error?: string }> {
+  const subject = `【BOXIV LINE Connect】ログイン認証コード ${input.code}`;
+  const lines = [
+    `${input.staffName} 様`,
+    '',
+    'BOXIV LINE Connect 管理画面のログイン認証コードです。',
+    '',
+    `　　${input.code}`,
+    '',
+    `このコードは ${input.ttlMinutes} 分で使えなくなり、1 回しか使えません。`,
+    '',
+  ];
+  if (input.loginUrl) {
+    lines.push(
+      'ログイン画面（メールアドレスとコードが入力済みになります。開くだけでは',
+      'ログインされないので、画面のボタンを押してください）:',
+      input.loginUrl,
+      '',
+    );
+  }
+  lines.push(
+    'このメールに心当たりがない場合は、コードを誰にも教えず破棄してください。',
+    'あなたのアカウントで誰かがログインを試みた可能性があります。',
+    '',
+    '— BOXIV LINE Connect',
+  );
+
+  const res = await sendEmail(env, input.to, subject, { text: lines.join('\n') });
+  if (!res.ok) {
+    await alertAdminAuth(
+      env,
+      `ログインコードのメール送信に失敗（宛先 ${maskEmail(input.to)} / ${input.staffName}）: ${res.error ?? res.status}`,
+    );
+  }
+  return { ok: res.ok, error: res.error };
+}
+
+/**
  * メールアドレス変更を **旧アドレス** に通知する。
  *
  * 新アドレスではなく旧アドレスに送るのが要点。乗っ取り側がアドレスを自分のものに

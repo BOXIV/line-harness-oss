@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
+import { isAuthenticated } from '@/lib/auth'
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -8,14 +9,18 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const [checked, setChecked] = useState(false)
 
   useEffect(() => {
-    if (pathname === '/login') {
+    // ⚠️ 完全一致ではなく前方一致で判定する。メールのリンクは
+    //    /login?email=…&code=… で着地するし、将来 /login/… を足すこともある。
+    //    完全一致のままだと着地ページが未ログイン扱いでリダイレクトされ、
+    //    せっかく開いたコード入力画面が消える。
+    if (pathname.startsWith('/login')) {
       setChecked(true)
       return
     }
 
-    const key = localStorage.getItem('lh_api_key')
-    if (!key) {
-      router.replace('/login')
+    if (!isAuthenticated()) {
+      const next = encodeURIComponent(pathname)
+      router.replace(`/login?next=${next}`)
     } else {
       setChecked(true)
     }

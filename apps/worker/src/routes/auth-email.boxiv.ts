@@ -1,0 +1,409 @@
+// BOXIV-only: 管理画面ログイン（メール6桁コード）。
+//
+// 人間の入口だけをここに置く。機械の入口（staff_members.api_key / env API_KEY）は
+// middleware/auth.ts のまま 1 バイトも変えない。promote-*.mjs / slack-daemon /
+// mcp-server など 14 本以上のスクリプトが同じキーを使っているため。
+//
+// 認証をスキップするのは start と verify の **完全一致のみ**（middleware/auth.ts）。
+// 前方一致にすると /api/auth/session まで素通りする。
+import { Hono } from 'hono';
+import {
+  countRecentChallenges,
+  createLoginChallenge,
+  createStaffSession,
+  findActiveStaffByEmail,
+  getStaffById,
+  invalidateLoginChallenges,
+  isValidEmail,
+  listStaffSessions,
+  recordAuditLog,
+  revokeStaffSession,
+  verifyAndConsumeLoginCode,
+  DEFAULT_CODE_TTL_MINUTES,
+  DEFAULT_ISSUE_MAX,
+  DEFAULT_ISSUE_WINDOW_MINUTES,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_SESSION_TTL_HOURS,
+} from '@line-crm/db';
+import { requireRole } from '../middleware/role-guard.js';
+import {
+  alertAdminAuth,
+  maskEmail,
+  sendLoginCodeEmail,
+} from '../services/staff-auth-email.boxiv.js';
+import { escapeSlackText, slackWebhookPost } from '../services/slack.boxiv.js';
+import type { Env } from '../index.js';
+
+const authEmail = new Hono<Env>();
+
+// ---------------------------------------------------------------------------
+// 設定（env で上書き可。既定は packages/db の定数）
+// ---------------------------------------------------------------------------
+
+function intEnv(raw: string | undefined, fallback: number): number {
+  const n = Number.parseInt(String(raw ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function config(env: Env['Bindings']) {
+  return {
+    codeTtlMinutes: intEnv(env.ADMIN_LOGIN_CODE_TTL_MINUTES, DEFAULT_CODE_TTL_MINUTES),
+    maxAttempts: intEnv(env.ADMIN_LOGIN_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
+    issueMax: intEnv(env.ADMIN_LOGIN_ISSUE_MAX, DEFAULT_ISSUE_MAX),
+    issueWindowMinutes: intEnv(env.ADMIN_LOGIN_ISSUE_WINDOW_MINUTES, DEFAULT_ISSUE_WINDOW_MINUTES),
+    sessionTtlHours: intEnv(env.ADMIN_SESSION_TTL_HOURS, DEFAULT_SESSION_TTL_HOURS),
+  };
+}
+
+function clientIp(headers: Headers): string | null {
+  return (
+    headers.get('cf-connecting-ip') ||
+    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    null
+  );
+}
+
+/** Slack へ 1 行流す（webhook 未設定なら console のみ）。throw しない。 */
+async function notifySlack(env: Env['Bindings'], text: string): Promise<void> {
+  const url = env.SLACK_ADMIN_ALERT_WEBHOOK_URL || env.SLACK_REMINDER_WEBHOOK_URL;
+  if (!url) return;
+  await slackWebhookPost(url, text);
+}
+
+/**
+ * ログイン系の監査ログ。
+ *
+ * ログイン成功/失敗/ログアウトは「認証前」または「認証を確定させる瞬間」の出来事なので、
+ * middleware/audit-log.boxiv.ts（c.get('staff') 前提）では拾えない。必ずここから明示的に書く。
+ */
+async function auditLogin(
+  env: Env['Bindings'],
+  input: {
+    action: string;
+    summary: string;
+    actorId: string | null;
+    actorName: string | null;
+    actorRole: string | null;
+    status: number;
+    path: string;
+    detail?: Record<string, unknown>;
+    sessionId?: string | null;
+  },
+): Promise<void> {
+  try {
+    await recordAuditLog(env.DB, {
+      actorId: input.actorId,
+      actorName: input.actorName,
+      actorRole: input.actorRole,
+      action: input.action,
+      summary: input.summary,
+      targetType: 'staff',
+      targetId: input.actorId,
+      targetLabel: input.actorName,
+      method: 'POST',
+      path: input.path,
+      status: input.status,
+      // メールアドレスは detail に生で入れない（マスク済みだけ入れる）。
+      detail: input.detail ?? {},
+      actorVia: 'session',
+      actorSessionId: input.sessionId ?? null,
+    });
+  } catch (err) {
+    console.error('auditLogin failed:', err);
+  }
+}
+
+/**
+ * 宛先の存在を漏らさない共通レスポンス。
+ *
+ * 「そのアドレスは登録されていません」を返すと、誰が管理画面に入れるかを外から
+ * 総当たりで列挙できてしまう。登録の有無にかかわらず同じ本文・同じ status を返す。
+ */
+const GENERIC_START_RESPONSE = {
+  success: true,
+  data: { message: '登録されているメールアドレスであれば、認証コードを送信しました。' },
+};
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/email/start — コードを発行してメールで送る（認証不要）
+// ---------------------------------------------------------------------------
+authEmail.post('/api/auth/email/start', async (c) => {
+  const cfg = config(c.env);
+  try {
+    const body = await c.req.json<{ email?: string }>().catch(() => ({}) as { email?: string });
+    const email = String(body.email ?? '').trim();
+
+    // 形式が不正でも「送ったかもしれない」と同じ応答にする（存在判定に使わせない）。
+    if (!email || !isValidEmail(email)) return c.json(GENERIC_START_RESPONSE);
+
+    const staff = await findActiveStaffByEmail(c.env.DB, email);
+    if (!staff) {
+      console.log('[admin-auth] start: 未登録または重複アドレス', maskEmail(email));
+      return c.json(GENERIC_START_RESPONSE);
+    }
+
+    // 発行の量産を D1 側で止める。コードを何本も出させて総当たりの試行枠を稼ぐ攻撃を防ぐ。
+    const recent = await countRecentChallenges(c.env.DB, staff.id, cfg.issueWindowMinutes);
+    if (recent >= cfg.issueMax) {
+      await notifySlack(
+        c.env,
+        `:warning: ログインコードの発行が上限に達しました（${escapeSlackText(staff.name)} / ${cfg.issueWindowMinutes}分で${recent}回）`,
+      );
+      return c.json(GENERIC_START_RESPONSE);
+    }
+
+    const challenge = await createLoginChallenge(c.env.DB, {
+      staffId: staff.id,
+      email: staff.email ?? email,
+      purpose: 'login',
+      ttlMinutes: cfg.codeTtlMinutes,
+      maxAttempts: cfg.maxAttempts,
+      requestIp: clientIp(c.req.raw.headers),
+    });
+
+    // リンクはコードを「入力済みにする」だけ。開いた時点では消費されない（消費は POST /verify）。
+    const base = (c.env.ADMIN_BASE_URL ?? '').replace(/\/+$/, '');
+    const loginUrl = base
+      ? `${base}/login?email=${encodeURIComponent(staff.email ?? email)}&code=${challenge.code}`
+      : null;
+
+    const sent = await sendLoginCodeEmail(c.env, {
+      to: staff.email ?? email,
+      staffName: staff.name,
+      code: challenge.code,
+      ttlMinutes: cfg.codeTtlMinutes,
+      loginUrl,
+    });
+
+    // 送信できなかったことを本人は知りようがない（画面は同じ文言を出す）ので、
+    // 必ず運用側に見えるところへ出す。sendLoginCodeEmail 内でも Slack 通報している。
+    if (!sent.ok) {
+      console.error('[admin-auth] ログインコードの送信に失敗', maskEmail(staff.email ?? email));
+    }
+
+    return c.json(GENERIC_START_RESPONSE);
+  } catch (err) {
+    console.error('POST /api/auth/email/start error:', err);
+    // 失敗しても中身を漏らさない。
+    return c.json(GENERIC_START_RESPONSE);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/email/verify — コードを検証してセッションを発行（認証不要）
+// ---------------------------------------------------------------------------
+authEmail.post('/api/auth/email/verify', async (c) => {
+  const cfg = config(c.env);
+  const FAIL = { success: false, error: 'メールアドレスまたは認証コードが正しくありません' } as const;
+
+  try {
+    const body = await c.req
+      .json<{ email?: string; code?: string }>()
+      .catch(() => ({}) as { email?: string; code?: string });
+    const email = String(body.email ?? '').trim();
+    const code = String(body.code ?? '').replace(/[\s-]/g, '');
+
+    if (!email || !isValidEmail(email) || !/^\d{6}$/.test(code)) {
+      return c.json(FAIL, 401);
+    }
+
+    const staff = await findActiveStaffByEmail(c.env.DB, email);
+    if (!staff) return c.json(FAIL, 401);
+
+    const result = await verifyAndConsumeLoginCode(c.env.DB, staff.id, code);
+    if (!result.ok) {
+      await auditLogin(c.env, {
+        action: 'auth.login_failed',
+        summary: '管理画面へのログインに失敗',
+        actorId: staff.id,
+        actorName: staff.name,
+        actorRole: staff.role,
+        status: 401,
+        path: '/api/auth/email/verify',
+        detail: { reason: result.reason, emailMasked: maskEmail(staff.email) },
+      });
+      if (result.reason === 'locked') {
+        await notifySlack(
+          c.env,
+          `:lock: ログインコードの試行回数上限に達しました（${escapeSlackText(staff.name)}）。本人でない可能性があります。`,
+        );
+      }
+      return c.json(FAIL, 401);
+    }
+
+    // 成功したら他の未使用コードも道連れにする（発行済みの別コードを後から使わせない）。
+    await invalidateLoginChallenges(c.env.DB, staff.id);
+
+    const session = await createStaffSession(c.env.DB, {
+      staffId: staff.id,
+      issuedVia: result.challenge.purpose === 'admin_issued' ? 'admin_issued' : 'email_code',
+      userAgent: c.req.header('user-agent') ?? null,
+      ip: clientIp(c.req.raw.headers),
+      ttlHours: cfg.sessionTtlHours,
+    });
+
+    await auditLogin(c.env, {
+      action: 'auth.login',
+      summary: '管理画面にログイン',
+      actorId: staff.id,
+      actorName: staff.name,
+      actorRole: staff.role,
+      status: 200,
+      path: '/api/auth/email/verify',
+      sessionId: session.id,
+      detail: {
+        via: result.challenge.purpose === 'admin_issued' ? '管理者発行コード' : 'メールコード',
+        emailMasked: maskEmail(staff.email),
+      },
+    });
+
+    c.executionCtx.waitUntil(
+      notifySlack(
+        c.env,
+        `:white_check_mark: 管理画面ログイン: ${escapeSlackText(staff.name)}（${escapeSlackText(staff.role)}）` +
+          (result.challenge.purpose === 'admin_issued' ? ' ※管理者発行コード' : ''),
+      ).catch(() => {}),
+    );
+
+    return c.json({
+      success: true,
+      data: {
+        token: session.token,
+        expiresAt: session.expiresAt,
+        staff: {
+          id: staff.id,
+          name: staff.name,
+          role: staff.role,
+          email: staff.email,
+          workArea: staff.work_area ?? null,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('POST /api/auth/email/verify error:', err);
+    return c.json(FAIL, 401);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/auth/session — 現在のセッション（要認証）
+// ---------------------------------------------------------------------------
+// ⚠️ 認証スキップ一覧には入れない。start/verify を「完全一致」で並べているのはこのため
+//    （前方一致にするとこのルートまで素通りする）。
+authEmail.get('/api/auth/session', async (c) => {
+  const staff = c.get('staff');
+  const sessionId = c.get('authSessionId') ?? null;
+  return c.json({
+    success: true,
+    data: {
+      staff,
+      authVia: c.get('authVia') ?? null,
+      sessionId,
+      sessions: sessionId ? await listStaffSessions(c.env.DB, staff.id) : [],
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/logout — 今のセッションを失効（要認証）
+// ---------------------------------------------------------------------------
+authEmail.post('/api/auth/logout', async (c) => {
+  const staff = c.get('staff');
+  const sessionId = c.get('authSessionId');
+
+  // API キーでログインしている旧経路は「失効させるセッション」が無い。
+  // 端末側でキーを消すだけなので、ここは成功として返す（画面の挙動を分岐させない）。
+  if (!sessionId) return c.json({ success: true, data: { revoked: 0 } });
+
+  const revoked = await revokeStaffSession(c.env.DB, sessionId, 'logout');
+  await auditLogin(c.env, {
+    action: 'auth.logout',
+    summary: '管理画面からログアウト',
+    actorId: staff.id,
+    actorName: staff.name,
+    actorRole: staff.role,
+    status: 200,
+    path: '/api/auth/logout',
+    sessionId,
+  });
+  return c.json({ success: true, data: { revoked } });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/staff/:id/login-code — 管理者による救済コード発行
+// ---------------------------------------------------------------------------
+// メールが届かない人を入れるための経路。**構造上「なりすませる」機能**でもあり、
+// しかも旧方式のキー再生成と違って本人のログインを壊さないので本人が気づかない。
+// 緩和は「発行者名を必ず残す」「上位ロールは対象にできない」の 2 点だけで、
+// 権限の性質そのものは消せない（可用性とのトレードオフとして受け入れる判断）。
+authEmail.post('/api/staff/:id/login-code', requireRole('owner', 'manager'), async (c) => {
+  const cfg = config(c.env);
+  try {
+    const id = c.req.param('id')!;
+    const actor = c.get('staff');
+
+    const target = await getStaffById(c.env.DB, id);
+    if (!target) return c.json({ success: false, error: 'Staff member not found' }, 404);
+    if (target.is_active !== 1) {
+      return c.json({ success: false, error: '無効化されたスタッフにはコードを発行できません' }, 400);
+    }
+
+    // 上位ロールを対象にできない。ここを開けると manager → owner の権限昇格になる。
+    if (actor.role === 'manager' && target.role !== 'staff' && target.role !== 'manager') {
+      return c.json(
+        { success: false, error: 'マネージャーは撮影スタッフとマネージャーにのみ発行できます' },
+        403,
+      );
+    }
+
+    const challenge = await createLoginChallenge(c.env.DB, {
+      staffId: target.id,
+      email: target.email ?? '',
+      purpose: 'admin_issued',
+      issuedById: actor.id,
+      issuedByName: actor.name,
+      ttlMinutes: cfg.codeTtlMinutes,
+      maxAttempts: cfg.maxAttempts,
+      requestIp: clientIp(c.req.raw.headers),
+    });
+
+    // 発行者名を必ず残す（監査ログ + Slack）。これが唯一の抑止力。
+    await recordAuditLog(c.env.DB, {
+      actorId: actor.id,
+      actorName: actor.name,
+      actorRole: actor.role,
+      action: 'auth.login_code_issued',
+      summary: '他スタッフのログインコードを発行',
+      targetType: 'staff',
+      targetId: target.id,
+      targetLabel: target.name,
+      method: 'POST',
+      path: `/api/staff/${target.id}/login-code`,
+      status: 200,
+      detail: { targetRole: target.role, emailMasked: maskEmail(target.email) },
+      actorVia: c.get('authVia') ?? null,
+      actorSessionId: c.get('authSessionId') ?? null,
+    });
+
+    await notifySlack(
+      c.env,
+      `:key: ${escapeSlackText(actor.name)} が ${escapeSlackText(target.name)}（${escapeSlackText(target.role)}）の` +
+        `ログインコードを発行しました。本人以外が使えば、そのまま本人として操作できます。`,
+    );
+
+    return c.json({
+      success: true,
+      data: {
+        code: challenge.code,
+        expiresAt: challenge.expiresAt,
+        staff: { id: target.id, name: target.name, email: target.email, role: target.role },
+      },
+    });
+  } catch (err) {
+    console.error('POST /api/staff/:id/login-code error:', err);
+    await alertAdminAuth(c.env, `救済コードの発行に失敗: ${err instanceof Error ? err.message : String(err)}`);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+export { authEmail };

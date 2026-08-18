@@ -75,6 +75,8 @@ import { reconcileNotionStatuses } from './services/notion-status-sync.boxiv.js'
 // 監査ログ（管理操作の変更証跡, BOXIV）
 import { auditLogMiddleware } from './middleware/audit-log.boxiv.js';
 import { auditLogs } from './routes/audit-logs.boxiv.js';
+// 管理画面ログイン（メール6桁コード, BOXIV）
+import { authEmail } from './routes/auth-email.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -112,6 +114,11 @@ export type Env = {
     // 管理画面ログイン (BOXIV) — メール認証コード方式
     SLACK_ADMIN_ALERT_WEBHOOK_URL?: string; // ログイン系の異常（コードメール失敗 等）の通報先。未設定なら SLACK_REMINDER_WEBHOOK_URL を流用
     ADMIN_BASE_URL?: string;                // 管理画面の URL。メール本文のリンクに使う（未設定ならリンクを出さない）
+    ADMIN_LOGIN_CODE_TTL_MINUTES?: string;  // default: 10
+    ADMIN_LOGIN_MAX_ATTEMPTS?: string;      // default: 5（1発行あたりのコード検証回数の上限）
+    ADMIN_LOGIN_ISSUE_MAX?: string;         // default: 5（下の窓の中で発行できる回数）
+    ADMIN_LOGIN_ISSUE_WINDOW_MINUTES?: string; // default: 15
+    ADMIN_SESSION_TTL_HOURS?: string;       // default: 336（14日）
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;
     NOTION_BUYER_DB_ID?: string;
@@ -286,6 +293,8 @@ app.route('/', schemaReconcile);
 app.route('/', notionWebhook);
 // 監査ログ閲覧 (BOXIV)
 app.route('/', auditLogs);
+// 管理画面ログイン (BOXIV) — /api/auth/email/start|verify は認証スキップ（完全一致）
+app.route('/', authEmail);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {

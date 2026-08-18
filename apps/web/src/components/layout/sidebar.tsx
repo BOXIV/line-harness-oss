@@ -7,6 +7,8 @@ import { useAccount } from '@/contexts/account-context'
 import type { AccountWithStats } from '@/contexts/account-context'
 import { api } from '@/lib/api'
 import { BOOKINGS_CHANGED_EVENT } from '@/lib/booking-events'
+import { isAuthenticated, clearAuth } from '@/lib/auth'
+import { useCurrentStaff } from '@/contexts/current-staff-context'
 
 // ビルド環境判定（NEXT_PUBLIC_API_URL のホストで test / 本番 を見分け、タイトルにバッジを出す）。
 const _API_URL = process.env.NEXT_PUBLIC_API_URL || ''
@@ -180,8 +182,8 @@ function usePendingBookingCount(pathname: string) {
   useEffect(() => {
     let cancelled = false
     const fetchCount = async () => {
-      // 未ログイン時（APIキー未設定）は叩かない
-      if (!localStorage.getItem('lh_api_key')) return
+      // 未ログイン時は叩かない（新セッション / 旧APIキーのどちらも無い状態）
+      if (!isAuthenticated()) return
       try {
         const res = await api.bookingRequests.pendingCount()
         if (!cancelled && res.success) setCount(res.data.count)
@@ -232,14 +234,12 @@ function NavIcon({ d }: { d: string }) {
 export default function Sidebar() {
   const pathname = usePathname()
   const [isOpen, setIsOpen] = useState(false)
-  const [staffName, setStaffName] = useState<string | null>(null)
-  const [staffRole, setStaffRole] = useState<string | null>(null)
   const pendingBookings = usePendingBookingCount(pathname)
-
-  useEffect(() => {
-    setStaffName(localStorage.getItem('lh_staff_name'))
-    setStaffRole(localStorage.getItem('lh_staff_role'))
-  }, [])
+  // 名前とロールの正は GET /api/staff/me（CurrentStaffProvider が 1 回だけ引く）。
+  // 確定前は localStorage のキャッシュを出して初回描画のちらつきを避ける。
+  const { staff, cachedName, cachedRole } = useCurrentStaff()
+  const staffName = staff?.name ?? cachedName
+  const staffRole = staff?.role ?? cachedRole
 
   useEffect(() => { setIsOpen(false) }, [pathname])
   useEffect(() => {
@@ -326,19 +326,32 @@ export default function Sidebar() {
             <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium mt-0.5 ${
               staffRole === 'owner' ? 'bg-yellow-100 text-yellow-800' :
               staffRole === 'admin' ? 'bg-blue-100 text-blue-800' :
+              staffRole === 'manager' ? 'bg-purple-100 text-purple-800' :
               'bg-gray-100 text-gray-600'
             }`}>
-              {staffRole === 'owner' ? 'オーナー' : staffRole === 'admin' ? '管理者' : '撮影スタッフ'}
+              {/* manager が抜けていて 4 人のマネージャーが「撮影スタッフ」と表示されていた。
+                  ロールを画面に出す機会が増える（ログイン直後に必ず目に入る）ので直す。
+                  色は スタッフ一覧の RoleBadge と揃える。 */}
+              {staffRole === 'owner' ? 'オーナー'
+                : staffRole === 'admin' ? '管理者'
+                : staffRole === 'manager' ? 'マネージャー'
+                : '撮影スタッフ'}
             </span>
           </div>
         )}
         <div className="px-6 py-4 space-y-3">
         <p className="text-xs text-gray-400">BOXIV LINE Connect v{process.env.APP_VERSION || '0.0.0'}</p>
         <button
-          onClick={() => {
-            localStorage.removeItem('lh_api_key')
-            localStorage.removeItem('lh_staff_name')
-            localStorage.removeItem('lh_staff_role')
+          onClick={async () => {
+            // サーバ側のセッションも失効させる（端末から消すだけだと、
+            // 盗まれたトークンがそのまま有効期限まで生き続ける）。
+            // 失敗しても端末側は必ず消してログイン画面へ送る。
+            try {
+              await api.auth.logout()
+            } catch {
+              /* 通信できなくてもローカルは破棄する */
+            }
+            clearAuth()
             window.location.href = '/login'
           }}
           className="flex items-center gap-2 text-xs text-gray-400 hover:text-red-500 transition-colors"

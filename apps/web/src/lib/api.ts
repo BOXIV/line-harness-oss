@@ -92,14 +92,23 @@ if (!API_URL) {
 }
 
 /**
- * Read the API key from localStorage (set during login).
- * Never embed secrets in the client bundle via NEXT_PUBLIC_* env vars.
+ * 認証トークンは lib/auth.ts が唯一の出所（メールログインのセッション →
+ * 無ければ旧 API キー）。秘密情報を NEXT_PUBLIC_* でバンドルに焼かないこと。
+ *
+ * ⚠️ このファイルで生の fetch を書くときも必ず authHeaders() を通すこと。
+ *    以前は Authorization を直書きした fetch が 3 箇所あり、方式を変えるたびに
+ *    そこだけ古い読み方のまま取り残される構造になっていた。
  */
-function getApiKey(): string {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('lh_api_key') || ''
-  }
-  return ''
+export { getAuthToken, authHeaders } from './auth'
+import { authHeaders, handleUnauthorized } from './auth'
+
+/**
+ * 401 の共通処理。セッションは Worker 側で失効させられる（無効化 / ロール変更 /
+ * メール変更 / ログアウト）ので 401 は通常の遷移として起きる。死んだトークンのまま
+ * 叩き続けないよう、ここで破棄してログイン画面へ送る。
+ */
+function onUnauthorized(): void {
+  handleUnauthorized()
 }
 
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -107,11 +116,12 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getApiKey()}`,
+      ...authHeaders(),
       ...options?.headers,
     },
   })
   if (!res.ok) {
+    if (res.status === 401) onUnauthorized()
     // API の { error } 本文を拾って原因を出す（従来は status のみで「API error: 400」と原因不明だった）
     let detail = ''
     try {
@@ -656,6 +666,55 @@ export const api = {
       fetchApi<ApiResponse<null>>(`/api/staff/${id}`, { method: 'DELETE' }),
     regenerateKey: (id: string) =>
       fetchApi<ApiResponse<{ apiKey: string }>>(`/api/staff/${id}/regenerate-key`, { method: 'POST' }),
+    /**
+     * 管理者による救済コード発行（BOXIV）。メールが届かない人を口頭 / LINE で入れるための経路。
+     * 発行者名は必ず変更ログと Slack に残る。上位ロールは対象にできない。
+     */
+    issueLoginCode: (id: string) =>
+      fetchApi<ApiResponse<{
+        code: string
+        expiresAt: string
+        staff: { id: string; name: string; email: string | null; role: string }
+      }>>(`/api/staff/${id}/login-code`, { method: 'POST' }),
+  },
+  /** 管理画面のログイン（メール6桁コード・BOXIV） */
+  auth: {
+    /**
+     * コードを送る。宛先の存在にかかわらず常に同じ成功応答が返る
+     * （誰が管理画面に入れるかを外から列挙させないため）。
+     */
+    start: (email: string) =>
+      fetchApi<ApiResponse<{ message: string }>>('/api/auth/email/start', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      }),
+    /** コードを検証してセッションを受け取る。失敗理由は区別せず 401 のみ。 */
+    verify: (email: string, code: string) =>
+      fetchApi<ApiResponse<{
+        token: string
+        expiresAt: string
+        staff: { id: string; name: string; role: string; email: string | null; workArea: string | null }
+      }>>('/api/auth/email/verify', {
+        method: 'POST',
+        body: JSON.stringify({ email, code }),
+      }),
+    session: () =>
+      fetchApi<ApiResponse<{
+        staff: { id: string; name: string; role: string }
+        authVia: 'session' | 'api_key' | 'env_key' | null
+        sessionId: string | null
+        sessions: Array<{
+          id: string
+          issuedVia: string
+          userAgent: string | null
+          ip: string | null
+          createdAt: string
+          lastUsedAt: string | null
+          expiresAt: string
+        }>
+      }>>('/api/auth/session'),
+    logout: () =>
+      fetchApi<ApiResponse<{ revoked: number }>>('/api/auth/logout', { method: 'POST', body: '{}' }),
   },
   staffAvailability: {
     list: (params?: { staffId?: string; date?: string; dateFrom?: string; dateTo?: string; area?: string; includeBooked?: boolean }) => {
@@ -773,14 +832,16 @@ export const api = {
       filename: string | null
       size: number
     }>> {
-      const apiKey = getApiKey()
       const form = new FormData()
       form.append('file', file)
+      // multipart は Content-Type をブラウザに決めさせる（boundary が要る）ので
+      // fetchApi は通さない。認証ヘッダだけは共通の authHeaders() から取る。
       const res = await fetch(`${API_URL}/api/media`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}` },
+        headers: authHeaders(),
         body: form,
       })
+      if (res.status === 401) onUnauthorized()
       return res.json()
     },
   },
@@ -839,8 +900,9 @@ export const api = {
     // 画像未登録なら 404 → null。Bearer 認証が必要なので fetchApi ではなく素の fetch を使う。
     fetchImage: async (id: string): Promise<Blob | null> => {
       const res = await fetch(`${API_URL}/api/rich-menus/${id}/image-content`, {
-        headers: { Authorization: `Bearer ${getApiKey()}` },
+        headers: authHeaders(),
       })
+      if (res.status === 401) { onUnauthorized(); return null }
       if (res.status === 404) return null
       if (!res.ok) throw new Error(`fetchImage failed: ${res.status}`)
       return res.blob()
@@ -897,9 +959,10 @@ export const api = {
       }): Promise<ApiResponse<{ rebound: number }>> => {
         const res = await fetch(`${API_URL}/api/rich-menus/auto-switch/rebind`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getApiKey()}` },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify(data),
         })
+        if (res.status === 401) onUnauthorized()
         return res
           .json()
           .catch(() => ({ success: false, error: `API error: ${res.status}` })) as Promise<
