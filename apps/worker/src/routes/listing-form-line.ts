@@ -27,14 +27,16 @@
 import { Hono } from 'hono';
 import type { Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
+import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText } from '../services/slack.boxiv.js';
 import {
   packSignedState,
   isAllowedReturnTo,
   escapeHtml,
+  buildLinkCallbackUrl,
 } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import type { Env } from '../index.js';
@@ -101,8 +103,9 @@ listingFormLine.get('/listing-form/start', async (c) => {
   );
 
   // 共有 callback（フロー非依存の /link/callback）。LINE Login チャネルの Callback URL 登録が必要
-  // （test/prod 各 Worker の URL）。旧 /listing-form/callback は互換エイリアス（本番切替後に削除予定）。
-  const callbackUrl = `${workerBase}/link/callback`;
+  // （test/prod 各 Worker の URL）。未登録の環境は env LINE_LOGIN_CALLBACK_PATH で
+  // 登録済みパス（旧 /listing-form/callback 等）に退避する — 詳細は buildLinkCallbackUrl。
+  const callbackUrl = buildLinkCallbackUrl(c.env, workerBase);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
@@ -268,6 +271,14 @@ export const listingFormFlow: LinkFlow<ListingStateV1> = {
       });
     } catch (err) {
       console.error(`link callback: Notion linkSellerRow failed (form_id=${ctx.form_id})`, err);
+    }
+
+    // タグ「出品者」を付与。/chats のステータス選択（出品者DBの options）・出品者/購入者タブ・
+    // リッチメニュー自動切替がこのタグを見るので、automation 設定に依存せずコードで確定させる。
+    if (friend) {
+      await ensureSourceTag(c.env.DB, friend.id, 'seller').catch((err) =>
+        console.error(`link callback: ensureSourceTag failed (friend=${friend.id})`, err),
+      );
     }
 
     // BOXIV: 自動連携完了を `listing_link_completed` イベントとして発火（S-03 はデータ駆動）。
@@ -498,8 +509,8 @@ async function fireListingLinkCompleted(
     env.LINE_CHANNEL_ACCESS_TOKEN,
   );
   // 二重送信防止: 送信済みフラグを立てる（follow webhook 側はこれを見て再送しない）。
-  await markListingPriceNotified(env.DB, friend.id).catch((err) =>
-    console.error('listing-form callback: markListingPriceNotified failed', err),
+  await markLinkCompletedNotified(env.DB, friend.id, 'seller').catch((err) =>
+    console.error('listing-form callback: markLinkCompletedNotified failed', err),
   );
 }
 

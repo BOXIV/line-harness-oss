@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api, fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
@@ -10,21 +10,33 @@ import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
 import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import NotionLinkPicker from '@/components/chats/notion-link-picker'
-import { detectFriendSource } from '@/lib/friend-source'
+import { detectFriendSource, friendSourceRank, SOURCE_LABELS, type FriendSource } from '@/lib/friend-source'
 import { notionPillClass } from '@/lib/notion-color'
 import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 
 interface NotionFriendLink {
   source: 'seller' | 'buyer'
   pageId: string
-  /** 掲載ID */
+  /** 出品者: 掲載ID / 購入者: 商談ID */
   label: string | null
   realName: string | null
+  /** 出品タイプ（出品者のみ） */
   listingType?: string | null
-  /** オペレーターが掲載IDを明示選択した連携（他の掲載ID行のステータスは反映されない） */
+  /** 車両（購入者のみ） */
+  vehicle?: string | null
+  /** オペレーターが行を明示選択した連携（同じDBの他の行のステータスは反映されない） */
   pinned?: boolean
   candidateCount?: number
   linkedAt?: string
+}
+
+/** 出品者/購入者それぞれの連携。1人が両方を持ち得る。 */
+type NotionFriendLinks = Partial<Record<'seller' | 'buyer', NotionFriendLink>>
+
+/** ヘッダのピル表示。出品者は掲載ID、購入者は商談ID。 */
+const NOTION_PILL_PREFIX: Record<'seller' | 'buyer', string> = {
+  seller: '掲載',
+  buyer: '取引',
 }
 
 interface CustomerStatus {
@@ -41,6 +53,8 @@ interface Chat {
   managedName: string | null
   friendPictureUrl: string | null
   notion: NotionFriendLink | null
+  /** 分類タグ（出品者/購入者）から worker が解決した source。どちらのタグも無ければ null。 */
+  source: FriendSource
   customerStatus: CustomerStatus | null
   operatorId: string | null
   status: 'unread' | 'in_progress' | 'resolved'
@@ -73,6 +87,8 @@ interface ChatDetail extends Chat {
   friendName: string
   lineUserId: string | null
   friendPictureUrl: string | null
+  /** 出品者/購入者それぞれの連携。旧 worker と繋がったときは undefined。 */
+  notionLinks?: NotionFriendLinks
   messages?: ChatMessage[]
 }
 
@@ -237,6 +253,8 @@ export default function ChatsPage() {
   const [messageContent, setMessageContent] = useState('')
   const [sending, setSending] = useState(false)
   const [nameQuery, setNameQuery] = useState('')
+  // 出品者/購入者タブ。判定は分類タグ（chat.source）。'all' は出品者→購入者→未分類の順に並べる。
+  const [sourceTab, setSourceTab] = useState<'all' | 'seller' | 'buyer'>('all')
   // 表示名編集モーダル（管理名 managedName を「表示中の文字列」としてフル編集）
   const [editOpen, setEditOpen] = useState(false)
   const [editName, setEditName] = useState('')
@@ -251,7 +269,14 @@ export default function ChatsPage() {
   const [markingRead, setMarkingRead] = useState(false)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null)
+  // メッセージ欄がマウント／再マウントされた時点で最下部（最新）に寄せる保険。
+  // 下のスクロール effect は chatDetail.id / messages.length に依存するため、
+  // 内容が同じまま要素だけ作り直されると発火せず、最上部（最古）で止まってしまう。
+  const attachMessagesContainer = useCallback((el: HTMLDivElement | null) => {
+    messagesContainerRef.current = el
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
 
   useEffect(() => {
@@ -323,13 +348,17 @@ export default function ChatsPage() {
     }).catch(() => { /* non-blocking */ })
   }, [])
 
-  const loadChatDetail = useCallback(async (chatId: string, opts?: { silent?: boolean }) => {
+  // opts.silent: 「読み込み中...」に差し替えず（=メッセージ欄を unmount させず）に再取得する。
+  //   スピナー表示は要素を作り直すため、戻ってきた時にスクロールが最上部（最古）へ飛ぶ。
+  //   ポーリングと手動更新の両方で silent を使い、表示中の位置を保つ。
+  // opts.reportError: 手動操作起点のときだけ失敗を画面に出す（ポーリングは黙って次回に任せる）。
+  const loadChatDetail = useCallback(async (chatId: string, opts?: { silent?: boolean; reportError?: boolean }) => {
     if (!opts?.silent) setDetailLoading(true)
     try {
       const res = await api.chats.get(chatId)
       if (res.success) {
         const next = res.data as unknown as ChatDetail
-        // ポーリング(silent)時は内容に変化が無ければ同一参照を返して再描画を抑止する。
+        // silent 時は内容に変化が無ければ同一参照を返して再描画を抑止する。
         // → ちらつき防止 + スクロール位置（最新=最下部）を維持。新着があれば更新され、
         //   length 変化で下部スクロール effect が発火する。
         setChatDetail((prev) =>
@@ -337,7 +366,7 @@ export default function ChatsPage() {
         )
       }
     } catch {
-      if (!opts?.silent) setError('チャット詳細の読み込みに失敗しました。')
+      if (!opts?.silent || opts?.reportError) setError('チャット詳細の読み込みに失敗しました。')
     } finally {
       if (!opts?.silent) setDetailLoading(false)
     }
@@ -549,6 +578,43 @@ export default function ChatsPage() {
     }
   }
 
+  // 名前検索を適用したチャット。タブのバッジもこれを集計するので、
+  // 検索中はバッジと一覧の中身が一致する。
+  const searchedChats = useMemo(() => {
+    const q = nameQuery.trim().toLowerCase()
+    if (!q) return chats
+    return chats.filter((chat) => formatChatLabel(chat).toLowerCase().includes(q))
+  }, [chats, nameQuery])
+
+  // タブのバッジは「その区分の未読メッセージ数」。チャット行の赤バッジと同じ意味にして、
+  // 総件数と取り違えられないようにする（0 のときは出さない）。
+  const unreadCounts = useMemo(() => {
+    const sum = (list: Chat[]) => list.reduce((n, c) => n + (c.unreadCount ?? 0), 0)
+    return {
+      all: sum(searchedChats),
+      seller: sum(searchedChats.filter((c) => c.source === 'seller')),
+      buyer: sum(searchedChats.filter((c) => c.source === 'buyer')),
+    }
+  }, [searchedChats])
+
+  // 開いているチャットの出品者/購入者。一覧の source（worker がタグから解決・全件分ある）を
+  // 優先し、一覧に無いチャットだけ友だち一覧のタグから判定する。ステータス選択が
+  // 出品者DB/購入者DB のどちらの options を出すかに使う。
+  const detailSource = useMemo<FriendSource>(() => {
+    if (!chatDetail) return null
+    return (
+      chats.find((c) => c.id === chatDetail.id)?.source
+      ?? detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)
+    )
+  }, [chatDetail, chats, allFriends])
+
+  // 表示するチャット。タブ選択時はそのグループだけ、「全て」は出品者→購入者→未分類の順。
+  // Array#sort は安定なので、グループ内は元の並び（最終メッセージ日時の降順）が保たれる。
+  const visibleChats = useMemo(() => {
+    if (sourceTab !== 'all') return searchedChats.filter((c) => c.source === sourceTab)
+    return [...searchedChats].sort((a, b) => friendSourceRank(a.source) - friendSourceRank(b.source))
+  }, [searchedChats, sourceTab])
+
   return (
     <div>
       <Header
@@ -564,7 +630,9 @@ export default function ChatsPage() {
             <button
               onClick={() => {
                 loadChats()
-                if (selectedChatId) loadChatDetail(selectedChatId)
+                // silent = メッセージ欄を作り直さない → 表示中のスクロール位置を保つ。
+                // 新着があれば messages.length 変化で最下部へ自動スクロールする。
+                if (selectedChatId) loadChatDetail(selectedChatId, { silent: true, reportError: true })
               }}
               disabled={loading}
               className="px-3 py-2 min-h-[44px] text-sm font-medium text-gray-700 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-50 transition-colors"
@@ -608,6 +676,42 @@ export default function ChatsPage() {
             </select>
           </div>
 
+          {/* 出品者 / 購入者タブ（分類タグで判別。未分類は「全て」の末尾） */}
+          <div className="px-3 py-2 border-b border-gray-200" role="tablist" aria-label="友だちの区分">
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+              {([
+                { key: 'all', label: '全て' },
+                { key: 'seller', label: SOURCE_LABELS.seller },
+                { key: 'buyer', label: SOURCE_LABELS.buyer },
+              ] as const).map((tab) => {
+                const active = sourceTab === tab.key
+                const unread = unreadCounts[tab.key]
+                return (
+                  <button
+                    key={tab.key}
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => { setSourceTab(tab.key); setSelectedChatId(null) }}
+                    className={`flex-1 inline-flex items-center justify-center gap-1 px-2 py-1.5 min-h-[32px] rounded-md text-xs font-medium transition-colors ${
+                      active ? 'bg-white text-slate-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    {tab.label}
+                    {unread > 0 && (
+                      <span
+                        className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none"
+                        title={`未読 ${unread} 件`}
+                        aria-label={`未読 ${unread} 件`}
+                      >
+                        {unread > 99 ? '99+' : unread}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
           {/* 名前で検索 */}
           <div className="px-3 py-2 border-b border-gray-200">
             <input
@@ -637,13 +741,12 @@ export default function ChatsPage() {
               </div>
             ) : (
               <>
-                {chats
-                  .filter((chat) => {
-                    const q = nameQuery.trim().toLowerCase()
-                    if (!q) return true
-                    return formatChatLabel(chat).toLowerCase().includes(q)
-                  })
-                  .map((chat) => {
+                {visibleChats.length === 0 && (
+                  <p className="px-4 py-6 text-xs text-gray-400 text-center">
+                    該当するチャットはありません
+                  </p>
+                )}
+                {visibleChats.map((chat) => {
                   const isSelected = selectedChatId === chat.id
                   const label = formatChatLabel(chat)
                   return (
@@ -664,7 +767,21 @@ export default function ChatsPage() {
                         )}
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">{formatDatetime(chat.lastMessageAt)}</p>
+                          <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5">
+                            {/* 出品者/購入者は「全て」タブでも一目で分かるよう行内にも出す */}
+                            {chat.source && (
+                              <span
+                                className={`inline-flex items-center px-1.5 rounded text-[10px] font-medium leading-4 ${
+                                  chat.source === 'seller'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : 'bg-blue-100 text-blue-700'
+                                }`}
+                              >
+                                {SOURCE_LABELS[chat.source]}
+                              </span>
+                            )}
+                            {formatDatetime(chat.lastMessageAt)}
+                          </p>
                         </div>
                         {chat.customerStatus && (
                           <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${notionPillClass(chat.customerStatus.color)}`}>
@@ -751,22 +868,28 @@ export default function ChatsPage() {
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       <StatusPicker
                         friendId={chatDetail.friendId}
-                        preferredSource={detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)}
+                        preferredSource={detailSource}
                         compact
                       />
-                      {chatDetail.notion?.label && (
+                      {/* 出品者リンクと購入者リンクは両方持ち得るので、あるものを全て出す。
+                          旧 worker（notionLinks 無し）と繋がったときは notion 1件にフォールバック。 */}
+                      {(chatDetail.notionLinks
+                        ? (['seller', 'buyer'] as const).map((s) => chatDetail.notionLinks?.[s]).filter(Boolean)
+                        : [chatDetail.notion].filter(Boolean)
+                      ).map((link) => link && link.label && (
                         <span
+                          key={link.source}
                           className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600"
                           title={[
-                            chatDetail.notion.listingType,
-                            chatDetail.notion.pinned ? '掲載IDを選択して固定済み（他の掲載ID行のステータスは反映されません）' : '自動判定で連携中',
-                            (chatDetail.notion.candidateCount ?? 0) > 1 ? `候補 ${chatDetail.notion.candidateCount} 件` : null,
+                            link.source === 'seller' ? link.listingType : link.vehicle,
+                            link.pinned ? '行を選択して固定済み（同じDBの他の行のステータスは反映されません）' : '自動判定で連携中',
+                            (link.candidateCount ?? 0) > 1 ? `候補 ${link.candidateCount} 件` : null,
                           ].filter(Boolean).join(' / ')}
                         >
-                          {chatDetail.notion.source === 'seller' ? '掲載' : '取引'} {chatDetail.notion.label}
-                          {chatDetail.notion.pinned && <span className="ml-1">📌</span>}
+                          {NOTION_PILL_PREFIX[link.source]} {link.label}
+                          {link.pinned && <span className="ml-1">📌</span>}
                         </span>
-                      )}
+                      ))}
                       <RichMenuPicker friendId={chatDetail.friendId} />
                     </div>
                   </div>
@@ -839,7 +962,7 @@ export default function ChatsPage() {
               )}
 
               {/* Messages — LINE-style chat bubbles */}
-              <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
+              <div ref={attachMessagesContainer} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
                 {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
                   <div className="text-center py-8">
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>

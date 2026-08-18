@@ -14,12 +14,14 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path === '/api/affiliates/click' ||
     path.startsWith('/t/') ||
     path.startsWith('/r/') ||
+    path.startsWith('/rb/') || // 購入者催促 SMS の短縮リンク
     path.startsWith('/images/') ||
     path.startsWith('/media/') ||
     path.startsWith('/api/liff/') ||
     path.startsWith('/auth/') ||
     path.startsWith('/booking') ||
     path.startsWith('/listing-form/') ||
+    path.startsWith('/buyer-form/') || // 購入エントリー連携の入口（署名 state / 共有トークンで検証）
     path.startsWith('/app-listing/') || // アプリ出品連携の入口（署名 state で検証・認証ヘッダは付かない）
     path === '/link/callback' || // LINE Login 共有コールバック（署名 state で検証・認証ヘッダは付かない）
     path.startsWith('/diagnosis-form') ||

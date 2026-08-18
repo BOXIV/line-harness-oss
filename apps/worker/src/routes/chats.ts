@@ -1,8 +1,14 @@
 import { Hono } from 'hono';
 import { buildMessage } from '../services/step-delivery.js';
-import { linkFriendToNotion } from '../services/notion-friend-link.boxiv.js';
+import {
+  linkFriendToNotion,
+  readNotionLinks,
+  primaryLink,
+  type NotionFriendLinks,
+} from '../services/notion-friend-link.boxiv.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
+import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
 import {
   getOperators,
   getOperatorById,
@@ -111,25 +117,11 @@ chats.delete('/api/operators/:id', requireRole('owner','admin'), async (c) => {
 
 // ========== チャットCRUD ==========
 
-type FriendNotionLink = {
-  source: string;
-  pageId: string;
-  label: string | null;
-  realName: string | null;
-  listingType?: string | null;
-  /** オペレーターが掲載IDを明示選択した連携 */
-  pinned?: boolean;
-  candidateCount?: number;
-};
-
-function parseFriendNotion(metadataJson: unknown): FriendNotionLink | null {
-  if (typeof metadataJson !== 'string' || !metadataJson) return null;
-  try {
-    const meta = JSON.parse(metadataJson) as { notion?: FriendNotionLink };
-    return meta.notion ?? null;
-  } catch {
-    return null;
-  }
+// BOXIV: friends.metadata の Notion 連携（出品者DB / 購入者DB）。
+// `notion` は primary（出品者優先・無ければ購入者）の1件で、一覧の表示名に使う。
+// `notionLinks` は両方を持つ（チャット詳細のピル表示用）。
+function parseFriendNotionLinks(metadataJson: unknown): NotionFriendLinks {
+  return readNotionLinks(typeof metadataJson === 'string' ? metadataJson : null);
 }
 
 chats.get('/api/chats', async (c) => {
@@ -140,9 +132,21 @@ chats.get('/api/chats', async (c) => {
     const statusOptionId = c.req.query('statusOptionId') ?? undefined;
 
     // JOIN friends to get display_name / picture / metadata + current Notion-synced status.
+    //
+    // BOXIV: friend_source は分類タグ（出品者/購入者）から解決した source。
+    // 管理UIの「全て / 出品者 / 購入者」タブの絞り込みと並び順に使う。判定順は web 側
+    // friend-source.ts と同じ（出品者を先に見る）。タグ一覧を別途引かずに済むよう
+    // 相関サブクエリで1回に畳んでいる（タグ名は SOURCE_TAG_NAMES を bind）。
     let sql = `SELECT c.*, f.display_name, f.managed_name, f.picture_url, f.line_user_id, f.metadata,
                       so.id AS status_option_id, so.name AS status_option_name,
                       so.color AS status_option_color, so.source AS status_option_source,
+                      (SELECT CASE
+                                WHEN MAX(CASE WHEN t.name = ? THEN 1 ELSE 0 END) = 1 THEN 'seller'
+                                WHEN MAX(CASE WHEN t.name = ? THEN 1 ELSE 0 END) = 1 THEN 'buyer'
+                              END
+                         FROM friend_tags ft
+                         JOIN tags t ON t.id = ft.tag_id
+                        WHERE ft.friend_id = c.friend_id) AS friend_source,
                       (SELECT COUNT(*) FROM messages_log m
                          WHERE m.friend_id = c.friend_id AND m.direction = 'incoming'
                            AND (c.last_read_at IS NULL OR m.created_at > c.last_read_at)) AS unread_count
@@ -151,7 +155,8 @@ chats.get('/api/chats', async (c) => {
                LEFT JOIN friend_status_assignments fsa ON fsa.friend_id = f.id
                LEFT JOIN status_options so ON so.id = fsa.status_option_id`;
     const conditions: string[] = [];
-    const bindings: unknown[] = [];
+    // SELECT 側のプレースホルダが先に来るので、WHERE 条件より前に積む。
+    const bindings: unknown[] = [SOURCE_TAG_NAMES.seller, SOURCE_TAG_NAMES.buyer];
 
     if (status) {
       conditions.push('c.status = ?');
@@ -175,10 +180,7 @@ chats.get('/api/chats', async (c) => {
     }
     sql += ' ORDER BY c.last_message_at DESC';
 
-    const stmt = bindings.length > 0
-      ? c.env.DB.prepare(sql).bind(...bindings)
-      : c.env.DB.prepare(sql);
-    const result = await stmt.all();
+    const result = await c.env.DB.prepare(sql).bind(...bindings).all();
 
     return c.json({
       success: true,
@@ -188,7 +190,9 @@ chats.get('/api/chats', async (c) => {
         friendName: ch.display_name || '名前なし',
         managedName: ch.managed_name ?? null,
         friendPictureUrl: ch.picture_url || null,
-        notion: parseFriendNotion(ch.metadata),
+        notion: primaryLink(parseFriendNotionLinks(ch.metadata)),
+        // 分類タグ由来の出品者/購入者。どちらのタグも無ければ null（未分類）。
+        source: (ch.friend_source as 'seller' | 'buyer' | null) ?? null,
         customerStatus: ch.status_option_id
           ? {
               id: ch.status_option_id,
@@ -242,7 +246,9 @@ chats.get('/api/chats/:id', async (c) => {
         managedName: friend?.managed_name ?? null,
         lineUserId: friend?.line_user_id ?? null,
         friendPictureUrl: friend?.picture_url || null,
-        notion: parseFriendNotion(friend?.metadata ?? null),
+        notion: primaryLink(parseFriendNotionLinks(friend?.metadata ?? null)),
+        // 出品者/購入者それぞれの連携（両方持ち得る）。詳細ヘッダのピル表示に使う。
+        notionLinks: parseFriendNotionLinks(friend?.metadata ?? null),
         operatorId: item.operator_id,
         status: item.status,
         notes: item.notes,
@@ -418,13 +424,10 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     // チャットの最終メッセージ日時を更新。返信＝既読とみなし last_read_at も now にして未読数を 0 に戻す。
     await updateChat(c.env.DB, chatId, { status: 'in_progress', lastMessageAt: jstNow(), lastReadAt: jstNow() });
 
-    // BOXIV: Notion 出品者DB との初回自動連携 (metadata.notion 未設定のときだけ)
-    let needsNotionLink = true;
-    try {
-      const meta = friend.metadata ? JSON.parse(friend.metadata) : {};
-      if (meta.notion?.pageId) needsNotionLink = false;
-    } catch { /* malformed metadata — try anyway */ }
-    if (needsNotionLink) {
+    // BOXIV: Notion 出品者DB との初回自動連携（出品者リンク未設定のときだけ）。
+    // 購入者は1人が複数の商談行を持ち自動選択を誤ると反映先が固定されるため、自動連携しない
+    // （購入者リンクはチャットの Notion連携ピッカーからオペレーターが明示的に張る）。
+    if (!readNotionLinks(friend.metadata)['seller']?.pageId) {
       const promise = linkFriendToNotion(c.env.DB, c.env, friend.id, friend.line_user_id)
         .catch((err) => console.error('auto notion link failed for', friend.id, err));
       c.executionCtx.waitUntil(promise);

@@ -18,7 +18,8 @@ import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import { enqueueBurstNotify } from '../services/slack-burst-notify.boxiv.js';
-import { getLinkedEntryByLineUserId, hasListingPriceNotified, markListingPriceNotified } from '../services/listing-entry.boxiv.js';
+import { getLinkedEntryByLineUserId, hasLinkCompletedNotified, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
+import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { firstSentMessageId } from '../utils/quote.js';
 import type { Env } from '../index.js';
 
@@ -177,11 +178,13 @@ async function handleEvent(
         .bind(lineAccountId, friend.id).run();
     }
 
-    // BOXIV: 友だち追加完了フロー — 出品フォーム連携済みかで分岐する。
-    //   連携済み(listing_entries.status='linked') → 出品価格お知らせ(listing_link_completed)を送信。
+    // BOXIV: 友だち追加完了フロー — フォーム連携済みかで分岐する。
+    //   連携済み(listing_entries.status='linked') → 連携完了イベントを送信。
+    //     source='seller' → 出品価格お知らせ(listing_link_completed)＋タグ「出品者」付与
+    //     source='buyer'  → 購入エントリー完了(buyer_link_completed)＋タグ「購入者」付与
     //     OAuth 時に未フォロー/ブロックで送れなかった分の救済になり、後から友だち追加した人にも届く。
-    //     二重送信は friend.metadata フラグ(listing_price_notified)で防止。
-    //     価格お知らせ送信済みの「再フォロー」（ブロック解除/再追加）には挨拶(friend_add)を送る。
+    //     二重送信は friend.metadata フラグ(source ごとに別キー)で防止。
+    //     送信済みの「再フォロー」（ブロック解除/再追加）には挨拶(friend_add)を送る。
     //   未連携(ふつうのユーザ: フォーム未入力/広告登録のみ) → friend_add シナリオ + 挨拶。
     //     連携ボタン(bot_prompt=aggressive)の友だち追加では follow がコールバックの markLinked
     //     （連携書き込み）より数秒先行するため、新規フォローは 3 秒待って再判定してから挨拶する
@@ -192,10 +195,17 @@ async function handleEvent(
       linkedEntry = await getLinkedEntryByLineUserId(db, userId);
     }
     if (linkedEntry) {
-      if (!(await hasListingPriceNotified(db, friend.id))) {
+      const entrySource = linkedEntry.source === 'buyer' ? 'buyer' : 'seller';
+      if (!(await hasLinkCompletedNotified(db, friend.id, entrySource))) {
+        // 分類タグ（出品者/購入者）を先に付ける（automation の条件がタグを見ても間に合うように）。
+        // 台帳の source が確定している連携済み行なので誤タグにならない。
+        await ensureSourceTag(db, friend.id, entrySource).catch((err) =>
+          console.error(`follow: ensureSourceTag(${entrySource}) failed (friend=${friend.id})`, err),
+        );
+        const eventType = entrySource === 'buyer' ? 'buyer_link_completed' : 'listing_link_completed';
         await fireEvent(
           db,
-          'listing_link_completed',
+          eventType,
           {
             friendId: friend.id,
             eventData: { formId: linkedEntry.match_key, displayName: friend.display_name, formInputName: linkedEntry.name ?? null },
@@ -203,8 +213,8 @@ async function handleEvent(
           lineAccessToken,
           lineAccountId,
         );
-        await markListingPriceNotified(db, friend.id);
-        console.log(`follow: 連携済み出品ユーザへ listing_link_completed を送信 friend=${friend.id} match_key=${linkedEntry.match_key}`);
+        await markLinkCompletedNotified(db, friend.id, entrySource);
+        console.log(`follow: 連携済みユーザへ ${eventType} を送信 friend=${friend.id} match_key=${linkedEntry.match_key}`);
       } else if (isReFollow) {
         // ブロック解除/再追加: 価格お知らせは送信済みなので、挨拶で再開を迎える。
         await fireEvent(

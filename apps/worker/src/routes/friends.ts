@@ -71,7 +71,7 @@ function serializeTag(row: DbTag) {
 }
 
 // GET /api/friends - list with pagination
-friends.get('/api/friends', async (c) => {
+friends.get('/api/friends', requireRole('owner','admin','manager'), async (c) => {
   try {
     const limit = Number(c.req.query('limit') ?? '50');
     const offset = Number(c.req.query('offset') ?? '0');
@@ -104,13 +104,19 @@ friends.get('/api/friends', async (c) => {
       // 「{notion.label} {notion.realName} (nickname)」になる。display_name(=nickname) だけだと
       // 例「10472 〇〇（〇〇）」の「10472」(=notion.label) や Notion実名(realName) が引っかからないため、
       // それらも検索対象に含める（metadata 内 JSON は json_extract で参照）。
+      // 出品者リンクと購入者リンクは両方持ち得るので notionLinks.* も対象にする
+      // （$.notion は primary の写しなので、もう片方は notionLinks でしか引けない）。
       conditions.push(
         '(f.display_name LIKE ? OR f.managed_name LIKE ? OR f.line_user_id LIKE ? OR f.id LIKE ?'
         + " OR json_extract(f.metadata, '$.notion.label') LIKE ?"
-        + " OR json_extract(f.metadata, '$.notion.realName') LIKE ?)",
+        + " OR json_extract(f.metadata, '$.notion.realName') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.seller.label') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.seller.realName') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.buyer.label') LIKE ?"
+        + " OR json_extract(f.metadata, '$.notionLinks.buyer.realName') LIKE ?)",
       );
       const like = `%${search}%`;
-      binds.push(like, like, like, like, like, like);
+      binds.push(like, like, like, like, like, like, like, like, like, like);
     }
     // Metadata filters: ?metadata.key=value (e.g. ?metadata.monthly_cost=〜100万円)
     const url = new URL(c.req.url);
@@ -159,7 +165,7 @@ friends.get('/api/friends', async (c) => {
 });
 
 // GET /api/friends/count - friend count (must be before /:id)
-friends.get('/api/friends/count', async (c) => {
+friends.get('/api/friends/count', requireRole('owner','admin','manager'), async (c) => {
   try {
     const lineAccountId = c.req.query('lineAccountId');
     let count: number;
@@ -178,7 +184,7 @@ friends.get('/api/friends/count', async (c) => {
 });
 
 // GET /api/friends/ref-stats - ref code attribution stats
-friends.get('/api/friends/ref-stats', async (c) => {
+friends.get('/api/friends/ref-stats', requireRole('owner','admin','manager'), async (c) => {
   try {
     const lineAccountId = c.req.query('lineAccountId');
     const where = lineAccountId ? 'WHERE line_account_id = ?' : 'WHERE ref_code IS NOT NULL';
@@ -204,7 +210,7 @@ friends.get('/api/friends/ref-stats', async (c) => {
 });
 
 // GET /api/friends/:id - get single friend with tags
-friends.get('/api/friends/:id', async (c) => {
+friends.get('/api/friends/:id', requireRole('owner','admin','manager'), async (c) => {
   try {
     const id = c.req.param('id');
     const db = c.env.DB;
@@ -361,7 +367,7 @@ friends.put('/api/friends/:id/metadata', requireRole('owner','admin','manager'),
 });
 
 // GET /api/friends/:id/messages - get message history
-friends.get('/api/friends/:id/messages', async (c) => {
+friends.get('/api/friends/:id/messages', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
     const result = await c.env.DB

@@ -22,9 +22,10 @@
 
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { packSignedState, escapeHtml } from '../services/line-login.boxiv.js';
+import { packSignedState, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { linkSellerRowByBoxivId } from '../services/listing-notion.boxiv.js';
+import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { slackPost, buildSlackCard } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
 
@@ -81,7 +82,8 @@ appListing.get('/app-listing/start', async (c) => {
     c.env.SESSION_SECRET,
   );
 
-  const callbackUrl = `${workerBase}/link/callback`;
+  // listing_form と同じ共有 callback。登録済みパスは env で切替可（buildLinkCallbackUrl 参照）。
+  const callbackUrl = buildLinkCallbackUrl(c.env, workerBase);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
   loginUrl.searchParams.set('client_id', c.env.LINE_LOGIN_CHANNEL_ID);
@@ -129,10 +131,11 @@ appListing.get('/app-listing/done', (c) => {
 
 /**
  * アプリ出品フローの連携確定処理。共有 callback（link-callback.boxiv.ts）から呼ばれる。
- * friend は共通前半で登録済み。ここでは Notion 連携（boxivID キー）＋アプリへのスキーム redirect。
+ * friend は共通前半で登録済み。ここでは Notion 連携（boxivID キー）＋タグ「出品者」＋
+ * アプリへのスキーム redirect。
  */
 export const appListingFlow: LinkFlow<AppListingStateV1> = {
-  async complete(c, ctx, profile, followStatus, _friend) {
+  async complete(c, ctx, profile, followStatus, friend) {
     // boxivID キーで Notion 出品者DB の LINE User ID を update（行は submit 起票済みが前提）。非致命。
     try {
       const pageId = await linkSellerRowByBoxivId(c.env, {
@@ -165,6 +168,14 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
       }
     } catch (err) {
       console.error(`app-listing: Notion lineUserId update failed (boxiv_id=${ctx.boxiv_id})`, err);
+    }
+
+    // タグ「出品者」を付与。アプリ出品も出品者なのでフォーム出品と同じ分類にする
+    // （/chats の出品者/購入者タブ・ステータス選択・リッチメニュー自動切替が見る）。非致命。
+    if (friend) {
+      await ensureSourceTag(c.env.DB, friend.id, 'seller').catch((err) =>
+        console.error(`app-listing: ensureSourceTag failed (friend=${friend.id})`, err),
+      );
     }
 
     // TODO(#68/Q4): アプリ用の連携完了イベント（app_listing_link_completed）を発火し、

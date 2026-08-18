@@ -11,10 +11,11 @@
 // 友だちが接触した時に webhook の resolveOrCreateFriend が埋める（lazy）。
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const friendImport = new Hono<Env>();
 
-friendImport.post('/api/friends/import-followers', async (c) => {
+friendImport.post('/api/friends/import-followers', requireRole('owner','admin','manager'), async (c) => {
   const token = c.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) return c.json({ success: false, error: 'LINE_CHANNEL_ACCESS_TOKEN not configured' }, 500);
 
@@ -65,7 +66,7 @@ friendImport.post('/api/friends/import-followers', async (c) => {
 // 表示名/画像/ステータスを埋める。id カーソルで前進（失敗者は NULL のまま次回再試行可）。
 //   body: { cursor?: string (last id), limit?: number(<=100) }
 //   returns: { processed, updated, failed, nextCursor, done }
-friendImport.post('/api/friends/backfill-profiles', async (c) => {
+friendImport.post('/api/friends/backfill-profiles', requireRole('owner','admin','manager'), async (c) => {
   const token = c.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) return c.json({ success: false, error: 'LINE_CHANNEL_ACCESS_TOKEN not configured' }, 500);
 
