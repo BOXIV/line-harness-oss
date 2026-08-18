@@ -14,6 +14,7 @@ import {
   getStaffById,
   hitThrottle,
   invalidateLoginChallenges,
+  normalizeEmail,
   peekThrottle,
   isValidEmail,
   listStaffSessions,
@@ -24,6 +25,7 @@ import {
   DEFAULT_CODE_TTL_MINUTES,
   DEFAULT_ISSUE_MAX,
   DEFAULT_ISSUE_MAX_PER_IP,
+  DEFAULT_ISSUE_MAX_PER_IP_TOTAL,
   DEFAULT_ISSUE_WINDOW_MINUTES,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_SESSION_TTL_HOURS,
@@ -56,6 +58,10 @@ function config(env: Env['Bindings']) {
     maxAttempts: intEnv(env.ADMIN_LOGIN_MAX_ATTEMPTS, DEFAULT_MAX_ATTEMPTS),
     issueMax: intEnv(env.ADMIN_LOGIN_ISSUE_MAX, DEFAULT_ISSUE_MAX),
     issueMaxPerIp: intEnv(env.ADMIN_LOGIN_ISSUE_MAX_PER_IP, DEFAULT_ISSUE_MAX_PER_IP),
+    issueMaxPerIpTotal: intEnv(
+      env.ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL,
+      DEFAULT_ISSUE_MAX_PER_IP_TOTAL,
+    ),
     issueWindowMinutes: intEnv(env.ADMIN_LOGIN_ISSUE_WINDOW_MINUTES, DEFAULT_ISSUE_WINDOW_MINUTES),
     failMaxPerIp: intEnv(env.ADMIN_LOGIN_FAIL_MAX_PER_IP, DEFAULT_VERIFY_FAIL_MAX_PER_IP),
     failWindowMinutes: intEnv(
@@ -111,6 +117,35 @@ async function ipThrottle(
     return { allowed: true, count: 0 };
   }
   return hitThrottle(c.env.DB, throttleBucket(kind, ip, scope), max, windowMinutes);
+}
+
+/**
+ * 「その窓で最初の 1 回だけ」通報する。
+ *
+ * 上限 1 の別 bucket をラッチとして使う。hitThrottle は単一 UPSERT なので、
+ * 同時実行でも allowed=true になるのは 1 本だけ。窓と一緒に自己リセットする。
+ * `count === max` の完全一致で判定すると、同時実行でカウントが飛んだときに
+ * 通報が出ず、しかも「出なかったこと」自体が観測できない。
+ */
+async function notifyOncePerWindow(
+  c: { env: Env['Bindings'] },
+  kind: 'login_issue' | 'login_fail',
+  ip: string | null,
+  windowMinutes: number,
+  text: string,
+): Promise<void> {
+  const latch = await ipThrottle(c, kind, ip, 1, windowMinutes, 'alert');
+  if (latch.allowed) await notifySlack(c.env, text);
+}
+
+/** メールアドレスをスロットルの鍵にするためのハッシュ。生アドレスを D1 の bucket 名に残さない。 */
+async function emailScope(email: string): Promise<string> {
+  const data = new TextEncoder().encode(normalizeEmail(email));
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest))
+    .slice(0, 16)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 /**
@@ -223,32 +258,75 @@ authEmail.post('/api/auth/email/start', async (c) => {
 
     const ip = clientIp(c.req.raw.headers);
 
-    // ここから先は「構文は妥当」。登録の有無は一切漏らさず、常に同じ応答を返す。
+    // ── スロットルは 4 段。いずれも **スタッフ解決の前** に置く ────────────────
+    // ここが要点: 鍵にスタッフ ID を使うと、未登録アドレスでは bucket が作られず
+    // 「6 回目が 429 なら登録済み」という列挙オラクルになる。
+    // 登録の有無で挙動が変わらないよう、メール由来の鍵はハッシュで作り、
+    // スタッフを引く前に判定する。
+
+    // (1) 外枠: プレフィクスのみ。メールアドレスに依らないので列挙に使えない。
+    //     内側 (2) の鍵はメール由来なので、アドレスを変えるだけで auth_throttle の行を
+    //     無限に作れてしまう。その行数を縛るのがこの層の役目。
+    const outerQuota = await ipThrottle(
+      c,
+      'login_issue',
+      ip,
+      cfg.issueMaxPerIpTotal,
+      cfg.issueWindowMinutes,
+    );
+    if (!outerQuota.allowed) {
+      console.warn('[admin-auth] start: プレフィクス単位の外枠上限', ip, outerQuota.count);
+      // 外枠は「絶対に届かないはずの水準」として置いている。ここに当たるのは
+      // 攻撃か、使われ方が想定と違うか、見積もりが間違っているかのいずれかで、
+      // どれであっても運用側が知らないまま利用者が弾かれ続けるのが最悪。必ず通報する。
+      await notifyOncePerWindow(
+        c,
+        'login_issue',
+        ip,
+        cfg.issueWindowMinutes,
+        `:rotating_light: 管理画面ログインのコード発行が同一プレフィクスで外枠上限に達しました` +
+          `（${cfg.issueWindowMinutes}分で${outerQuota.count}回 / 上限${cfg.issueMaxPerIpTotal}）。` +
+          `攻撃か、想定していない使われ方か、上限の見積もり誤りのいずれかです。`,
+      );
+      return c.json(
+        {
+          success: false,
+          error: `認証コードの送信要求が多すぎます。${cfg.issueWindowMinutes}分ほど待ってから、もう一度お試しください`,
+        },
+        429,
+      );
+    }
+
+    // (2) (プレフィクス, 宛先メールのハッシュ) 単位。
+    //     第三者が特定アドレスの発行枠を食い潰すのを防ぐ。宛先ごとに別枠なので、
+    //     出口を共有している同僚同士は潰し合わない。
+    const perEmailQuota = await ipThrottle(
+      c,
+      'login_issue',
+      ip,
+      cfg.issueMaxPerIp,
+      cfg.issueWindowMinutes,
+      await emailScope(email),
+    );
+    if (!perEmailQuota.allowed) {
+      console.warn('[admin-auth] start: プレフィクス×宛先単位の発行上限', ip, perEmailQuota.count);
+      return c.json(
+        {
+          success: false,
+          error: `認証コードの送信要求が多すぎます。${cfg.issueWindowMinutes}分ほど待ってから、もう一度お試しください`,
+        },
+        429,
+      );
+    }
+
+    // (3) ここでスタッフを引く。登録の有無は一切漏らさず、常に同じ応答を返す。
     const staff = await findActiveStaffByEmail(c.env.DB, email);
     if (!staff) {
       console.log('[admin-auth] start: 未登録または重複アドレス', maskEmail(email));
       return c.json(GENERIC_START_RESPONSE);
     }
 
-    // 発行上限は (試行元 IP, スタッフ) の組で数える。
-    // この口は認証不要なので、アカウント単位だけで数えると「メールアドレスを知っている
-    // だけの第三者」が本人の発行枠を食い潰して『コードを送る』を無言で殺せる。
-    // 一方 IP だけで括ると、出口 IP を共有している職場やモバイル回線で、
-    // 別々の人が自分宛のコードを取っているだけで枠を食い合う。組で数えるのが正しい粒度。
-    const ipQuota = await ipThrottle(
-      c,
-      'login_issue',
-      ip,
-      cfg.issueMaxPerIp,
-      cfg.issueWindowMinutes,
-      staff.id,
-    );
-    if (!ipQuota.allowed) {
-      console.warn('[admin-auth] start: IP×スタッフ単位の発行上限', ip, ipQuota.count);
-      return c.json(GENERIC_START_RESPONSE);
-    }
-
-    // アカウント単位の発行上限（IP 単位の上限を通り抜けた分に対する保険）。
+    // (4) アカウント単位の発行上限（複数プレフィクスから来た分に対する保険）。
     const recent = await countRecentChallenges(c.env.DB, staff.id, cfg.issueWindowMinutes);
     if (recent >= cfg.issueMax) {
       await notifySlack(
@@ -354,41 +432,44 @@ authEmail.post('/api/auth/email/verify', async (c) => {
     }
 
     const staff = await findActiveStaffByEmail(c.env.DB, email);
-    if (!staff) return c.json(FAIL, 401);
 
-    const result = await verifyAndConsumeLoginCode(c.env.DB, staff.id, code, {
-      staffId: staff.id,
-      // 管理者発行コードで入った事実はセッションにも残す（監査ログだけに頼らない）。
-      issuedVia: 'email_code',
-      userAgent: c.req.header('user-agent') ?? null,
-      ip,
-      ttlHours: cfg.sessionTtlHours,
-    });
-    if (!result.ok) {
+    // ⚠️ 失敗の加算は **未登録アドレスでも同じだけ行う**。
+    //    登録済みのときだけ加算していると、同じアドレスに上限回数投げたとき
+    //    「登録済みなら 429・未登録なら 401」で確定的に判別できてしまう
+    //    （start 側にあったのと同じ構造の列挙オラクル）。
+    const result = staff
+      ? await verifyAndConsumeLoginCode(
+          c.env.DB,
+          staff.id,
+          code,
+          {
+            staffId: staff.id,
+            // 管理者発行コードで入った事実はセッションにも残す（監査ログだけに頼らない）。
+            issuedVia: 'email_code',
+            userAgent: c.req.header('user-agent') ?? null,
+            ip,
+            ttlHours: cfg.sessionTtlHours,
+          },
+          cfg.issueMax,
+        )
+      : null;
+
+    if (!staff || !result || !result.ok) {
       // 失敗したときだけ IP 枠を消費する。
       const failed = await ipThrottle(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes);
       if (failed.count >= cfg.failMaxPerIp) {
-        // ⚠️ `=== max` の完全一致で判定してはいけない。同時実行でカウントが飛ぶと
-        //    通報が出ず、しかも「出なかったこと」自体が観測できない
-        //    ＝「総当たりを検知できるはず」が静かに効かなくなる。
-        //    かといって `>= max` で毎回鳴らすとスパムになるので、
-        //    別 bucket を上限 1 のラッチとして使い「その窓で最初の 1 回」だけ鳴らす。
-        //    hitThrottle は単一 UPSERT なので、同時実行でも allowed=true は 1 本だけ。
-        const alertLatch = await ipThrottle(
+        await notifyOncePerWindow(
           c,
           'login_fail',
           ip,
-          1,
           cfg.failWindowMinutes,
-          'alert',
+          `:lock: 管理画面ログインの失敗が同一プレフィクスで上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
         );
-        if (alertLatch.allowed) {
-          await notifySlack(
-            c.env,
-            `:lock: 管理画面ログインの失敗が同一 IP で上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
-          );
-        }
       }
+      // 未登録アドレスは「誰の失敗か」が無いので監査ログには残さない
+      // （残すと actor 不明の行が無限に増え、しかもアドレスを記録すると PII になる）。
+      // `result.ok` はこの分岐では常に false だが、型を失敗側へ絞るために条件へ含める。
+      if (!staff || !result || result.ok) return c.json(FAIL, 401);
       await auditLogin(c.env, {
         action: 'auth.login_failed',
         summary: '管理画面へのログインに失敗',

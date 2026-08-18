@@ -76,6 +76,12 @@ CREATE INDEX IF NOT EXISTS idx_staff_sessions_expires
 -- 現在の audit_log は actor_id/actor_name/actor_role しか持たないため、
 -- 「本人のセッション」「共有 API キー」「env の最上位キー」の区別が付かない。
 -- 旧方式を止める判断（直近7日で旧キー経由が0件か）を実データで下すために必要。
+-- ⚠️ SQLite の ADD COLUMN は IF NOT EXISTS を取れないので、この 2 行だけ冪等ではない。
+--    1 行目の適用後・2 行目の適用前に落ちると、履歴に 919 が記録されないまま
+--    再実行が duplicate column で止まり、以降の promote が一切進まなくなる。
+--    復旧: worker の POST /api/admin/reconcile-schema で列を揃え（PRAGMA 確認つきで冪等）、
+--          _boxiv_migrations に 919 を手で記録してから promote を再開する。
+--          reconcile 側の EXPECTED にもこの 2 列を登録してある。
 ALTER TABLE audit_log ADD COLUMN actor_via TEXT;         -- 'session' / 'api_key' / 'env_key'
 ALTER TABLE audit_log ADD COLUMN actor_session_id TEXT;  -- staff_sessions.id（session 経路のみ）
 

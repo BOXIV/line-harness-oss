@@ -32,6 +32,11 @@ export default defineConfig({
           LINE_LOGIN_CHANNEL_ID: '0000000001',
           LINE_LOGIN_CHANNEL_SECRET: 'test-login-secret',
           WORKER_URL: 'https://worker.example.test',
+          // 発行の外枠上限をテスト用に下げる。既定 100 のままだと、先に
+          // middleware/rate-limit.ts の無認証枠（100 req/60s・IP 単位）が 429 を返し、
+          // 「外枠が効いた」ように見えて実際は別の層を測ってしまう
+          // （実際に一度そのテストを書いてしまい、外枠を無効化しても緑のままだった）。
+          ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL: '10',
         },
       },
     }),

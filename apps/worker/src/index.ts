@@ -75,6 +75,7 @@ import { reconcileNotionStatuses } from './services/notion-status-sync.boxiv.js'
 // 監査ログ（管理操作の変更証跡, BOXIV）
 import { auditLogMiddleware } from './middleware/audit-log.boxiv.js';
 import { auditLogs } from './routes/audit-logs.boxiv.js';
+import { pruneExpiredStaffAuthRows } from '@line-crm/db';
 // 管理画面ログイン（メール6桁コード, BOXIV）
 import { authEmail } from './routes/auth-email.boxiv.js';
 
@@ -117,7 +118,8 @@ export type Env = {
     ADMIN_LOGIN_CODE_TTL_MINUTES?: string;  // default: 10
     ADMIN_LOGIN_MAX_ATTEMPTS?: string;      // default: 5（1発行あたりのコード検証回数の上限）
     ADMIN_LOGIN_ISSUE_MAX?: string;         // default: 10（アカウント単位。第三者に消費されうるので緩め）
-    ADMIN_LOGIN_ISSUE_MAX_PER_IP?: string;  // default: 5（試行元 IP 単位。実質的な抑止はこちら）
+    ADMIN_LOGIN_ISSUE_MAX_PER_IP?: string;  // default: 5（試行元プレフィクス × 宛先メール単位）
+    ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL?: string; // default: 100（試行元プレフィクスのみの外枠。行数を縛る）
     ADMIN_LOGIN_ISSUE_WINDOW_MINUTES?: string; // default: 15
     ADMIN_LOGIN_FAIL_MAX_PER_IP?: string;   // default: 10（コード検証失敗の IP 単位上限）
     ADMIN_LOGIN_FAIL_WINDOW_MINUTES?: string;  // default: 15
@@ -391,6 +393,15 @@ async function scheduled(
   // BOXIV: 12時間ごと(UTC 00:00 / 12:00 = JST 09:00 / 21:00) — Notion → D1 ステータス reconcile
   if (minute === 0 && hour % 12 === 0) {
     jobs.push(reconcileNotionStatuses(env.DB, env));
+    // 管理画面ログインの期限切れ行を掃除する（migration 919 / 920）。
+    // staff_login_challenges / staff_sessions / auth_throttle は放っておくと増え続ける。
+    // 特に auth_throttle は **無認証の口（/api/auth/email/*）から行が作られる**ので、
+    // 掃除しないと第三者が一方的に肥大させられる書込経路になる。
+    jobs.push(
+      pruneExpiredStaffAuthRows(env.DB).catch((e) =>
+        console.error('scheduled: pruneExpiredStaffAuthRows failed', e),
+      ),
+    );
   }
 
   await Promise.allSettled(jobs);

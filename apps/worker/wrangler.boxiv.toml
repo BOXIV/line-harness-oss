@@ -32,6 +32,31 @@ not_found_handling = "single-page-application"
 #   この行を削除して正 URL(/link/callback)へ戻す。callback は新旧どちらでも受けられる。
 LINE_LOGIN_CALLBACK_PATH = "/listing-form/callback"
 
+# ── 管理画面ログイン（メール認証コード）のスロットル ─────────────────────────
+# ⚠️ [vars] は test / prod で共有される。deploy-boxiv-test.mjs が上書きするのは
+#    name / d1_databases / r2_buckets の 3 つだけで、vars は素通りする。
+#    環境ごとに違う値が要るもの（ADMIN_BASE_URL）は vars ではなく wrangler secret に置くこと。
+#    スロットルの数値は両環境で同じであるべきなので vars が正しく、読み出せる利点もそのまま効く。
+#
+# 明示するのはこの 1 つだけ。「絞りすぎると共有回線の締め出しが別の形で戻る」性質があり、
+# 実運用で噛んだときにデプロイだけで緩められるよう、既定値でも書いておく。
+# 100 の根拠: 正規の最悪ケース（9 名が同じプレフィクスから各自 5 回まで再送）= 45 回の 2 倍。
+# IPv6 は /64 に丸めるのでオフィス全体が 1 枠を共有する点に注意。
+ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL = "100"
+
+# 以下は **既定のままにすることを検討したうえで選んでいる**（未設定＝未検討ではない）。
+# 変えたくなったらここに書き足す。既定値は packages/db/src/staff-auth.ts。
+#   ADMIN_LOGIN_CODE_TTL_MINUTES     = "10"   コードの有効期限
+#   ADMIN_LOGIN_MAX_ATTEMPTS         = "5"    1 チャレンジあたりの検証試行上限
+#   ADMIN_LOGIN_ISSUE_MAX            = "10"   アカウント単位の発行上限
+#   ADMIN_LOGIN_ISSUE_MAX_PER_IP     = "5"    (プレフィクス × 宛先メール) 単位の発行上限
+#   ADMIN_LOGIN_ISSUE_WINDOW_MINUTES = "15"   発行系の窓
+#   ADMIN_LOGIN_FAIL_MAX_PER_IP      = "20"   プレフィクス単位の検証失敗上限
+#     ⚠️ ADMIN_LOGIN_ISSUE_MAX_PER_IP × ADMIN_LOGIN_MAX_ATTEMPTS (=25) より小さく保つこと。
+#        25 以上にすると、第三者が本人の発行できるコードを全部焼けるようになる。
+#   ADMIN_LOGIN_FAIL_WINDOW_MINUTES  = "15"   検証失敗の窓
+#   ADMIN_SESSION_TTL_HOURS          = "168"  セッションの絶対期限（7日 / iOS Safari の保存期間に合わせる）
+
 [[d1_databases]]
 binding = "DB"
 database_name = "line-connect"

@@ -27,6 +27,12 @@ const EXPECTED: Record<string, Array<[string, string]>> = {
   notification_rules: [['line_account_id', 'TEXT']],
   messages_log: [['delivery_type', 'TEXT'], ['slack_notified_at', 'TEXT'], ['status', 'TEXT']],
   ref_tracking: [['fbclid', 'TEXT'], ['gclid', 'TEXT'], ['twclid', 'TEXT'], ['ttclid', 'TEXT'], ['utm_source', 'TEXT'], ['utm_medium', 'TEXT'], ['utm_campaign', 'TEXT'], ['user_agent', 'TEXT'], ['ip_address', 'TEXT']],
+  // migration 919（管理画面のメールログイン）。SQLite の ADD COLUMN は IF NOT EXISTS を
+  // 取れないため、919 が 1 列目適用後・2 列目適用前に落ちると、履歴に 919 が記録されないまま
+  // 再実行が duplicate column で止まり、以降の promote が一切進まなくなる。
+  // その状態からの復旧経路がここ（PRAGMA で存在確認するので冪等）。
+  // 復旧手順: この endpoint を叩いて列を揃える → _boxiv_migrations に 919 を手で記録 → promote 再開。
+  audit_log: [['actor_via', 'TEXT'], ['actor_session_id', 'TEXT']],
 };
 
 schemaReconcile.post('/api/admin/reconcile-schema', requireRole('owner','admin'), async (c) => {

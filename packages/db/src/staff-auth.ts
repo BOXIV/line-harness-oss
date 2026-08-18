@@ -49,6 +49,22 @@ export const DEFAULT_ISSUE_WINDOW_MINUTES = 15;
  * (IP, スタッフ) の組で数えるのが正しい粒度。
  */
 export const DEFAULT_ISSUE_MAX_PER_IP = 5;
+
+/**
+ * 同一プレフィクスからのコード発行回数の**外枠**上限（メールアドレスに依らない）。
+ *
+ * 内側の (プレフィクス, メールハッシュ) 上限だけだと、鍵がメール由来なので
+ * 攻撃者がアドレスを変えるだけで auth_throttle の行を無限に作れる
+ * （1 アドレスにつき内側上限までは素通しなので手前で止まらない）。行数を縛るのがこの層の役目。
+ *
+ * メールアドレスと無関係に効くので、登録の有無で挙動が変わらない＝列挙に使えない。
+ *
+ * 100 の根拠: 正規の最悪ケースは「9 名が同じプレフィクスから各自 5 回まで再送」= 45 回。
+ * その 2 倍の余裕を取る。IPv6 は /64 に丸めるのでオフィス全体が 1 枠を共有する点に注意
+ * （絞りすぎると共有回線の締め出しが別の形で戻るため、env で緩められるようにしてある）。
+ */
+export const DEFAULT_ISSUE_MAX_PER_IP_TOTAL = 100;
+
 /**
  * 同一 IP からのコード検証**失敗**回数の上限と窓（分）。総当たりの実質的な上限はここ。
  *
@@ -59,14 +75,25 @@ export const DEFAULT_ISSUE_MAX_PER_IP = 5;
  *
  * 20 / 15分は、10^6 通り・TTL 10分のコードに対して無視できる試行数でありながら、
  * 共有 IP で数人が打ち間違えても届かない水準。
+ *
+ * ⚠️ **不変条件: この値は DEFAULT_ISSUE_MAX_PER_IP × DEFAULT_MAX_ATTEMPTS より小さく保つこと。**
+ * 攻撃者は 1 本のコードを焼くのに DEFAULT_MAX_ATTEMPTS(5) 回の失敗を要するので、
+ * この窓で焼けるコード数は floor(20 / 5) = 4 本。一方で本人は自分のプレフィクスから
+ * DEFAULT_ISSUE_MAX_PER_IP(5) 本を発行できる。4 < 5 なので本人には必ず 1 本残る。
+ * ここを 25 以上に上げると 5 本以上焼けるようになり、
+ * 「本人が何度取り直してもログインできない」= 一度塞いだ封じが復活する。
  */
 export const DEFAULT_VERIFY_FAIL_MAX_PER_IP = 20;
 export const DEFAULT_VERIFY_FAIL_WINDOW_MINUTES = 15;
 
 /**
- * verify が一度に照合する「生きているチャレンジ」の上限。
+ * verify が一度に照合する「生きているチャレンジ」の既定上限。
+ *
  * 発行上限から導出する。別々の定数にすると、発行上限を上げたときに
  * 古い方のコードが照合対象から静かに落ちる。
+ * env で ADMIN_LOGIN_ISSUE_MAX を上書きした場合は、呼び出し側が
+ * verifyAndConsumeLoginCode の candidateLimit で同じ値を渡すこと
+ * （定数のままだと上書き分に追随しない）。
  */
 const CANDIDATE_LIMIT = DEFAULT_ISSUE_MAX;
 
@@ -208,18 +235,86 @@ export async function hitThrottle(
  * スロットル bucket 名。scope を渡すと (IP, scope) の組で数える。
  * 発行上限は scope=staffId で括る（IP だけだと共有回線の別人同士が枠を食い合う）。
  */
+/**
+ * IPv6 を /64 に丸める。IPv4 はそのまま返す。
+ *
+ * **これが無いと IP 単位の制御が全部無意味になる。**
+ * cf-connecting-ip は実際に IPv6 で届き（実測: `240a:61:30d0:...:2d93`）、
+ * IPv6 は家庭回線でも VPS でも **1 契約に /64 が割り当たるのが標準**。
+ * アドレス 1 個ずつを鍵にすると、攻撃者は 2^64 個の送信元を自由に使えるので、
+ * 失敗上限も発行上限も素通りし、上限到達の Slack 通報は永久に鳴らない。
+ *
+ * /64 を選ぶ理由: モバイルは端末ごとに /64 が割り当たるので同僚同士が潰し合わない。
+ * オフィスの IPv6 は 1 つの /64 を共有するが、それは IPv4 の NAT 共有と同じ状況で、
+ * (プレフィクス, メールハッシュ) の鍵が既に同僚同士の潰し合いを防いでいる。
+ *
+ * ⚠️ /48 以上を持つ相手はプレフィクスを変えて回避できる。これは多層防御の 1 枚であって、
+ *    単独で総当たりを止めるものではない（実際の推測回数はチャレンジ単位の attempts で縛る）。
+ */
+export function normalizeThrottleHost(ip: string | null | undefined): string {
+  const raw = String(ip ?? '').trim();
+  if (!raw) return 'unknown';
+
+  // ゾーンインデックス（fe80::1%eth0）は落とす
+  const head = raw.split('%')[0]!;
+  if (!head.includes(':')) return head; // IPv4
+
+  // IPv4 射影/互換アドレス（::ffff:192.0.2.1）は IPv4 として扱う。
+  // /64 に丸めると全部 0:0:0:0 になり、無関係な相手が 1 つの枠を共有してしまう。
+  const mapped = /^(?:::ffff:|::)((?:\d{1,3}\.){3}\d{1,3})$/i.exec(head);
+  if (mapped) return mapped[1]!;
+
+  const groups = expandIpv6(head);
+  if (!groups) return head; // 解釈できない形はそのまま（丸めないほうが安全側）
+  return `${groups.slice(0, 4).join(':')}::/64`;
+}
+
+/** IPv6 を 8 グループへ展開する。解釈できなければ null。 */
+function expandIpv6(input: string): string[] | null {
+  let s = input.toLowerCase();
+
+  // 末尾に IPv4 記法を持つ形（2001:db8::192.0.2.1）は 2 グループの 16 進へ直す
+  const tail = /((?:\d{1,3}\.){3}\d{1,3})$/.exec(s);
+  if (tail) {
+    const octets = tail[1]!.split('.').map((n) => Number(n));
+    if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const hex = `${((octets[0]! << 8) | octets[1]!).toString(16)}:${((octets[2]! << 8) | octets[3]!).toString(16)}`;
+    s = s.slice(0, s.length - tail[1]!.length) + hex;
+  }
+
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+
+  const toGroups = (part: string) => (part ? part.split(':').filter((x) => x !== '') : []);
+  const left = toGroups(halves[0] ?? '');
+  const right = halves.length === 2 ? toGroups(halves[1] ?? '') : [];
+
+  let groups: string[];
+  if (halves.length === 1) {
+    if (left.length !== 8) return null;
+    groups = left;
+  } else {
+    const fill = 8 - left.length - right.length;
+    if (fill < 0) return null;
+    groups = [...left, ...Array(fill).fill('0'), ...right];
+  }
+
+  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  // 先頭 0 を落として正規化（2001:0db8 と 2001:db8 が別の鍵にならないように）
+  return groups.map((g) => g.replace(/^0+(?=.)/, ''));
+}
+
 export function throttleBucket(
   kind: 'login_issue' | 'login_fail',
   ip: string | null | undefined,
   scope?: string | null,
 ): string {
   // 区切りに `|` を使う。`:` にしてはいけない — IPv6 アドレスは `:` を含むため
-  // （実測: cf-connecting-ip が 240a:61:...:2d93 で届く）、
   // `login_fail:ip:<ipv6>:<scope>` 形式だと scope が 16 進として読める語のとき
   // 「末尾がその語の IPv6 アドレス」と衝突しうる。`alert` は 16 進ではないので
   // 今は無事だが、将来 `beef` `face` のような scope を足した瞬間に静かに壊れる。
   // `|` は IP にもスタッフ ID(UUID) にも現れないので、この推論自体が不要になる。
-  const host = ip && ip.trim() ? ip.trim() : 'unknown';
+  const host = normalizeThrottleHost(ip);
   return scope ? `${kind}|${host}|${scope}` : `${kind}|${host}`;
 }
 
@@ -373,6 +468,7 @@ export async function verifyAndConsumeLoginCode(
   staffId: string,
   code: string,
   session?: CreateSessionInput,
+  candidateLimit: number = CANDIDATE_LIMIT,
 ): Promise<VerifyCodeResult> {
   const now = jstNow();
 
@@ -383,7 +479,7 @@ export async function verifyAndConsumeLoginCode(
         ORDER BY created_at DESC
         LIMIT ?`,
     )
-    .bind(staffId, now, CANDIDATE_LIMIT)
+    .bind(staffId, now, Math.max(candidateLimit, 1))
     .all<StaffLoginChallengeRow>();
 
   const rows = candidates.results ?? [];

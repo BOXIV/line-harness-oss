@@ -691,6 +691,7 @@ describe('スロットル bucket の区切り文字', () => {
     // 区切りを `:` にすると `login_fail:ip:<ipv6>:<scope>` が
     // 「末尾が <scope> の IPv6」と読めてしまい、scope が 16 進の語のとき衝突する。
     const V6 = '240a:61:30d0:86a1:a9e6:dfbd:23a6:beef';
+    const PREFIX = '240a:61:30d0:86a1::/64'; // /64 に丸めた鍵
     for (let i = 0; i < 3; i++) await verify(emailOf(STAFF.id), '000006', V6);
 
     const rows = await testDb
@@ -699,9 +700,117 @@ describe('スロットル bucket の区切り文字', () => {
     const names = rows.results.map((r) => r.bucket);
 
     // 素の失敗カウンタだけが立ち、scope 付き（alert）と混ざっていない
-    expect(names).toContain(`login_fail|${V6}`);
-    expect(names).not.toContain(`login_fail|${V6}|alert`);
-    // 区切りで割ると必ず 2 要素（kind と host）に分かれる
-    expect(`login_fail|${V6}`.split('|')).toHaveLength(2);
+    expect(names).toContain(`login_fail|${PREFIX}`);
+    expect(names).not.toContain(`login_fail|${PREFIX}|alert`);
+    // 区切りで割ると必ず 2 要素（kind と host）に分かれる。
+    // `:` を区切りにしていると、末尾が 16 進として読める語（beef）のとき
+    // 「scope 付き bucket」と区別が付かなくなる。
+    expect(`login_fail|${PREFIX}`.split('|')).toHaveLength(2);
+  });
+});
+
+describe('IPv6 でも IP 単位の制御が効くこと（migration 920 / /64 正規化）', () => {
+  it('同一 /64 の別アドレスは失敗枠を共有する（アドレスを変えても迂回できない）', async () => {
+    const email = emailOf(STAFF.id);
+    // 毎回違う IPv6 アドレスを使うが、すべて同じ /64。
+    for (let i = 0; i < 20; i++) {
+      const v6 = `2001:db8:aaaa:1:0:0:0:${(i + 1).toString(16)}`;
+      expect((await verify(email, '000007', v6)).status, v6).toBe(401);
+    }
+    // 21 個目も同じ /64 なので上限に当たる。
+    // 丸めが無いと 2^64 個のアドレスで永久に迂回できていた。
+    expect((await verify(email, '000007', '2001:db8:aaaa:1:ffff::ffff')).status).toBe(429);
+
+    const buckets = await testDb
+      .prepare("SELECT bucket, count FROM auth_throttle WHERE bucket LIKE 'login_fail|2001:db8:aaaa:1%'")
+      .all<{ bucket: string; count: number }>();
+    // 失敗カウンタ + 通報ラッチの 2 本だけ（アドレスごとに増えていない）
+    expect(buckets.results.map((b) => b.bucket).sort()).toEqual([
+      'login_fail|2001:db8:aaaa:1::/64',
+      'login_fail|2001:db8:aaaa:1::/64|alert',
+    ]);
+  });
+
+  it('/64 が違えば別枠（モバイルの端末ごと割り当てで同僚が潰し合わない）', async () => {
+    const email = emailOf(STAFF.id);
+    for (let i = 0; i < 21; i++) {
+      await verify(email, '000008', '2001:db8:bbbb:1::1');
+    }
+    expect((await verify(email, '000008', '2001:db8:bbbb:1::2')).status).toBe(429);
+    // 隣の /64 は無傷
+    expect((await verify(email, '000008', '2001:db8:bbbb:2::1')).status).toBe(401);
+  });
+});
+
+describe('start / verify の応答が登録の有無で変わらないこと（列挙オラクル）', () => {
+  const UNKNOWN = 'definitely-not-registered@example.test';
+
+  it('verify: 上限に達するまでの回数と応答が登録済み/未登録で一致する', async () => {
+    // 未登録アドレスでも失敗として加算されること。
+    // 加算がスタッフ解決の後ろにあると「登録済みなら429・未登録なら401」で判別できてしまう。
+    const IP_A = '198.51.100.60';
+    const IP_B = '198.51.100.61';
+
+    const known: number[] = [];
+    const unknown: number[] = [];
+    for (let i = 0; i < 21; i++) known.push((await verify(emailOf(STAFF.id), '000009', IP_A)).status);
+    for (let i = 0; i < 21; i++) unknown.push((await verify(UNKNOWN, '000009', IP_B)).status);
+
+    expect(unknown).toEqual(known);
+    expect(known[20]).toBe(429);
+  });
+
+  it('start: 上限に達するまでの回数と応答が登録済み/未登録で一致する', async () => {
+    const IP_A = '198.51.100.70';
+    const IP_B = '198.51.100.71';
+
+    const known: number[] = [];
+    const unknown: number[] = [];
+    // 既定 ADMIN_LOGIN_ISSUE_MAX_PER_IP = 5
+    for (let i = 0; i < 6; i++) known.push((await start(emailOf(STAFF.id), IP_A)).status);
+    for (let i = 0; i < 6; i++) unknown.push((await start(UNKNOWN, IP_B)).status);
+
+    expect(unknown).toEqual(known);
+    expect(known[5]).toBe(429);
+    // 未登録アドレスでも bucket は作られる（＝挙動が一致する）
+    const row = await testDb
+      .prepare("SELECT COUNT(*) AS n FROM auth_throttle WHERE bucket LIKE ?")
+      .bind(`login_issue|${IP_B}|%`)
+      .first<{ n: number }>();
+    expect(row!.n).toBe(1);
+  });
+
+  it('start: 外枠（プレフィクスのみ）は宛先を変えても効く', async () => {
+    const IP = '198.51.100.80';
+    // 宛先を毎回変えると内側 (プレフィクス, 宛先) 枠には当たらないが、外枠には当たる。
+    // 外枠が無いと、アドレスを変えるだけで auth_throttle の行を無限に作れる。
+    //
+    // ⚠️ 外枠はテスト用に 10 へ下げている（vitest.config.ts）。既定 100 のままだと
+    //    先に middleware/rate-limit.ts の無認証枠（100 req/60s）が 429 を返し、
+    //    外枠を無効化しても緑のままになる＝何も測っていないテストになる。
+    let throttledAt: number | null = null;
+    for (let i = 0; i < 14; i++) {
+      const res = await start(`enum-${i}@example.test`, IP);
+      if (res.status === 429) {
+        throttledAt = i + 1;
+        break;
+      }
+    }
+    expect(throttledAt, '外枠 10 で止まる').toBe(11);
+
+    // 行数が外枠で縛られていること（宛先ごとに 1 行ずつ・上限で打ち止め）。
+    // 通報ラッチ（|alert）は宛先由来ではないので除いて数える。
+    const rows = await testDb
+      .prepare("SELECT COUNT(*) AS n FROM auth_throttle WHERE bucket LIKE ? AND bucket NOT LIKE '%|alert'")
+      .bind(`login_issue|${IP}|%`)
+      .first<{ n: number }>();
+    expect(rows!.n, '宛先ごとの行は外枠で打ち止め').toBeLessThanOrEqual(10);
+
+    // 外枠に当たったことは運用に見えている必要がある（通報ラッチが立つ）
+    const latch = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_issue|${IP}|alert`)
+      .first<{ count: number }>();
+    expect(latch?.count, '外枠到達は Slack 通報される').toBe(1);
   });
 });
