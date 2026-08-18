@@ -44,6 +44,19 @@ function LoginForm() {
     }
   }, [params])
 
+  /**
+   * fetchApi は `API error: <status>: <サーバのメッセージ>` を throw する。
+   * 400（入力の形が違う）はサーバの文言をそのまま出す — ここを握り潰して
+   * 「送信に失敗しました」等の汎用文言に丸めると、入力の誤りを直しようがなくなる。
+   * 401（資格情報が合わない）は理由を明かさない汎用文言に倒す。
+   */
+  function messageFor(err: unknown, fallback: string): string {
+    const text = err instanceof Error ? err.message : ''
+    const m = /^API error: (\d{3})(?:: (.*))?$/s.exec(text)
+    if (m && m[1] === '400' && m[2]) return m[2]
+    return fallback
+  }
+
   /** ログイン後の着地先。撮影スタッフはシフト画面、それ以外はダッシュボード。 */
   function landingFor(role: string): string {
     const next = params.get('next')
@@ -61,8 +74,8 @@ function LoginForm() {
       setStep('code')
       // Worker は宛先の存在を明かさないので、画面もそれに合わせた文言にする。
       setNotice('登録されているメールアドレスであれば、認証コードを送信しました。')
-    } catch {
-      setError('送信に失敗しました。時間をおいて再度お試しください。')
+    } catch (err) {
+      setError(messageFor(err, '送信に失敗しました。時間をおいて再度お試しください。'))
     } finally {
       setLoading(false)
     }
@@ -81,9 +94,10 @@ function LoginForm() {
       setSession(res.data.token)
       setStaffProfile(res.data.staff.name, res.data.staff.role)
       router.push(landingFor(res.data.staff.role))
-    } catch {
-      // fetchApi は非 2xx を throw する。理由は区別しない（総当たりの手がかりを与えない）。
-      setError('メールアドレスまたは認証コードが正しくありません')
+    } catch (err) {
+      // 401（コード不一致 / 期限切れ / 未登録）は理由を区別しない＝総当たりの手がかりを与えない。
+      // 400（入力の形が違う）だけはサーバの文言を出す。
+      setError(messageFor(err, 'メールアドレスまたは認証コードが正しくありません'))
     } finally {
       setLoading(false)
     }

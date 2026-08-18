@@ -73,9 +73,38 @@ describe('POST /api/auth/email/start', () => {
     expect(await unknown.json()).toEqual(await known.json());
   });
 
-  it('形式不正でも同じ 200（存在判定に使わせない）', async () => {
-    const res = await start('not-an-email');
-    expect(res.status).toBe(200);
+  // ── 「送ったつもりで届かない」を作らないための 400 ──────────────────────────
+  // 汎用 200 を返してよいのは「構文として妥当なアドレスが来た」ときだけ。
+  // 空文字や not-an-email が登録済みアドレスであることはあり得ないので、
+  // 隠して得るものが無い。一方で隠すと、フロントがフィールド名を間違えたときに
+  // 画面が「メールを送りました」に化けて、利用者は永遠に来ないメールを待つ。
+  // 403 が「APIキーが正しくありません」に化けた 3 日間の締め出しと同じ型。
+  it('本文が JSON でなければ 400', async () => {
+    const res = await request('/api/auth/email/start', null, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not-json',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('email が無ければ 400', async () => {
+    const res = await request('/api/auth/email/start', null, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('email が空文字なら 400', async () => {
+    expect((await start('   ')).status).toBe(400);
+  });
+
+  it('メール形式が不正なら 400', async () => {
+    for (const email of ['not-an-email', 'a@b', 'a b@example.com', 'a@b.com,c@d.com']) {
+      expect((await start(email)).status, email).toBe(400);
+    }
   });
 
   it('無効化されたスタッフにはコードを出さない', async () => {
@@ -153,10 +182,18 @@ describe('POST /api/auth/email/verify', () => {
     expect(await a.json()).toEqual(await b.json());
   });
 
-  it('6 桁でないコードは 401（形式で弾く）', async () => {
+  it('入力の「形」が違うときは 401 ではなく 400（コード間違いに化けさせない）', async () => {
     for (const code of ['', '12345', '1234567', 'abcdef']) {
-      expect((await verify(emailOf(STAFF.id), code)).status, code).toBe(401);
+      expect((await verify(emailOf(STAFF.id), code)).status, code).toBe(400);
     }
+    expect((await verify('not-an-email', '123456')).status).toBe(400);
+
+    const nonJson = await request('/api/auth/email/verify', null, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not-json',
+    });
+    expect(nonJson.status).toBe(400);
   });
 
   it('ハイフンや空白入りのコードは正規化して受け付ける', async () => {

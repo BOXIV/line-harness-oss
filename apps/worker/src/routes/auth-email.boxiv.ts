@@ -124,18 +124,34 @@ const GENERIC_START_RESPONSE = {
   data: { message: '登録されているメールアドレスであれば、認証コードを送信しました。' },
 };
 
+/**
+ * 汎用レスポンスを返してよいのは「**構文として妥当なメールアドレス**が来たが、
+ * それが登録済みかどうかは明かさない」場合だけ。
+ *
+ * 本文が壊れている / email が無い / 空 / 形式不正 は 400 で明確に落とす。
+ * これらが登録済みアドレスであることはあり得ないので隠して得るものが無く、
+ * 一方で隠すと「フロントがフィールド名を間違えた」ような不具合が
+ * 画面上『メールを送りました』に化けて、利用者は永遠に来ないメールを待つことになる。
+ * 403 が「APIキーが正しくありません」に化けて 3 日間の締め出しに気づけなかったのと同じ型。
+ */
+const BAD_REQUEST = {
+  success: false,
+  error: 'メールアドレスの形式が正しくありません',
+} as const;
+
 // ---------------------------------------------------------------------------
 // POST /api/auth/email/start — コードを発行してメールで送る（認証不要）
 // ---------------------------------------------------------------------------
 authEmail.post('/api/auth/email/start', async (c) => {
   const cfg = config(c.env);
   try {
-    const body = await c.req.json<{ email?: string }>().catch(() => ({}) as { email?: string });
+    const body = await c.req.json<{ email?: string }>().catch(() => null);
+    // 本文が JSON でない / email が無い / 空 / 形式不正 → 400（BAD_REQUEST のコメント参照）
+    if (!body || typeof body !== 'object') return c.json(BAD_REQUEST, 400);
     const email = String(body.email ?? '').trim();
+    if (!email || !isValidEmail(email)) return c.json(BAD_REQUEST, 400);
 
-    // 形式が不正でも「送ったかもしれない」と同じ応答にする（存在判定に使わせない）。
-    if (!email || !isValidEmail(email)) return c.json(GENERIC_START_RESPONSE);
-
+    // ここから先は「構文は妥当」。登録の有無は一切漏らさず、常に同じ応答を返す。
     const staff = await findActiveStaffByEmail(c.env.DB, email);
     if (!staff) {
       console.log('[admin-auth] start: 未登録または重複アドレス', maskEmail(email));
@@ -183,9 +199,14 @@ authEmail.post('/api/auth/email/start', async (c) => {
 
     return c.json(GENERIC_START_RESPONSE);
   } catch (err) {
+    // ここに来るのは D1 / SendGrid 側の想定外。汎用 200 で握り潰すと
+    // 「送ったつもりで誰にも届いていない」状態が画面にもログにも残らない。
     console.error('POST /api/auth/email/start error:', err);
-    // 失敗しても中身を漏らさない。
-    return c.json(GENERIC_START_RESPONSE);
+    await alertAdminAuth(
+      c.env,
+      `ログインコードの発行処理が失敗: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return c.json({ success: false, error: '認証コードの送信に失敗しました' }, 500);
   }
 });
 
@@ -197,15 +218,25 @@ authEmail.post('/api/auth/email/verify', async (c) => {
   const FAIL = { success: false, error: 'メールアドレスまたは認証コードが正しくありません' } as const;
 
   try {
-    const body = await c.req
-      .json<{ email?: string; code?: string }>()
-      .catch(() => ({}) as { email?: string; code?: string });
+    const body = await c.req.json<{ email?: string; code?: string }>().catch(() => null);
+    // 「形が違う」は 400、「資格情報が合わない」は 401 と分ける。
+    // 401 に混ぜると、フロントの不具合（フィールド名の取り違え等）が
+    // 「コードが間違っています」に化けて、利用者は正しいコードを打ち直し続ける。
+    if (!body || typeof body !== 'object') {
+      return c.json({ success: false, error: 'リクエストの形式が正しくありません' }, 400);
+    }
     const email = String(body.email ?? '').trim();
     const code = String(body.code ?? '').replace(/[\s-]/g, '');
 
-    if (!email || !isValidEmail(email) || !/^\d{6}$/.test(code)) {
-      return c.json(FAIL, 401);
+    if (!email || !isValidEmail(email)) {
+      return c.json({ success: false, error: 'メールアドレスの形式が正しくありません' }, 400);
     }
+    if (!/^\d{6}$/.test(code)) {
+      return c.json({ success: false, error: '認証コードは6桁の数字です' }, 400);
+    }
+
+    // ここから先は入力の形が正しい。失敗理由は一切区別せず 401 のみを返す
+    // （未登録アドレスと間違ったコードを外から見分けられないようにする）。
 
     const staff = await findActiveStaffByEmail(c.env.DB, email);
     if (!staff) return c.json(FAIL, 401);
