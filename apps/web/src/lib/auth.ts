@@ -147,12 +147,23 @@ export function handleUnauthorized(): void {
  * next はセッション切れからの復帰先として実際に使っている（auth-guard.tsx / handleUnauthorized）
  * ので、機能ごと消すのではなく URL として解決して検証する。
  */
-export function safeNextPath(next: string | null | undefined): string | null {
-  if (!next || typeof window === 'undefined') return null
+export function safeNextPath(
+  next: string | null | undefined,
+  origin?: string,
+): string | null {
+  const base = origin ?? (typeof window !== 'undefined' ? window.location.origin : null)
+  if (!next || !base) return null
   try {
-    const url = new URL(next, window.location.origin)
-    if (url.origin !== window.location.origin) return null
-    return url.pathname + url.search + url.hash
+    const url = new URL(next, base)
+    if (url.origin !== base) return null
+    const path = url.pathname + url.search + url.hash
+    // ⚠️ origin 検査だけでは足りない。攻撃者が **自オリジンを前置** すると
+    //    （`https://<自オリジン>//evil.com`）origin は一致するのに pathname が
+    //    `//evil.com` になり、router.push に渡すとプロトコル相対 URL として
+    //    外部サイトへハードナビゲーションする。`/\/evil.com` でも `///evil.com` になる。
+    //    権限部として読み直されうる形をここで弾く。
+    if (!path.startsWith('/') || path.startsWith('//')) return null
+    return path
   } catch {
     return null
   }
