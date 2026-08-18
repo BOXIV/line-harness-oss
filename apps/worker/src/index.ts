@@ -238,7 +238,7 @@ app.route('/', staffAvailability);
 
 // 出品フォーム LINE 連携 (BOXIV)
 app.route('/', listingFormLine);
-// アプリ出品 LINE 連携（/app-listing/start・BOXIV）
+// アプリ出品 LINE 連携（/app-listing/start ＋ 完了ページ /app-listing/done・BOXIV）
 app.route('/', appListing);
 // 購入エントリー LINE 連携（/buyer-form/*・BOXIV）
 app.route('/', buyerFormLine);
