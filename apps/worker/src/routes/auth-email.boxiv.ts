@@ -379,10 +379,22 @@ authEmail.post('/api/staff/:id/login-code', requireRole('owner', 'manager'), asy
       return c.json({ success: false, error: '無効化されたスタッフにはコードを発行できません' }, 400);
     }
 
-    // 上位ロールを対象にできない。ここを開けると manager → owner の権限昇格になる。
-    if (actor.role === 'manager' && target.role !== 'staff' && target.role !== 'manager') {
+    // マネージャーが発行できる相手は撮影スタッフのみ。routes/staff.ts の既存 4 箇所
+    // （作成 / 編集 / 削除 / キー再生成）が全て「manager は staff のみ」で揃っているので、
+    // ここだけ広げない。
+    //
+    // 特に **キー再生成との対比**が決定的:
+    //   - 他 manager のキー再生成 = 禁止。しかも実行すれば相手のログインが壊れて本人が気づく
+    //   - 他 manager への救済コード発行 = ここを開けると許可。しかも相手のログインを壊さず
+    //     本人は気づかない
+    // より強くて、より静かな経路を、既存が禁じている相手に対して開けることになる。
+    // 可用性のための機能が既存の権限境界を後ろから崩す形なので、staff のみに閉じる。
+    //
+    // 対価: manager が入れなくなった場合の救済は owner（env API_KEY 保管者）に限られる。
+    // 「manager 同士のなりすまし」を塞ぐ対価として受け入れる。
+    if (actor.role === 'manager' && target.role !== 'staff') {
       return c.json(
-        { success: false, error: 'マネージャーは撮影スタッフとマネージャーにのみ発行できます' },
+        { success: false, error: 'マネージャーは撮影スタッフにのみ発行できます' },
         403,
       );
     }

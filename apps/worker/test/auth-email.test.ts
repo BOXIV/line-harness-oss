@@ -333,14 +333,50 @@ describe('POST /api/staff/:id/login-code — 管理者による救済発行', ()
     expect(row?.target_id).toBe(STAFF.id);
   });
 
-  it('manager は admin / owner に発行できない（権限昇格になる）', async () => {
-    for (const target of [STAFF_FIXTURES.admin, STAFF_FIXTURES.owner]) {
-      const res = await requestAs('manager', `/api/staff/${target.id}/login-code`, {
-        method: 'POST',
-        body: '{}',
-      });
-      expect(res.status, target.id).toBe(403);
+  it('manager が発行できるのは撮影スタッフのみ（他 manager / admin / owner は 403）', async () => {
+    // routes/staff.ts の作成 / 編集 / 削除 / キー再生成が全て「manager は staff のみ」で
+    // 揃っているので、ここだけ広げない。特に他 manager のキー再生成は禁止されているのに
+    // 救済コードだけ許すと、より強くて（なりすませる）より静かな（本人が気づかない）経路を
+    // 既存が禁じている相手に開くことになる。
+    // 「別の manager」を実際に作って試す。自分自身を対象にするだけでは
+    // 「同格へのなりすまし」を試したことにならない。
+    const other = await request('/api/staff', ENV_API_KEY, {
+      method: 'POST',
+      body: JSON.stringify({
+        name: '別マネージャー',
+        email: 'phase3-other-manager@example.test',
+        role: 'manager',
+      }),
+    });
+    const otherId = (await other.json<{ data: { id: string } }>()).data.id;
+
+    try {
+      const targets = [
+        { id: otherId, label: '別の manager' },
+        { id: STAFF_FIXTURES.manager.id, label: '自分自身(manager)' },
+        { id: STAFF_FIXTURES.admin.id, label: 'admin' },
+        { id: STAFF_FIXTURES.owner.id, label: 'owner' },
+      ];
+      for (const target of targets) {
+        const res = await requestAs('manager', `/api/staff/${target.id}/login-code`, {
+          method: 'POST',
+          body: '{}',
+        });
+        expect(res.status, target.label).toBe(403);
+      }
+    } finally {
+      await request(`/api/staff/${otherId}`, ENV_API_KEY, { method: 'DELETE' });
     }
+  });
+
+  it('参考: manager は他 manager のキー再生成もできない（既存の権限境界と揃っていること）', async () => {
+    // この 403 と上のテストが揃っていることが要点。片方だけ開いていると、
+    // より強くて静かな経路（救済コード）が既存の禁止（キー再生成）を迂回する。
+    const res = await requestAs('manager', `/api/staff/${STAFF_FIXTURES.admin.id}/regenerate-key`, {
+      method: 'POST',
+      body: '{}',
+    });
+    expect(res.status).toBe(403);
   });
 
   it('撮影スタッフ自身は誰にも発行できない', async () => {
