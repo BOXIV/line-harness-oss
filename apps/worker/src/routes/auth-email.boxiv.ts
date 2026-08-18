@@ -77,6 +77,13 @@ function config(env: Env['Bindings']) {
  *
  * 記録用（challenge.request_ip / session.ip）も同じ値を使う。自称値を証跡に残すと、
  * 後から調べたときに実在しない IP を追いかけることになる。
+ *
+ * ⚠️ null を返したときスロットルは fail-open する（ipThrottle 参照）。この安全性は
+ *    「これらのエンドポイントが Cloudflare のエッジ経由でしか到達されない」ことに依存する。
+ *    現在 wrangler.boxiv.toml の binding は D1 と R2 のみで、service binding も
+ *    Worker 自身による内部 fetch も無いので、エッジを経由しない到達経路が存在しない。
+ *    **service binding / Queue / 内部 self-fetch を足すときはここを再考すること**
+ *    （静かに fail-open 側へ到達可能になる）。
  */
 function clientIp(headers: Headers): string | null {
   return headers.get('cf-connecting-ip');
@@ -360,11 +367,27 @@ authEmail.post('/api/auth/email/verify', async (c) => {
     if (!result.ok) {
       // 失敗したときだけ IP 枠を消費する。
       const failed = await ipThrottle(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes);
-      if (failed.count === cfg.failMaxPerIp) {
-        await notifySlack(
-          c.env,
-          `:lock: 管理画面ログインの失敗が同一 IP で上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
+      if (failed.count >= cfg.failMaxPerIp) {
+        // ⚠️ `=== max` の完全一致で判定してはいけない。同時実行でカウントが飛ぶと
+        //    通報が出ず、しかも「出なかったこと」自体が観測できない
+        //    ＝「総当たりを検知できるはず」が静かに効かなくなる。
+        //    かといって `>= max` で毎回鳴らすとスパムになるので、
+        //    別 bucket を上限 1 のラッチとして使い「その窓で最初の 1 回」だけ鳴らす。
+        //    hitThrottle は単一 UPSERT なので、同時実行でも allowed=true は 1 本だけ。
+        const alertLatch = await ipThrottle(
+          c,
+          'login_fail',
+          ip,
+          1,
+          cfg.failWindowMinutes,
+          'alert',
         );
+        if (alertLatch.allowed) {
+          await notifySlack(
+            c.env,
+            `:lock: 管理画面ログインの失敗が同一 IP で上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
+          );
+        }
       }
       await auditLogin(c.env, {
         action: 'auth.login_failed',

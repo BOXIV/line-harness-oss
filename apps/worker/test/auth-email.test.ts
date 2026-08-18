@@ -536,7 +536,7 @@ describe('第三者がメールアドレスだけでログインを封じられ�
 
     const throttled = await testDb
       .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
-      .bind(`login_fail:ip:${ATTACKER}`)
+      .bind(`login_fail|${ATTACKER}`)
       .first<{ count: number }>();
     expect(throttled!.count).toBe(20);
 
@@ -587,7 +587,7 @@ describe('第三者がメールアドレスだけでログインを封じられ�
 
     const bucket = await testDb
       .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
-      .bind(`login_fail:ip:${OFFICE}`)
+      .bind(`login_fail|${OFFICE}`)
       .first<{ count: number }>();
     expect(bucket).toBeNull();
   });
@@ -606,7 +606,7 @@ describe('スロットルの鍵は詐称できないヘッダだけを使う', (
     }
     const before = await testDb
       .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
-      .bind(`login_fail:ip:${IP}`)
+      .bind(`login_fail|${IP}`)
       .first<{ count: number }>();
     expect(before!.count).toBe(20);
 
@@ -624,9 +624,84 @@ describe('スロットルの鍵は詐称できないヘッダだけを使う', (
       });
     }
 
+    // 自称 XFF の値を含む bucket が 1 つも増えていないこと。
+    // （通報ラッチ `login_fail|<ip>|alert` も同じ接頭辞なので、
+    //   bucket 一覧の完全一致ではなく「詐称値が鍵に混ざっていないか」で見る）
     const buckets = await testDb
-      .prepare("SELECT bucket FROM auth_throttle WHERE bucket LIKE 'login_fail:%'")
+      .prepare("SELECT bucket FROM auth_throttle WHERE bucket LIKE 'login_fail|%'")
       .all<{ bucket: string }>();
-    expect(buckets.results.map((b) => b.bucket)).toEqual([`login_fail:ip:${IP}`]);
+    const names = buckets.results.map((b) => b.bucket);
+    for (const spoof of ['1.2.3.4', '5.6.7.8', '9.10.11.12']) {
+      expect(names.some((n) => n.includes(spoof)), `${spoof} が鍵に混ざっていない`).toBe(false);
+    }
+    expect(names).toContain(`login_fail|${IP}`);
+  });
+});
+
+describe('総当たり通報が静かに鳴らなくならないこと', () => {
+  it('上限到達の通報はその窓で 1 回だけ（`=== max` の取りこぼしを作らない）', async () => {
+    const IP = '198.51.100.150';
+    const email = emailOf(STAFF.id);
+
+    // 上限（既定 20）まで失敗させる。20 回目で通報ラッチが立つ。
+    for (let i = 0; i < 20; i++) {
+      expect((await verify(email, '000004', IP)).status).toBe(401);
+    }
+
+    const latch = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail|${IP}|alert`)
+      .first<{ count: number }>();
+    expect(latch?.count, '上限到達時に通報ラッチが立つ').toBe(1);
+
+    // 以降の試行は門番(peek)で 429 になり、加算にも通報にも到達しない。
+    for (let i = 0; i < 5; i++) {
+      expect((await verify(email, '000004', IP)).status).toBe(429);
+    }
+
+    const after = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail|${IP}|alert`)
+      .first<{ count: number }>();
+    expect(after?.count, '通報が窓内で繰り返し鳴らない').toBe(1);
+  });
+
+  it('通報ラッチは失敗カウンタとは別 bucket（互いを消費しない）', async () => {
+    const IP = '198.51.100.151';
+    for (let i = 0; i < 3; i++) await verify(emailOf(STAFF.id), '000005', IP);
+
+    const fail = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail|${IP}`)
+      .first<{ count: number }>();
+    const alert = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail|${IP}|alert`)
+      .first<{ count: number }>();
+
+    expect(fail?.count).toBe(3);
+    // 上限未満なのでラッチはまだ立っていない
+    expect(alert).toBeNull();
+  });
+});
+
+describe('スロットル bucket の区切り文字', () => {
+  it('IPv6 でも scope 付き bucket と衝突しない', async () => {
+    // 本番の cf-connecting-ip は IPv6 で届く（実測: 240a:61:...）。
+    // 区切りを `:` にすると `login_fail:ip:<ipv6>:<scope>` が
+    // 「末尾が <scope> の IPv6」と読めてしまい、scope が 16 進の語のとき衝突する。
+    const V6 = '240a:61:30d0:86a1:a9e6:dfbd:23a6:beef';
+    for (let i = 0; i < 3; i++) await verify(emailOf(STAFF.id), '000006', V6);
+
+    const rows = await testDb
+      .prepare("SELECT bucket FROM auth_throttle WHERE bucket LIKE 'login_fail|%'")
+      .all<{ bucket: string }>();
+    const names = rows.results.map((r) => r.bucket);
+
+    // 素の失敗カウンタだけが立ち、scope 付き（alert）と混ざっていない
+    expect(names).toContain(`login_fail|${V6}`);
+    expect(names).not.toContain(`login_fail|${V6}|alert`);
+    // 区切りで割ると必ず 2 要素（kind と host）に分かれる
+    expect(`login_fail|${V6}`.split('|')).toHaveLength(2);
   });
 });

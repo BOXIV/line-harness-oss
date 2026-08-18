@@ -213,8 +213,14 @@ export function throttleBucket(
   ip: string | null | undefined,
   scope?: string | null,
 ): string {
+  // 区切りに `|` を使う。`:` にしてはいけない — IPv6 アドレスは `:` を含むため
+  // （実測: cf-connecting-ip が 240a:61:...:2d93 で届く）、
+  // `login_fail:ip:<ipv6>:<scope>` 形式だと scope が 16 進として読める語のとき
+  // 「末尾がその語の IPv6 アドレス」と衝突しうる。`alert` は 16 進ではないので
+  // 今は無事だが、将来 `beef` `face` のような scope を足した瞬間に静かに壊れる。
+  // `|` は IP にもスタッフ ID(UUID) にも現れないので、この推論自体が不要になる。
   const host = ip && ip.trim() ? ip.trim() : 'unknown';
-  return scope ? `${kind}:ip:${host}:${scope}` : `${kind}:ip:${host}`;
+  return scope ? `${kind}|${host}|${scope}` : `${kind}|${host}`;
 }
 
 /**
@@ -227,6 +233,12 @@ export function throttleBucket(
  * read-then-write になるので、同時実行時は上限を並列数ぶん超えうる。
  * ここは厳密なクォータではなく総当たりの抑止なので、その緩さは許容する
  * （チャレンジ単位の attempts が別途 5 回で効いている）。
+ *
+ * ⚠️ 窓の判定式 `window_started_at > windowStart` は、hitThrottle の CASE 式
+ *    `window_started_at <= windowStart`（＝古いのでリセット）と **厳密な補集合**であること。
+ *    境界（完全一致）では peek が 0 を返し hit が 1 にリセットして辻褄が合う。
+ *    片方だけ書き換えると、窓の境目で「門番は通すのに加算はリセットされる」等のズレが出る。
+ *    どちらかを触るときは必ず両方を見ること。
  */
 export async function peekThrottle(
   db: D1Database,
