@@ -38,10 +38,29 @@ export const DEFAULT_SESSION_TTL_HOURS = 24 * 7;
  */
 export const DEFAULT_ISSUE_MAX = 10;
 export const DEFAULT_ISSUE_WINDOW_MINUTES = 15;
-/** 同一 IP からのコード発行回数の上限（窓は DEFAULT_ISSUE_WINDOW_MINUTES と共有） */
+/**
+ * 同一 IP から **同一スタッフ宛** にコードを発行できる回数の上限
+ * （窓は DEFAULT_ISSUE_WINDOW_MINUTES と共有）。
+ *
+ * IP だけで括ってはいけない。出口 IP を共有している職場やモバイル回線では、
+ * 別々の人が自分宛のコードを取っているだけで枠を食い合い、6 人目が
+ * 「コードを送る」を押しても無言で何も起きなくなる。
+ * 防ぎたいのは「第三者が特定アカウントの発行枠を消費する」ことなので、
+ * (IP, スタッフ) の組で数えるのが正しい粒度。
+ */
 export const DEFAULT_ISSUE_MAX_PER_IP = 5;
-/** 同一 IP からのコード検証失敗回数の上限と窓（分）。総当たりの実質的な上限はここ */
-export const DEFAULT_VERIFY_FAIL_MAX_PER_IP = 10;
+/**
+ * 同一 IP からのコード検証**失敗**回数の上限と窓（分）。総当たりの実質的な上限はここ。
+ *
+ * 成功は数えない（peekThrottle で門番だけして、失敗したときに hitThrottle で加算する）。
+ * 成功も数えると、社内 NAT やモバイルの CGNAT で出口 IP を共有している人たちが
+ * 「正しくログインしただけ」で互いを締め出す。Phase 4 の一斉オンボーディングで
+ * 全員を同じ場所に集めた瞬間に発火する類の事故になる。
+ *
+ * 20 / 15分は、10^6 通り・TTL 10分のコードに対して無視できる試行数でありながら、
+ * 共有 IP で数人が打ち間違えても届かない水準。
+ */
+export const DEFAULT_VERIFY_FAIL_MAX_PER_IP = 20;
 export const DEFAULT_VERIFY_FAIL_WINDOW_MINUTES = 15;
 
 /**
@@ -185,9 +204,41 @@ export async function hitThrottle(
   return { allowed: count <= max, count };
 }
 
-/** IP からスロットル bucket 名を作る。IP が取れない場合も同じ bucket にまとめる（緩いが無いよりまし）。 */
-export function throttleBucket(kind: 'login_issue' | 'login_fail', ip: string | null | undefined): string {
-  return `${kind}:ip:${ip && ip.trim() ? ip.trim() : 'unknown'}`;
+/**
+ * スロットル bucket 名。scope を渡すと (IP, scope) の組で数える。
+ * 発行上限は scope=staffId で括る（IP だけだと共有回線の別人同士が枠を食い合う）。
+ */
+export function throttleBucket(
+  kind: 'login_issue' | 'login_fail',
+  ip: string | null | undefined,
+  scope?: string | null,
+): string {
+  const host = ip && ip.trim() ? ip.trim() : 'unknown';
+  return scope ? `${kind}:ip:${host}:${scope}` : `${kind}:ip:${host}`;
+}
+
+/**
+ * 窓の中の現在値を **加算せずに** 読む。
+ *
+ * 「門番は成功・失敗どちらでも通すが、加算するのは失敗のときだけ」を実現するために要る。
+ * hitThrottle だけで門番も兼ねると、成功したログインまで枠を消費して
+ * 共有 IP の利用者同士が締め出し合う。
+ *
+ * read-then-write になるので、同時実行時は上限を並列数ぶん超えうる。
+ * ここは厳密なクォータではなく総当たりの抑止なので、その緩さは許容する
+ * （チャレンジ単位の attempts が別途 5 回で効いている）。
+ */
+export async function peekThrottle(
+  db: D1Database,
+  bucket: string,
+  windowMinutes: number,
+): Promise<number> {
+  const windowStart = addMinutes(new Date(), -windowMinutes);
+  const row = await db
+    .prepare('SELECT count FROM auth_throttle WHERE bucket = ? AND window_started_at > ?')
+    .bind(bucket, windowStart)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
 }
 
 // ---------------------------------------------------------------------------

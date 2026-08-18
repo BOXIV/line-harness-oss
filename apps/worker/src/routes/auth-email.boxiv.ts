@@ -14,6 +14,7 @@ import {
   getStaffById,
   hitThrottle,
   invalidateLoginChallenges,
+  peekThrottle,
   isValidEmail,
   listStaffSessions,
   recordAuditLog,
@@ -96,12 +97,33 @@ async function ipThrottle(
   ip: string | null,
   max: number,
   windowMinutes: number,
+  scope?: string | null,
 ): Promise<{ allowed: boolean; count: number }> {
   if (!ip) {
     console.warn(`[admin-auth] ${kind}: クライアント IP が取得できずスロットルをスキップ`);
     return { allowed: true, count: 0 };
   }
-  return hitThrottle(c.env.DB, throttleBucket(kind, ip), max, windowMinutes);
+  return hitThrottle(c.env.DB, throttleBucket(kind, ip, scope), max, windowMinutes);
+}
+
+/**
+ * 加算せずに上限に達しているかだけを見る門番。
+ *
+ * verify は **失敗したときだけ** 加算する。成功も数えると、出口 IP を共有している
+ * 職場やモバイル回線で「正しくログインしただけ」の人同士が締め出し合う
+ * （実測: 同一 IP から 11 人目の成功ログインが 429 になっていた）。
+ */
+async function ipThrottleExceeded(
+  c: { env: Env['Bindings'] },
+  kind: 'login_issue' | 'login_fail',
+  ip: string | null,
+  max: number,
+  windowMinutes: number,
+  scope?: string | null,
+): Promise<boolean> {
+  if (!ip) return false;
+  const count = await peekThrottle(c.env.DB, throttleBucket(kind, ip, scope), windowMinutes);
+  return count >= max;
 }
 
 /** Slack へ 1 行流す（webhook 未設定なら console のみ）。throw しない。 */
@@ -194,20 +216,28 @@ authEmail.post('/api/auth/email/start', async (c) => {
 
     const ip = clientIp(c.req.raw.headers);
 
-    // 試行元（IP）単位の発行上限。アカウント単位の枠より先に効かせる。
-    // この口は認証不要なので、アカウント単位だけで数えると
-    // 「メールアドレスを知っているだけの第三者」が本人の発行枠を食い潰して
-    // 本人の『コードを送る』を無言で殺せる（migration 920 のコメント参照）。
-    const ipQuota = await ipThrottle(c, 'login_issue', ip, cfg.issueMaxPerIp, cfg.issueWindowMinutes);
-    if (!ipQuota.allowed) {
-      console.warn('[admin-auth] start: IP 単位の発行上限', ip, ipQuota.count);
-      return c.json(GENERIC_START_RESPONSE);
-    }
-
     // ここから先は「構文は妥当」。登録の有無は一切漏らさず、常に同じ応答を返す。
     const staff = await findActiveStaffByEmail(c.env.DB, email);
     if (!staff) {
       console.log('[admin-auth] start: 未登録または重複アドレス', maskEmail(email));
+      return c.json(GENERIC_START_RESPONSE);
+    }
+
+    // 発行上限は (試行元 IP, スタッフ) の組で数える。
+    // この口は認証不要なので、アカウント単位だけで数えると「メールアドレスを知っている
+    // だけの第三者」が本人の発行枠を食い潰して『コードを送る』を無言で殺せる。
+    // 一方 IP だけで括ると、出口 IP を共有している職場やモバイル回線で、
+    // 別々の人が自分宛のコードを取っているだけで枠を食い合う。組で数えるのが正しい粒度。
+    const ipQuota = await ipThrottle(
+      c,
+      'login_issue',
+      ip,
+      cfg.issueMaxPerIp,
+      cfg.issueWindowMinutes,
+      staff.id,
+    );
+    if (!ipQuota.allowed) {
+      console.warn('[admin-auth] start: IP×スタッフ単位の発行上限', ip, ipQuota.count);
       return c.json(GENERIC_START_RESPONSE);
     }
 
@@ -298,15 +328,11 @@ authEmail.post('/api/auth/email/verify', async (c) => {
     // 無効コードを投げるだけで本人の受け取ったコードごと焼き切れてしまう。
     // 上限に達した後は **チャレンジに一切触れずに** 落とすのが要点
     //（触ると結局その第三者が本人のコードを焼けることになる）。
-    const ipQuota = await ipThrottle(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes);
-    if (!ipQuota.allowed) {
-      console.warn('[admin-auth] verify: IP 単位の失敗上限', ip, ipQuota.count);
-      if (ipQuota.count === cfg.failMaxPerIp + 1) {
-        await notifySlack(
-          c.env,
-          `:lock: 管理画面ログインの失敗が同一 IP で上限に達しました（${cfg.failWindowMinutes}分で${ipQuota.count}回）。総当たりの可能性があります。`,
-        );
-      }
+    // ⚠️ ここでは **加算しない**。加算するのは資格情報が合わなかったときだけ。
+    //    成功も数えると、出口 IP を共有している職場やモバイル回線（CGNAT）で
+    //    「正しくログインしただけ」の人同士が締め出し合う。
+    if (await ipThrottleExceeded(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes)) {
+      console.warn('[admin-auth] verify: IP 単位の失敗上限', ip);
       // 401（コードが違う）と混ぜない。この判定はメールアドレスを引く**前**に、
       // 試行元 IP だけで行っているので、登録の有無は一切漏れない。
       // 一方で混ぜると、正しいコードを持っている本人が「コードが違う」と言われ続け、
@@ -332,6 +358,14 @@ authEmail.post('/api/auth/email/verify', async (c) => {
       ttlHours: cfg.sessionTtlHours,
     });
     if (!result.ok) {
+      // 失敗したときだけ IP 枠を消費する。
+      const failed = await ipThrottle(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes);
+      if (failed.count === cfg.failMaxPerIp) {
+        await notifySlack(
+          c.env,
+          `:lock: 管理画面ログインの失敗が同一 IP で上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
+        );
+      }
       await auditLogin(c.env, {
         action: 'auth.login_failed',
         summary: '管理画面へのログインに失敗',

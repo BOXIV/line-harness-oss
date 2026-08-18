@@ -504,8 +504,8 @@ describe('第三者がメールアドレスだけでログインを封じられ�
     }
     expect((await verify(emailOf(STAFF.id), victimCode, VICTIM)).status).toBe(401);
 
-    // 攻撃者が IP 単位の失敗上限（既定 10）に達するまで投げ続ける。
-    for (let i = 0; i < 6; i++) {
+    // 攻撃者が IP 単位の失敗上限（既定 20）に達するまで投げ続ける。
+    for (let i = 0; i < 16; i++) {
       await verify(emailOf(STAFF.id), '000001', ATTACKER);
     }
 
@@ -526,8 +526,8 @@ describe('第三者がメールアドレスだけでログインを封じられ�
   it('攻撃者の失敗回数は IP 単位で上限に達し、それ以降はチャレンジに触れない', async () => {
     const code = await codeFor(STAFF.id);
 
-    // 既定 ADMIN_LOGIN_FAIL_MAX_PER_IP = 10。11 回目以降は上限で落ちる。
-    for (let i = 0; i < 10; i++) {
+    // 既定 ADMIN_LOGIN_FAIL_MAX_PER_IP = 20。20 回**失敗**した次から上限で落ちる。
+    for (let i = 0; i < 20; i++) {
       expect((await verify(emailOf(STAFF.id), '000002', ATTACKER)).status).toBe(401);
     }
     // 上限を超えたら 401 ではなく 429。401 に混ぜると、正しいコードを持っている本人が
@@ -535,10 +535,10 @@ describe('第三者がメールアドレスだけでログインを封じられ�
     expect((await verify(emailOf(STAFF.id), '000002', ATTACKER)).status).toBe(429);
 
     const throttled = await testDb
-      .prepare("SELECT count FROM auth_throttle WHERE bucket = ?")
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
       .bind(`login_fail:ip:${ATTACKER}`)
       .first<{ count: number }>();
-    expect(throttled!.count).toBeGreaterThan(10);
+    expect(throttled!.count).toBe(20);
 
     // 別 IP（本人）は巻き添えにならない。上のループで焼かれたコードは通らないが、
     // 取り直した分は通る＝IP 単位で分離できている。
@@ -547,23 +547,57 @@ describe('第三者がメールアドレスだけでログインを封じられ�
     expect(code).toMatch(/^\d{6}$/);
   });
 
-  it('コード発行も IP 単位で上限がかかる（本人の発行枠を第三者が食い潰せない）', async () => {
+  it('コード発行は (IP, スタッフ) 単位で上限がかかる（第三者が本人の枠を食い潰せない）', async () => {
     // 攻撃者の IP から既定上限（5）まで発行させる
     for (let i = 0; i < 8; i++) await start(emailOf(STAFF.id), ATTACKER);
     const afterAttacker = await challengeCount(STAFF.id);
     expect(afterAttacker).toBeLessThanOrEqual(5);
 
-    // 本人の IP からはまだ発行できる（アカウント単位の枠 10 が残っている）
+    // 本人の IP からはまだ発行できる（別 IP なので別枠）
     await start(emailOf(STAFF.id), VICTIM);
     expect(await challengeCount(STAFF.id)).toBeGreaterThan(afterAttacker);
+  });
+
+  it('同じ IP でも宛先スタッフが違えば発行枠を食い合わない（共有 NAT / CGNAT）', async () => {
+    const OFFICE = '203.0.113.201';
+    // 1 人目が上限まで使い切る
+    for (let i = 0; i < 6; i++) await start(emailOf(STAFF.id), OFFICE);
+    expect(await challengeCount(STAFF.id)).toBe(5);
+
+    // 同じ出口 IP の別の人は影響を受けない。
+    // IP だけで括っていると、ここで 6 人目が無言で締め出される。
+    await start(emailOf(MANAGER.id), OFFICE);
+    expect(await challengeCount(MANAGER.id)).toBe(1);
+  });
+
+  it('成功したログインは失敗枠を消費しない（共有 NAT で互いを締め出さない）', async () => {
+    const OFFICE = '203.0.113.202';
+    const { createLoginChallenge } = await import('@line-crm/db');
+
+    // 既定の失敗上限（20）を超える回数、同じ IP から**成功**し続ける。
+    // 門番と加算を同じ hitThrottle でやっていた頃は、11 人目の成功ログインが 429 になった。
+    for (let i = 0; i < 25; i++) {
+      const { code } = await createLoginChallenge(testDb, {
+        staffId: STAFF.id,
+        email: emailOf(STAFF.id),
+      });
+      const res = await verify(emailOf(STAFF.id), code, OFFICE);
+      expect(res.status, `${i + 1} 回目の成功ログイン`).toBe(200);
+    }
+
+    const bucket = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail:ip:${OFFICE}`)
+      .first<{ count: number }>();
+    expect(bucket).toBeNull();
   });
 });
 
 describe('スロットルの鍵は詐称できないヘッダだけを使う', () => {
   it('x-forwarded-for を変えても IP 単位の失敗枠はリセットされない', async () => {
     const IP = '198.51.100.99';
-    // 上限（既定 10）まで失敗させる
-    for (let i = 0; i < 11; i++) {
+    // 上限（既定 20）まで失敗させる
+    for (let i = 0; i < 21; i++) {
       await request('/api/auth/email/verify', null, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': IP },
@@ -574,7 +608,7 @@ describe('スロットルの鍵は詐称できないヘッダだけを使う', (
       .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
       .bind(`login_fail:ip:${IP}`)
       .first<{ count: number }>();
-    expect(before!.count).toBeGreaterThan(10);
+    expect(before!.count).toBe(20);
 
     // 自称 XFF を毎回変えても、同じ cf-connecting-ip の枠が使われ続ける。
     // XFF にフォールバックしていると、ここで新しい bucket が増えて枠が実質無限になる。
