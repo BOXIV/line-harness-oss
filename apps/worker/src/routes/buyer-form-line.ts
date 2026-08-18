@@ -29,6 +29,12 @@ import {
 } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateBuyerRow, linkBuyerRow, ENTRY_TYPE_LABEL } from '../services/buyer-notion.boxiv.js';
 import type { BuyerEntryType } from '../services/buyer-notion.boxiv.js';
+import {
+  buildDedupeKey,
+  claimNotifyDedupe,
+  releaseNotifyDedupe,
+  LEAD_DEDUPE_WINDOW_MS,
+} from '../services/notify-dedupe.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
 import { slackPost, slackUpdate, buildSlackCard, escapeSlackText, slackChannelFor } from '../services/slack.boxiv.js';
@@ -259,7 +265,8 @@ buyerFormLine.options('/buyer-form/lead', (c) => {
  * 購入エントリー(/buyer-form/submit) との違い:
  *   - D1 台帳 listing_entries に**書かない**。台帳は「LINE 連携待ち」を追跡するためのもので、
  *     連携しないリードを載せると催促 cron（10分/24h/48h のメール・SMS）が誤って走るため。
- *     二重送信の吸収は Notion 側の重複判定（掲載ID＋人物）が担う。
+ *     二重送信は notify_dedupe（内容ハッシュ + 10分ウィンドウ）でルート先頭で吸収し、
+ *     すり抜けた場合の行の重複は Notion 側の重複判定（掲載ID＋人物）が抑える。
  *   - Notion の通知タイプが 値下げ依頼 / クルマのお問い合わせ になり、優先度が下がる
  *     （既に購入エントリー済みの人を格下げしない）。
  *
@@ -307,6 +314,20 @@ buyerFormLine.post('/buyer-form/lead', async (c) => {
   formData['掲載ID'] = listingId;
   if (vehicle) formData['車両'] = vehicle;
 
+  // 二重送信の冪等化: 同一内容の POST が短時間に連続したら 2 回目以降を成功応答のまま打ち切る。
+  // Notion の重複判定は行を増やさないだけで Slack 通知は毎 POST 飛ぶため、ここで止めるのが本命。
+  // 内容が変わった再送（希望価格を直した等）はハッシュが変わるので通常どおり通知される。
+  // claim 自体の失敗（D1 障害・migration 未適用）は続行 — 通知の重複は欠落よりまし。
+  const dedupeKey = await buildDedupeKey(`lead:${entryType}`, { listingId, name, email, phone, fields });
+  const claimed = await claimNotifyDedupe(c.env.DB, dedupeKey, LEAD_DEDUPE_WINDOW_MS).catch((e) => {
+    console.error(`buyer-form lead(${entryType}): dedupe claim failed — 続行`, e);
+    return true;
+  });
+  if (!claimed) {
+    console.log(`buyer-form lead(${entryType}): duplicate suppressed (listing=${listingId})`);
+    return c.json({ success: true, deduped: true }, 200);
+  }
+
   // match_key は連携に使わないが、Notion 側で「この経路の起票」と分かる相関キーとして持たせる。
   const matchKey = `lead-${entryType}-${listingId}-${crypto.randomUUID()}`;
 
@@ -317,6 +338,8 @@ buyerFormLine.post('/buyer-form/lead', async (c) => {
     });
   } catch (e) {
     console.error(`buyer-form lead(${entryType}): Notion 起票 failed`, e);
+    // 起票できていないので claim を解放し、クライアント/利用者の再送を冪等化で握り潰さない。
+    await releaseNotifyDedupe(c.env.DB, dedupeKey).catch(() => {});
     return c.json({ success: false, error: 'notion write failed' }, 502);
   }
 
