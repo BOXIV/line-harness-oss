@@ -52,8 +52,12 @@ ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL = "100"
 #   ADMIN_LOGIN_ISSUE_MAX_PER_IP     = "5"    (プレフィクス × 宛先メール) 単位の発行上限
 #   ADMIN_LOGIN_ISSUE_WINDOW_MINUTES = "15"   発行系の窓
 #   ADMIN_LOGIN_FAIL_MAX_PER_IP      = "20"   プレフィクス単位の検証失敗上限
-#     ⚠️ ADMIN_LOGIN_ISSUE_MAX_PER_IP × ADMIN_LOGIN_MAX_ATTEMPTS (=25) より小さく保つこと。
-#        25 以上にすると、第三者が本人の発行できるコードを全部焼けるようになる。
+#     ⚠️ この上限だけでは「第三者による一時的なログイン封じ」は防げない。
+#        不一致時の加算は生存中のチャレンジ全件に +1 なので、5 回の失敗バーストで
+#        その時点のコードが本数に関係なく全部ロックされる（実測）。20 は「4 本焼ける」ではなく
+#        「4 回バーストできる」の意味。本人が再送を押して発行枠を先に使い切っていると
+#        1 バーストで窓を潰される。実害の上限は窓 15 分の一時的なログイン不能で、
+#        Slack には鳴り、救済コード発行の経路も生きている。詳細は staff-auth.ts のコメント。
 #   ADMIN_LOGIN_FAIL_WINDOW_MINUTES  = "15"   検証失敗の窓
 #   ADMIN_SESSION_TTL_HOURS          = "168"  セッションの絶対期限（7日 / iOS Safari の保存期間に合わせる）
 

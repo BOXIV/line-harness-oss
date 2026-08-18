@@ -814,3 +814,50 @@ describe('start / verify の応答が登録の有無で変わらないこと（�
     expect(latch?.count, '外枠到達は Slack 通報される').toBe(1);
   });
 });
+
+describe('失敗の加算は「生存中の全チャレンジ」に効く（挙動の記録）', () => {
+  // ⚠️ これは「あるべき姿」ではなく **現在の挙動** の記録。
+  //    一度「攻撃者は 1 本焼くのに 5 回要るので窓あたり 4 本まで」という不変条件を
+  //    ドキュメントに書いたが、実際は 1 回のバースト（5 回）で生存分が全部ロックされる。
+  //    数え方を変えるとこのテストが赤くなるので、そのとき文書も一緒に直すこと。
+  it('5 回の失敗バーストで、生きているコードが本数に関係なく全部ロックされる', async () => {
+    const { createLoginChallenge } = await import('@line-crm/db');
+    const email = emailOf(STAFF.id);
+    const codes: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const { code } = await createLoginChallenge(testDb, { staffId: STAFF.id, email });
+      codes.push(code);
+    }
+
+    // 攻撃者は別プレフィクスから 5 回だけ失敗する
+    const ATTACKER = '198.51.100.250';
+    for (let i = 0; i < 5; i++) {
+      expect((await verify(email, '000000', ATTACKER)).status).toBe(401);
+    }
+
+    // 本人の手元にある 5 本とも通らない
+    for (const code of codes) {
+      expect((await verify(email, code, '203.0.113.99')).status).toBe(401);
+    }
+
+    // 攻撃者が使った予算は 20 のうち 5 だけ（＝あと 3 バーストできる）
+    const bucket = await testDb
+      .prepare('SELECT count FROM auth_throttle WHERE bucket = ?')
+      .bind(`login_fail|${ATTACKER}`)
+      .first<{ count: number }>();
+    expect(bucket!.count).toBe(5);
+  });
+
+  it('攻撃者が予算を使い切った後に取り直したコードは通る（封じは窓内に限定される）', async () => {
+    const { createLoginChallenge } = await import('@line-crm/db');
+    const email = emailOf(STAFF.id);
+    const ATTACKER = '198.51.100.251';
+
+    // 予算 20 を使い切らせる
+    for (let i = 0; i < 20; i++) await verify(email, '000000', ATTACKER);
+    expect((await verify(email, '000000', ATTACKER)).status).toBe(429);
+
+    const { code } = await createLoginChallenge(testDb, { staffId: STAFF.id, email });
+    expect((await verify(email, code, '203.0.113.99')).status).toBe(200);
+  });
+});

@@ -46,9 +46,22 @@ describe('normalizeThrottleHost', () => {
   it('IPv4 射影アドレスは IPv4 として扱う（全部 0:0:0:0 に潰れない）', () => {
     expect(normalizeThrottleHost('::ffff:192.0.2.1')).toBe('192.0.2.1');
     expect(normalizeThrottleHost('::ffff:198.51.100.9')).toBe('198.51.100.9');
-    // 潰れていたら、無関係な相手同士が 1 つの枠を共有してしまう
+    // ⚠️ この分岐を消すと、IPv4 射影はすべて 0:0:0:0::/64 に潰れ、
+    //    無関係な相手同士が 1 つの枠を共有する＝共有 NAT と同じ締め出しが起きる。
     expect(normalizeThrottleHost('::ffff:192.0.2.1')).not.toBe(
       normalizeThrottleHost('::ffff:198.51.100.9'),
+    );
+    expect(normalizeThrottleHost('::ffff:192.0.2.1')).not.toContain('/64');
+    // 素の IPv4 と射影表記が同じ鍵になる（同一の相手を 2 枠に分けない）
+    expect(normalizeThrottleHost('::ffff:192.0.2.1')).toBe(normalizeThrottleHost('192.0.2.1'));
+    // 大文字表記・0 埋めなしの ::ffff: も同じ扱い
+    expect(normalizeThrottleHost('::FFFF:192.0.2.1')).toBe('192.0.2.1');
+  });
+
+  it('IPv4 射影は bucket でも別枠になる', () => {
+    expect(throttleBucket('login_fail', '::ffff:192.0.2.1')).toBe('login_fail|192.0.2.1');
+    expect(throttleBucket('login_fail', '::ffff:192.0.2.1')).not.toBe(
+      throttleBucket('login_fail', '::ffff:198.51.100.9'),
     );
   });
 
