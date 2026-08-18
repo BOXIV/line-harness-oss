@@ -32,6 +32,11 @@ function serializeStaff(row: StaffMember, masked = true) {
 }
 
 // GET /api/staff/me — any authenticated user (MUST be before /:id)
+//
+// ⚠️ requireRole を付けないこと。管理画面のログインはこのルートで API キーを検証しており
+//    （apps/web/src/app/login/page.tsx）、ロール制限を掛けると弱いロールがログイン不能になる。
+//    実際に旧実装が検証に使っていた /api/friends/count に認可を足した時、
+//    撮影スタッフ(role=staff)が全員締め出された（2026-08-15〜08-18）。
 staff.get('/api/staff/me', async (c) => {
   try {
     const currentStaff = c.get('staff');

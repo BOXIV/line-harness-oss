@@ -14,33 +14,29 @@ export default function LoginPage() {
     setError('')
 
     try {
-      // Validate by calling a simple endpoint
+      // APIキーの検証は /api/staff/me で行う（認証済みなら全ロールが 200 を返す唯一の口）。
+      //
+      // ここでロール制限のあるルートを使うと、権限の弱いロールが「キーが不正」に
+      // 見えてログイン自体できなくなる。実際に旧実装は /api/friends/count を叩いており、
+      // 同ルートが requireRole('owner','admin','manager') で保護された時点（2026-08-15）から
+      // 撮影スタッフ(role=staff)が 403 →「APIキーが正しくありません」で締め出された。
+      // /api/staff/me は名前とロールも返すので、プロフィール取得も1往復で兼ねる。
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
-      const res = await fetch(`${apiUrl}/api/friends/count`, {
+      const res = await fetch(`${apiUrl}/api/staff/me`, {
         headers: { Authorization: `Bearer ${apiKey}` },
       })
 
       if (res.ok) {
-        localStorage.setItem('lh_api_key', apiKey)
-        // Fetch staff profile for name/role display
-        let role: string | null = null
-        try {
-          const profileRes = await fetch(`${apiUrl}/api/staff/me`, {
-            headers: { Authorization: `Bearer ${apiKey}` },
-          })
-          if (profileRes.ok) {
-            const profileData = await profileRes.json()
-            if (profileData.success && profileData.data) {
-              localStorage.setItem('lh_staff_name', profileData.data.name)
-              localStorage.setItem('lh_staff_role', profileData.data.role)
-              role = profileData.data.role
-            }
-          }
-        } catch {
-          // Profile fetch is best-effort
+        const profile = await res.json()
+        if (!profile?.success || !profile?.data) {
+          setError('APIキーが正しくありません')
+          return
         }
+        localStorage.setItem('lh_api_key', apiKey)
+        localStorage.setItem('lh_staff_name', profile.data.name)
+        localStorage.setItem('lh_staff_role', profile.data.role)
         // 撮影スタッフは /staff-availability へ、それ以外はダッシュボードへ
-        router.push(role === 'staff' ? '/staff-availability' : '/')
+        router.push(profile.data.role === 'staff' ? '/staff-availability' : '/')
       } else {
         setError('APIキーが正しくありません')
       }
