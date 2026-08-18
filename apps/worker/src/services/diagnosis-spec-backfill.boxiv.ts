@@ -14,6 +14,7 @@ import {
   fetchVehicleSpec,
   extractSpecFields,
   specApiKey,
+  probeSpecApiAuth,
   type SpecEnv,
 } from './diagnosis-spec.boxiv.js';
 import { updateDiagnosisLeadSpec, type DiagnosisNotionEnv } from './diagnosis-notion.boxiv.js';
@@ -26,9 +27,16 @@ export type DiagnosisBackfillEnv = SpecEnv &
     SELLENTRY_SLACK_BOT_TOKEN?: string;
   };
 
-// 試行回数 N 回目の「後」に待つ分数。5分 → 30分 → 2時間 → 6時間 → 24時間。
-const BACKOFF_MIN = [5, 30, 120, 360, 1440];
-const MAX_ATTEMPTS = 6;
+// 試行回数 N 回目の「後」に待つ分数。5分 → 30分 → 2時間 → 6時間 → 24時間 → 24時間 …
+//
+// 以前は 5 段 / 6 回打ち切り = 送信から約 33 時間で断念していた。実際の事故では
+// 上流にその VIN のデータが載ったのが送信の約 44 時間後で、断念の 11 時間後だった
+// （2026-08-16 の障害。依頼IDは D1 diagnosis_leads と Slack 側に残る）。
+// 1 日で諦めるのは上流の実力より短いので、
+// 24 時間刻みを足して 3 日強（約 80 時間）まで粘る。
+// 1 サイクルは HTTP 3 試行なので、伸ばしても上流への負荷は 1 日 1 回分しか増えない。
+const BACKOFF_MIN = [5, 30, 120, 360, 1440, 1440, 1440];
+const MAX_ATTEMPTS = 8;
 const BATCH = 3;
 const CANDIDATE_LIMIT = 20;
 
@@ -38,15 +46,32 @@ type LeadRow = {
   name: string;
   spec_attempts: number;
   spec_last_try_at: string | null;
+  spec_error: string | null;
   notion_page_id: string | null;
   created_at: string;
 };
+
+// spec_error の先頭に付ける分類マーカー。D1 を見ただけで「待てば直る」か
+// 「人が直すまで直らない」かが分かるようにするためのもの（grep 可能にもしておく）。
+const AUTH_MARK = '[auth]';
 
 export type DiagnosisBackfillSummary = {
   picked: number;
   ok: number;
   failed: number;
   gaveUp: number;
+};
+
+// 断念通知に「次に何をすべきか」を添えるための対応表。
+const FAILURE_HINT: Record<string, string> = {
+  nokey: 'Worker に VEHICLE_SPECS_API_KEY が入っていない。secret を投入する',
+  auth: 'キーが拒否されている。Worker の VEHICLE_SPECS_API_KEY を確認・再投入する',
+  upstream: '上流の障害。時間を置いて手動補完スクリプトで取り直す',
+  client: 'リクエストが不正。VIN の入力ミスを疑う',
+  timeout: '上流が応答しない。時間を置いて手動補完スクリプトで取り直す',
+  network: '通信エラー。時間を置いて手動補完スクリプトで取り直す',
+  parse: '上流のレスポンス形式が変わった疑い。実際の応答を確認する',
+  empty: '上流にこの VIN のデータが無い。VIN の入力ミス、または上流未登録',
 };
 
 function nowIso(): string {
@@ -94,7 +119,8 @@ export async function backfillDiagnosisSpecs(
   let candidates: LeadRow[];
   try {
     const res = await env.DB.prepare(
-      `SELECT lead_id, vin, name, spec_attempts, spec_last_try_at, notion_page_id, created_at
+      `SELECT lead_id, vin, name, spec_attempts, spec_last_try_at, spec_error,
+              notion_page_id, created_at
          FROM diagnosis_leads
         WHERE status = 'API取得不可' AND is_tesla = 1 AND spec_json IS NULL
           AND spec_attempts < ?1
@@ -116,6 +142,44 @@ export async function backfillDiagnosisSpecs(
 
   const code = (s: string) => `\`${s.replace(/[\n\r`]/g, ' ').trim() || '-'}\``;
 
+  // --- 先にキー健全性だけ確かめる ------------------------------------------
+  // 上流はキー不正も内部エラーも同じ HTTP 500 で返すので、キーが死んでいる状態で
+  // リトライを回すと「直せば取れたはずのリード」の試行回数だけが焼かれ、キーを
+  // 直した時にはもう cron が拾わない、という最悪の形になる（2026-08-16 の事故の構造）。
+  // そこで due がある時だけ canary を 1 回叩き、拒否されたら試行回数を消費せずに撤退する。
+  const probe = await probeSpecApiAuth(env);
+  if (!probe.ok) {
+    const at = nowIso();
+    const detail = `${AUTH_MARK} ${probe.note} — spec_API キーが拒否されています（試行回数は消費せず待機）`;
+    // 既にこのマーカーが付いている行しか無ければ「通知済みの継続中障害」なので黙る。
+    const firstDetection = due.some((r) => !(r.spec_error ?? '').startsWith(AUTH_MARK));
+    for (const row of due) {
+      try {
+        // ⚠️ spec_last_try_at は**触らない**。ここを更新するとバックオフが進み、
+        // 試行回数の多い行は「キーが直った後 24 時間放置」になってしまう。
+        // 実際には 1 回も叩いていないので、due のまま次の tick で拾わせる。
+        await env.DB.prepare(
+          `UPDATE diagnosis_leads SET spec_error = ?1, updated_at = ?2 WHERE lead_id = ?3`
+        )
+          .bind(detail.slice(0, 500), at, row.lead_id)
+          .run();
+      } catch (e) {
+        console.error('diagnosis-backfill: auth-hold update failed', row.lead_id, e);
+      }
+    }
+    console.error('diagnosis-backfill: spec_API auth probe failed', probe.note, due.length);
+    if (firstDetection) {
+      await postSlack(env, '#e01e5a', [
+        ':rotating_light: *spec_API のキーが拒否されています（バッテリー診断が全件止まります）*',
+        `canary 応答: ${code(probe.note)}`,
+        `再取得待ちの依頼: ${code(String(due.length) + '件')}（試行回数は消費していません）`,
+        '→ Cloudflare Worker `line-connect` の `VEHICLE_SPECS_API_KEY` を確認してください。',
+        '　 `.env` の値に引用符・空白が混ざっていないかも合わせて確認（`node line/scripts/sync-line-secrets.mjs prod`）。',
+      ]);
+    }
+    return summary;
+  }
+
   for (const row of due) {
     const at = nowIso();
     // cron はユーザーを待たせないので、送信時より長めの予算で粘る。
@@ -134,7 +198,7 @@ export async function backfillDiagnosisSpecs(
               SET spec_error = ?1, spec_attempts = ?2, spec_last_try_at = ?3, updated_at = ?3
             WHERE lead_id = ?4`
         )
-          .bind(result.error.slice(0, 500), attempts, at, row.lead_id)
+          .bind(`[${result.kind}] ${result.error}`.slice(0, 500), attempts, at, row.lead_id)
           .run();
       } catch (e) {
         console.error('diagnosis-backfill: failure update failed', row.lead_id, e);
@@ -148,6 +212,9 @@ export async function backfillDiagnosisSpecs(
           `依頼ID: ${code(row.lead_id)}`,
           `VIN: ${code(row.vin)} ／ お名前: ${code(row.name)}`,
           `${MAX_ATTEMPTS} 回試行して取得できませんでした。最後のエラー: ${code(result.error)}`,
+          // 「何をすればいいか」まで書く。エラー文字列だけでは運用が動けなかった。
+          `分類: ${code(result.kind)} — ${FAILURE_HINT[result.kind]}`,
+          `手動補完: ${code('node line/scripts/diagnosis-spec-retry.mjs ' + row.lead_id + ' --apply')}`,
         ]);
       }
       continue;
