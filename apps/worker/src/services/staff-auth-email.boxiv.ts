@@ -73,7 +73,13 @@ export async function sendLoginCodeEmail(
     '— BOXIV LINE Connect',
   );
 
-  const res = await sendEmail(env, input.to, subject, { text: lines.join('\n') });
+  // 認証メールなのでトラッキングは切る。切らないと本文のログインリンクが
+  // ct.sendgrid.net へ書き換えられ、(1) フィッシングそのものの見た目になり
+  // (2) 迷惑メール判定の材料になり (3) 6 桁コード入りの URL が第三者に記録される。
+  const res = await sendEmail(env, input.to, subject, {
+    text: lines.join('\n'),
+    disableTracking: true,
+  });
   if (!res.ok) {
     await alertAdminAuth(
       env,
@@ -112,7 +118,8 @@ export async function notifyStaffEmailChanged(
     '— BOXIV LINE Connect',
   ].join('\n');
 
-  const res = await sendEmail(env, input.oldEmail, subject, { text });
+  // 変更通知もトラッキング不要（本文にリンクは無いが、開封ピクセルを入れる理由も無い）。
+  const res = await sendEmail(env, input.oldEmail, subject, { text, disableTracking: true });
   if (!res.ok) {
     await alertAdminAuth(
       env,
