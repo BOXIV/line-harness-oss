@@ -163,8 +163,13 @@ staff.post('/api/staff', requireRole('owner', 'manager'), async (c) => {
       workArea: body.role === 'staff' ? (body.workArea ?? null) : null,
     });
 
-    // Return full (unmasked) API key one-time
-    return c.json({ success: true, data: serializeStaff(member, false) }, 201);
+    // ⚠️ 平文のキーは返さない（2026-08-19）。
+    // 新しく作られた人はメールに届く 6 桁コードでログインするので、パスワードは要らない。
+    // 作成のたびに平文を画面へ出すと、それを Slack / LINE で本人へ渡す運用が生まれ、
+    // 「資格情報を人づてに配る」という、この改修で無くそうとしているものを教育してしまう。
+    // どうしても必要なとき（＝パスワードでログインさせたいとき）は
+    // POST /api/staff/:id/regenerate-key を明示的に叩く。
+    return c.json({ success: true, data: serializeStaff(member, true) }, 201);
   } catch (err) {
     console.error('POST /api/staff error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);

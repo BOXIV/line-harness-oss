@@ -56,6 +56,7 @@ export default function StaffPage() {
     email: string | null
   } | null>(null)
   /** メールアドレスのインライン編集（オーナーのみ）。id → 入力中の値 */
+  const [createdNotice, setCreatedNotice] = useState<string | null>(null)
   const [editingEmail, setEditingEmail] = useState<{ id: string; value: string } | null>(null)
   const [emailSaving, setEmailSaving] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -119,9 +120,11 @@ export default function StaffPage() {
         body: JSON.stringify(body),
       })
       if (res.success) {
-        if (res.data.apiKey) {
-          setNewKey({ apiKey: res.data.apiKey, staffId: res.data.id })
-        }
+        // 作成時に平文パスワードは返らない（意図的）。新しい人はメールに届く
+        // 6桁コードでログインするので、資格情報を人づてに渡す必要が無い。
+        setCreatedNotice(
+          `${formName} さんを追加しました。ログイン用の6桁コードは ${body.email} に届きます。パスワードの受け渡しは不要です。`,
+        )
         setFormName('')
         setFormEmail('')
         setFormRole('staff')
@@ -165,7 +168,14 @@ export default function StaffPage() {
   }
 
   const handleRegenerateKey = async (member: StaffMember) => {
-    if (!confirm(`${member.name} のAPIキーを再生成しますか？\n現在のキーは無効になります。`)) return
+    if (
+      !confirm(
+        `${member.name} のパスワードを再発行しますか？\n\n` +
+          '現在のパスワードは無効になります。\n' +
+          '通常のログインはメールに届く6桁コードで行うため、この操作は基本的に不要です。',
+      )
+    )
+      return
     try {
       const res = await fetchApi<ApiResponse<{ apiKey: string }>>(`/api/staff/${member.id}/regenerate-key`, {
         method: 'POST',
@@ -173,10 +183,10 @@ export default function StaffPage() {
       if (res.success) {
         setNewKey({ apiKey: res.data.apiKey, staffId: member.id })
       } else {
-        setError(res.error ?? 'キー再生成に失敗しました')
+        setError(res.error ?? 'パスワードの再発行に失敗しました')
       }
     } catch {
-      setError('キー再生成に失敗しました')
+      setError('パスワードの再発行に失敗しました')
     }
   }
 
@@ -273,11 +283,24 @@ export default function StaffPage() {
         }
       />
 
-      {/* New API key banner */}
+      {/* 追加完了の案内（平文パスワードは出さない） */}
+      {createdNotice && (
+        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
+          <p className="text-sm text-green-800 flex-1">{createdNotice}</p>
+          <button
+            onClick={() => setCreatedNotice(null)}
+            className="shrink-0 px-3 py-1 text-xs font-medium text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            閉じる
+          </button>
+        </div>
+      )}
+
+      {/* パスワード再発行の結果（明示的に叩いたときだけ表示される） */}
       {newKey && (
         <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
           <p className="text-sm font-medium text-green-800 mb-2">
-            APIキーが発行されました。このキーは一度しか表示されません。
+            パスワードを再発行しました。この値は一度しか表示されません。
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 text-xs bg-white border border-green-200 rounded px-3 py-2 font-mono break-all">
@@ -474,7 +497,7 @@ export default function StaffPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">メール</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">ロール</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">稼働エリア</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">APIキー</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">パスワード</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">状態</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">操作</th>
               </tr>
@@ -575,7 +598,7 @@ export default function StaffPage() {
                             onClick={() => handleRegenerateKey(member)}
                             className="px-2.5 py-1 text-xs font-medium text-blue-600 bg-white border border-blue-200 rounded hover:bg-blue-50 transition-colors"
                           >
-                            キー再生成
+                            パスワード再発行
                           </button>
                           <button
                             onClick={() => handleDelete(member)}
