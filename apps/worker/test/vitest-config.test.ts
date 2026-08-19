@@ -30,6 +30,14 @@ describe('vitest.config.ts', () => {
     expect(configSource).toMatch(/fileParallelism:\s*false/);
   });
 
+  it('タイムアウトを既定の 5 秒より延ばしている', () => {
+    // スロットルのテストは上限に達するまで 20〜40 回叩く。実 workerd + 実 D1 では
+    // 5 秒に間欠的に当たり、**再現性のない失敗**になる。実際それが起きた。
+    const m = /testTimeout:\s*([\d_]+)/.exec(configSource);
+    expect(m, 'testTimeout が設定されていない').not.toBeNull();
+    expect(Number(m![1].replace(/_/g, '')), '5 秒では足りない').toBeGreaterThanOrEqual(20_000);
+  });
+
   it('isolatedStorage オプションを書いていない（0.21.3 には存在せず typecheck が壊れる）', () => {
     // 「設定文字列があること」を検査するテストは、その設定が**実際に効いているか**を
     // 一切保証しない。実際 isolatedStorage は型にも runtime にも存在せず、
