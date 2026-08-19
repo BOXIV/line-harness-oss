@@ -11,6 +11,7 @@ import {
   countRecentChallenges,
   createLoginChallenge,
   findActiveStaffByEmail,
+  getStaffByApiKey,
   getStaffById,
   hitThrottle,
   invalidateLoginChallenges,
@@ -194,6 +195,8 @@ async function auditLogin(
     path: string;
     detail?: Record<string, unknown>;
     sessionId?: string | null;
+    /** 既定は 'session'。パスワード（APIキー）経路では 'api_key' / 'env_key' を渡す。 */
+    via?: 'session' | 'api_key' | 'env_key';
   },
 ): Promise<void> {
   try {
@@ -211,7 +214,7 @@ async function auditLogin(
       status: input.status,
       // メールアドレスは detail に生で入れない（マスク済みだけ入れる）。
       detail: input.detail ?? {},
-      actorVia: 'session',
+      actorVia: input.via ?? 'session',
       actorSessionId: input.sessionId ?? null,
     });
   } catch (err) {
@@ -559,6 +562,142 @@ authEmail.post('/api/auth/email/verify', async (c) => {
     return c.json({ success: false, error: 'ログイン処理に失敗しました' }, 500);
   }
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/password — メールアドレス + パスワードでログイン（認証不要）
+// ---------------------------------------------------------------------------
+//
+// ここでいう「パスワード」は既存の API キー（staff_members.api_key / env API_KEY）。
+// メールコードが届かないときの管理者向け経路で、旧方式の遮断フェーズで入口ごと外す。
+//
+// ⚠️ **これはセキュリティ上の 2 要素ではない。**
+//    authMiddleware は従来どおりキー単体で認証を通す（機械クライアント 14 本以上が
+//    その経路を使っており、1 バイトも変えられない）。したがってキーを持っている者は
+//    この画面を通さず直接 API を叩ける。メールアドレスの一致確認は
+//    **ログイン画面の入口を揃えるための UI 上の確認**であって、鍵の強度は上がらない。
+//    そう理解したうえで、入口を「メールアドレス + 何か」に統一する意味で置いている。
+authEmail.post('/api/auth/password', async (c) => {
+  const cfg = config(c.env);
+  const FAIL = { success: false, error: 'メールアドレスまたはパスワードが正しくありません' } as const;
+
+  try {
+    const body = await c.req.json<{ email?: string; password?: string }>().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return c.json({ success: false, error: 'リクエストの形式が正しくありません' }, 400);
+    }
+    const email = String(body.email ?? '').trim();
+    const password = String(body.password ?? '');
+
+    if (!email || !isValidEmail(email)) {
+      return c.json({ success: false, error: 'メールアドレスの形式が正しくありません' }, 400);
+    }
+    if (!password) {
+      return c.json({ success: false, error: 'パスワードを入力してください' }, 400);
+    }
+
+    const ip = clientIp(c.req.raw.headers);
+
+    // コード検証と同じ失敗枠を使う。パスワード総当たりもここで頭打ちにする
+    // （従来この経路には画面側の試行制限が一切無かった）。
+    if (await ipThrottleExceeded(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes)) {
+      return c.json(
+        {
+          success: false,
+          error: `ログインの試行が多すぎます。${cfg.failWindowMinutes}分ほど待ってから、もう一度お試しください`,
+        },
+        429,
+      );
+    }
+
+    const resolved = await resolvePasswordLogin(c.env, email, password);
+    if (!resolved) {
+      const failed = await ipThrottle(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes);
+      if (failed.count >= cfg.failMaxPerIp) {
+        await notifyOncePerWindow(
+          c,
+          'login_fail',
+          ip,
+          cfg.failWindowMinutes,
+          `:lock: 管理画面ログインの失敗が同一プレフィクスで上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
+        );
+      }
+      return c.json(FAIL, 401);
+    }
+
+    await auditLogin(c.env, {
+      action: 'auth.login',
+      summary: '管理画面にログイン',
+      actorId: resolved.staff.id,
+      actorName: resolved.staff.name,
+      actorRole: resolved.staff.role,
+      status: 200,
+      path: '/api/auth/password',
+      via: resolved.via,
+      detail: { via: 'パスワード（APIキー）', emailMasked: maskEmail(email) },
+    });
+
+    c.executionCtx.waitUntil(
+      notifySlack(
+        c.env,
+        `:key: 管理画面ログイン（パスワード経路）: ${escapeSlackText(resolved.staff.name)}（${escapeSlackText(resolved.staff.role)}）`,
+      ).catch(() => {}),
+    );
+
+    return c.json({ success: true, data: { staff: resolved.staff } });
+  } catch (err) {
+    console.error('POST /api/auth/password error:', err);
+    await alertAdminAuth(
+      c.env,
+      `パスワードログインの処理が失敗: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return c.json({ success: false, error: 'ログイン処理に失敗しました' }, 500);
+  }
+});
+
+interface ResolvedPasswordLogin {
+  staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email: string | null; workArea: string | null };
+  via: 'api_key' | 'env_key';
+}
+
+/**
+ * メールアドレスとパスワード（＝APIキー）の組を検証する。
+ *
+ * env API_KEY は staff_members の行を持たない合成 owner なので、対になるメールアドレスを
+ * env `ADMIN_OWNER_EMAIL` から取る。**未設定なら形式が妥当な任意のアドレスを受け付ける** —
+ * 「誰も入れなくなったときの最終手段」が env 変数の設定漏れで使えなくなるのが最悪だから。
+ * 設定していれば一致を要求する。
+ */
+async function resolvePasswordLogin(
+  env: Env['Bindings'],
+  email: string,
+  password: string,
+): Promise<ResolvedPasswordLogin | null> {
+  const staff = await getStaffByApiKey(env.DB, password);
+  if (staff) {
+    if (normalizeEmail(staff.email ?? '') !== normalizeEmail(email)) return null;
+    return {
+      staff: {
+        id: staff.id,
+        name: staff.name,
+        role: staff.role,
+        email: staff.email,
+        workArea: staff.work_area ?? null,
+      },
+      via: 'api_key',
+    };
+  }
+
+  if (env.API_KEY && password === env.API_KEY) {
+    const ownerEmail = (env.ADMIN_OWNER_EMAIL ?? '').trim();
+    if (ownerEmail && normalizeEmail(ownerEmail) !== normalizeEmail(email)) return null;
+    return {
+      staff: { id: 'env-owner', name: 'Owner', role: 'owner', email: ownerEmail || null, workArea: null },
+      via: 'env_key',
+    };
+  }
+
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/auth/session — 現在のセッション（要認証）

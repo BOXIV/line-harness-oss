@@ -115,6 +115,9 @@ export type Env = {
     // 管理画面ログイン (BOXIV) — メール認証コード方式
     SLACK_ADMIN_ALERT_WEBHOOK_URL?: string; // ログイン系の異常（コードメール失敗 等）の通報先。未設定なら SLACK_REMINDER_WEBHOOK_URL を流用
     ADMIN_BASE_URL?: string;                // 管理画面の URL。メール本文のリンクに使う（未設定ならリンクを出さない）
+    // env API_KEY（合成 owner）と対になるメールアドレス。パスワードログインで一致を要求する。
+    // ⚠️ 未設定なら形式が妥当な任意のアドレスを受け付ける（最終手段が設定漏れで死なないように）
+    ADMIN_OWNER_EMAIL?: string;
     ADMIN_LOGIN_CODE_TTL_MINUTES?: string;  // default: 10
     ADMIN_LOGIN_MAX_ATTEMPTS?: string;      // default: 5（1発行あたりのコード検証回数の上限）
     ADMIN_LOGIN_ISSUE_MAX?: string;         // default: 10（アカウント単位。第三者に消費されうるので緩め）

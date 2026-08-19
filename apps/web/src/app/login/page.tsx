@@ -28,8 +28,8 @@ function LoginForm() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [apiKey, setApiKey] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [password, setPassword] = useState('')
 
   // メールのリンクから来た場合は入力欄を埋めるだけ。自動送信はしない
   // （自動送信にすると、リンクを先読みするスキャナがそのままコードを消費し得る）。
@@ -118,32 +118,30 @@ function LoginForm() {
     }
   }
 
-  const submitApiKey = async (e: React.FormEvent) => {
+  /**
+   * メールアドレス + パスワード（＝APIキー）でログインする。
+   *
+   * メールが届かないときの管理者向け経路。旧方式の遮断フェーズで入口ごと外す。
+   * ⚠️ メールアドレスの一致は **UI 上の確認**であって、セキュリティ上の 2 要素ではない
+   *    （キー単体で API は通る。機械クライアントがその経路を使うため変えられない）。
+   */
+  const submitPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     setError('')
     try {
-      // 検証は /api/staff/me で行う。認証済みなら全ロールが 200 を返す唯一の口で、
-      // ロール制限のあるルートを使うと弱いロールが「キーが不正」に見えて締め出される
-      // （2026-08-15 に /api/friends/count へ認可を足して実際に起きた）。
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787'
-      const res = await fetch(`${apiUrl}/api/staff/me`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      })
-      if (!res.ok) {
-        setError('APIキーが正しくありません')
+      const res = await api.auth.password(email.trim(), password)
+      if (!res.success || !res.data) {
+        setError('メールアドレスまたはパスワードが正しくありません')
         return
       }
-      const profile = await res.json()
-      if (!profile?.success || !profile?.data) {
-        setError('APIキーが正しくありません')
-        return
-      }
-      setLegacyApiKey(apiKey)
-      setStaffProfile(profile.data.name, profile.data.role)
-      router.push(landingFor(profile.data.role))
-    } catch {
-      setError('接続に失敗しました')
+      // パスワード（APIキー）そのものを認証トークンとして保存する。
+      // セッションとは別物なので setLegacyApiKey を使う（旧経路のまま）。
+      setLegacyApiKey(password)
+      setStaffProfile(res.data.staff.name, res.data.staff.role)
+      router.push(landingFor(res.data.staff.role))
+    } catch (err) {
+      setError(messageFor(err, 'メールアドレスまたはパスワードが正しくありません'))
     } finally {
       setLoading(false)
     }
@@ -246,28 +244,34 @@ function LoginForm() {
         <div className="mt-6 pt-4 border-t border-gray-100">
           <button
             type="button"
-            onClick={() => setShowApiKey((v) => !v)}
+            onClick={() => { setShowPassword((v) => !v); setError('') }}
             className="text-xs text-gray-400 hover:text-gray-600"
           >
-            {showApiKey ? '閉じる' : 'APIキーでログイン（管理者用）'}
+            {showPassword ? '閉じる' : 'パスワードでログイン（管理者用）'}
           </button>
-          {showApiKey && (
-            <form onSubmit={submitApiKey} className="mt-3">
+          {showPassword && (
+            <form onSubmit={submitPassword} className="mt-3">
+              {/* メールアドレスは上の欄と共有する（入口を「メールアドレス + 何か」に揃えるため）。
+                  どちらの段でも上に入力欄が出ているので、ここでは重複させない。 */}
+              <label className="block text-sm font-medium text-gray-700 mb-1">パスワード</label>
               <input
                 type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="APIキーを入力"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="パスワードを入力"
                 className={inputClass}
-                autoComplete="off"
+                autoComplete="current-password"
               />
               <button
                 type="submit"
-                disabled={loading || !apiKey}
+                disabled={loading || !email || !password}
                 className="w-full mt-2 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
               >
-                APIキーでログイン
+                {loading ? 'ログイン中...' : 'パスワードでログイン'}
               </button>
+              <p className="mt-2 text-[11px] text-gray-400">
+                メールが届かないときの管理者向けの入口です。上のメールアドレスと組で使います。
+              </p>
             </form>
           )}
         </div>

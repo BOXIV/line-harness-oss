@@ -730,6 +730,22 @@ export const api = {
           expiresAt: string
         }>
       }>>('/api/auth/session'),
+    /**
+     * メールアドレス + パスワード（＝APIキー）でログインする。
+     *
+     * ⚠️ セキュリティ上の 2 要素ではない。authMiddleware は従来どおりキー単体で認証を通す
+     *    （機械クライアントがその経路を使うため変えられない）。メールアドレスの一致確認は
+     *    ログイン画面の入口を揃えるための UI 上の確認。
+     */
+    password: (email: string, password: string) =>
+      fetchApi<ApiResponse<{
+        staff: { id: string; name: string; role: string; email: string | null; workArea: string | null }
+      }>>('/api/auth/password', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+        // 401 = 資格情報が合わない、というだけ。共通処理に流すと保存済みトークンが消える。
+        skipUnauthorizedHandling: true,
+      }),
     logout: () =>
       fetchApi<ApiResponse<{ revoked: number }>>('/api/auth/logout', { method: 'POST', body: '{}' }),
   },

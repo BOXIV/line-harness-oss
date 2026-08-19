@@ -4,7 +4,7 @@
  * 「誰が入れるか」を決める経路なので、通る条件より **通らない条件** を厚く固定する。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { STAFF_FIXTURES, ENV_API_KEY, TEST_IP, request, requestAs, testDb } from './support/fixtures.js';
+import { STAFF_FIXTURES, ENV_API_KEY, INACTIVE_STAFF, TEST_IP, request, requestAs, testDb } from './support/fixtures.js';
 
 const STAFF = STAFF_FIXTURES.staff;
 const MANAGER = STAFF_FIXTURES.manager;
@@ -859,5 +859,81 @@ describe('失敗の加算は「生存中の全チャレンジ」に効く（挙�
 
     const { code } = await createLoginChallenge(testDb, { staffId: STAFF.id, email });
     expect((await verify(email, code, '203.0.113.99')).status).toBe(200);
+  });
+});
+
+describe('POST /api/auth/password — メールアドレス + パスワード', () => {
+  const KEY = STAFF_FIXTURES.manager.apiKey;
+  const MAIL = emailOf(STAFF_FIXTURES.manager.id);
+
+  function login(email: string, password: string, ip = TEST_IP) {
+    return request('/api/auth/password', null, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip },
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  it('正しい組で 200 とプロフィールが返る', async () => {
+    const res = await login(MAIL, KEY);
+    expect(res.status).toBe(200);
+    const body = await res.json<{ data: { staff: { id: string; role: string } } }>();
+    expect(body.data.staff).toMatchObject({ id: STAFF_FIXTURES.manager.id, role: 'manager' });
+  });
+
+  it('パスワードが正しくてもメールアドレスが別人なら 401', async () => {
+    // 「キーだけ持っていれば入れる」状態にしないための確認。
+    // ⚠️ ただしこれは UI 上の確認で、キー単体で API は従来どおり通る（機械経路のため）。
+    const res = await login(emailOf(STAFF_FIXTURES.staff.id), KEY);
+    expect(res.status).toBe(401);
+  });
+
+  it('メールアドレスが正しくてもパスワードが違えば 401', async () => {
+    expect((await login(MAIL, 'lh_ffffffffffffffffffffffffffffffff')).status).toBe(401);
+  });
+
+  it('未登録アドレスと不一致の応答が同じ（列挙に使えない）', async () => {
+    const a = await login('nobody-here-xyz@example.test', KEY);
+    const b = await login(MAIL, 'lh_00000000000000000000000000000099');
+    expect(a.status).toBe(b.status);
+    expect(await a.json()).toEqual(await b.json());
+  });
+
+  it('形の不正は 400（401 に混ぜない）', async () => {
+    expect((await login('not-an-email', KEY)).status).toBe(400);
+    expect((await login(MAIL, '')).status).toBe(400);
+  });
+
+  it('env API_KEY は ADMIN_OWNER_EMAIL 未設定なら任意の妥当なアドレスで通る', async () => {
+    // 「誰も入れなくなったときの最終手段」が env 設定漏れで死なないための挙動。
+    const res = await login('anything@example.test', ENV_API_KEY);
+    expect(res.status).toBe(200);
+    const body = await res.json<{ data: { staff: { id: string; role: string } } }>();
+    expect(body.data.staff).toMatchObject({ id: 'env-owner', role: 'owner' });
+  });
+
+  it('無効化されたスタッフのキーでは通らない', async () => {
+    expect((await login('test-inactive@example.test', INACTIVE_STAFF.apiKey)).status).toBe(401);
+  });
+
+  it('失敗はコード検証と同じ IP 枠を消費し、上限で 429 になる', async () => {
+    const IP = '198.51.100.210';
+    for (let i = 0; i < 20; i++) {
+      expect((await login(MAIL, 'lh_00000000000000000000000000000098', IP)).status).toBe(401);
+    }
+    expect((await login(MAIL, KEY, IP)).status).toBe(429);
+  });
+
+  it('成功が監査ログに api_key 経路として残る', async () => {
+    await testDb.prepare('DELETE FROM audit_log').run();
+    await login(MAIL, KEY);
+    const row = await testDb
+      .prepare("SELECT actor_id, actor_via FROM audit_log WHERE action = 'auth.login' ORDER BY created_at DESC LIMIT 1")
+      .first<{ actor_id: string; actor_via: string }>();
+    expect(row).toMatchObject({ actor_id: STAFF_FIXTURES.manager.id, actor_via: 'api_key' });
+  });
+
+  it('認証スキップは完全一致（/api/auth/password 以外は素通りしない）', async () => {
+    expect((await request('/api/auth/password/x', null, { method: 'POST', body: '{}' })).status).toBe(401);
   });
 });

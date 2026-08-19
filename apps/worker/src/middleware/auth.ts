@@ -35,6 +35,7 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     //    /api/auth/session と /api/auth/logout まで無認証で素通りする。
     path === '/api/auth/email/start' ||
     path === '/api/auth/email/verify' ||
+    path === '/api/auth/password' ||
     path === '/api/integrations/stripe/webhook' ||
     path === '/api/notion/automation' ||
     path.match(/^\/api\/webhooks\/incoming\/[^/]+\/receive$/) ||
