@@ -23,6 +23,7 @@ import {
   findAvailableStaffForSlot,
 } from '@line-crm/db';
 import { notifyBookingSlack } from '../services/booking-slack-notify.boxiv.js';
+import { notifyBookingApprovedFollowups } from '../services/booking-approval-notify.boxiv.js';
 import type { Env } from '../index.js';
 import { firstSentMessageId } from '../utils/quote.js';
 
@@ -318,6 +319,14 @@ bookingRequests.put('/api/booking-requests/:id/approve', async (c) => {
     c.executionCtx.waitUntil(
       notifyBookingSlack(c.env, id, 'approved').catch((err) =>
         console.error('approve Slack notification failed:', err),
+      ),
+    );
+
+    // Notion 出品者リスト自動入力 + 撮影スタッフへのメール通知（非ブロッキング。
+    // 失敗はサービス内で Slack 通報され、承認レスポンスには影響しない）
+    c.executionCtx.waitUntil(
+      notifyBookingApprovedFollowups(c.env, id).catch((err) =>
+        console.error('approve followup (notion/email) failed:', err),
       ),
     );
 
