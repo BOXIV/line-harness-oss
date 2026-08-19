@@ -30,10 +30,13 @@ describe('vitest.config.ts', () => {
     expect(configSource).toMatch(/fileParallelism:\s*false/);
   });
 
-  it('テストファイル間で D1 の状態を分離している', () => {
-    // fileParallelism: false は「順番に走る」だけで、状態は分離されない。
-    // 順番に走ることと状態が分離されていることは別。
-    expect(configSource).toMatch(/isolatedStorage:\s*true/);
+  it('isolatedStorage オプションを書いていない（0.21.3 には存在せず typecheck が壊れる）', () => {
+    // 「設定文字列があること」を検査するテストは、その設定が**実際に効いているか**を
+    // 一切保証しない。実際 isolatedStorage は型にも runtime にも存在せず、
+    // 書いても黙って捨てられる一方で typecheck だけが赤くなっていた。
+    // 分離が効いているかは下の実挙動テスト（isolation.test.ts）で直接確かめる。
+    // コメントで言及するのは可（経緯を残すため）。**設定として書かれていない**ことを見る。
+    expect(configSource).not.toMatch(/^\s*isolatedStorage\s*:/m);
   });
 
   it('workers ランタイムのプールを使っている（environment 指定と同居させない）', () => {
