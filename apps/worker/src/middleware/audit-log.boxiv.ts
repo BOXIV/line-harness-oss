@@ -59,6 +59,10 @@ export async function auditLogMiddleware(c: Context<Env>, next: Next): Promise<R
         actorId: staff.id,
         actorName: staff.name,
         actorRole: staff.role,
+        // BOXIV: 認証経路（migration 919）。旧 API キーをいつ止めてよいかを
+        // 「直近◯日で api_key / env_key 経由が 0 件か」で判断するために残す。
+        actorVia: c.get('authVia') ?? null,
+        actorSessionId: c.get('authSessionId') ?? null,
         action: resolved.action,
         summary: resolved.summary,
         targetType: resolved.targetType ?? null,

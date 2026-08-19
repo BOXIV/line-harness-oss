@@ -19,6 +19,10 @@ export interface AuditLogRow {
   status: number | null;
   detail: string;
   created_at: string;
+  /** 認証経路（migration 919）: 'session' | 'api_key' | 'env_key'。旧行は NULL。 */
+  actor_via: string | null;
+  /** session 経路のときの staff_sessions.id（migration 919）。 */
+  actor_session_id: string | null;
 }
 
 export interface AuditLogEntry {
@@ -37,6 +41,8 @@ export interface AuditLogEntry {
   status: number | null;
   detail: unknown;
   createdAt: string;
+  actorVia: string | null;
+  actorSessionId: string | null;
 }
 
 export interface AuditLogInput {
@@ -53,6 +59,8 @@ export interface AuditLogInput {
   path: string;
   status?: number | null;
   detail?: unknown;
+  actorVia?: string | null;
+  actorSessionId?: string | null;
 }
 
 function serializeAuditLog(row: AuditLogRow): AuditLogEntry {
@@ -78,21 +86,81 @@ function serializeAuditLog(row: AuditLogRow): AuditLogEntry {
     status: row.status,
     detail,
     createdAt: row.created_at,
+    actorVia: row.actor_via ?? null,
+    actorSessionId: row.actor_session_id ?? null,
   };
 }
 
-/** 監査ログを 1 行記録する。失敗してもリクエスト本体には影響させない想定（呼出側で catch）。 */
+/**
+ * 監査ログを 1 行記録する。失敗してもリクエスト本体には影響させない想定（呼出側で catch）。
+ *
+ * actor_via / actor_session_id は migration 919 で足した列。**919 未適用の DB に
+ * このコードだけデプロイすると INSERT が毎回落ち、監査ログが全件・無言で欠落する**
+ * （呼出側は waitUntil + catch なので誰も気づかない）。
+ * 列が無い環境では 2 列を落として記録を続け、代わりに console.error を出す。
+ * 「証跡が丸ごと消える」より「2 列欠けるが残る + ログに出る」ほうが常にましなので、
+ * ここは静かに劣化させるのではなく、劣化したことが分かる形で続行する。
+ */
 export async function recordAuditLog(db: D1Database, input: AuditLogInput): Promise<void> {
   const id = crypto.randomUUID();
   const now = jstNow();
   const detailJson =
     typeof input.detail === 'string' ? input.detail : JSON.stringify(input.detail ?? {});
+  const legacy = async () => {
+    await db
+      .prepare(
+        `INSERT INTO audit_log
+           (id, line_account_id, actor_id, actor_name, actor_role, action, summary,
+            target_type, target_id, target_label, method, path, status, detail, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id,
+        input.lineAccountId ?? null,
+        input.actorId ?? null,
+        input.actorName ?? null,
+        input.actorRole ?? null,
+        input.action,
+        input.summary,
+        input.targetType ?? null,
+        input.targetId ?? null,
+        input.targetLabel ?? null,
+        input.method,
+        input.path,
+        input.status ?? null,
+        detailJson,
+        now,
+      )
+      .run();
+  };
+  try {
+    await recordAuditLogWithActorVia(db, input, id, now, detailJson);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/no such column|has no column/i.test(message)) throw err;
+    console.error(
+      'audit_log に actor_via / actor_session_id がありません（migration 919 未適用）。' +
+        '2 列を除いて記録を続行します。D1 を先に昇格させてください:',
+      message,
+    );
+    await legacy();
+  }
+}
+
+async function recordAuditLogWithActorVia(
+  db: D1Database,
+  input: AuditLogInput,
+  id: string,
+  now: string,
+  detailJson: string,
+): Promise<void> {
   await db
     .prepare(
       `INSERT INTO audit_log
          (id, line_account_id, actor_id, actor_name, actor_role, action, summary,
-          target_type, target_id, target_label, method, path, status, detail, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          target_type, target_id, target_label, method, path, status, detail, created_at,
+          actor_via, actor_session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -110,6 +178,8 @@ export async function recordAuditLog(db: D1Database, input: AuditLogInput): Prom
       input.status ?? null,
       detailJson,
       now,
+      input.actorVia ?? null,
+      input.actorSessionId ?? null,
     )
     .run();
 }

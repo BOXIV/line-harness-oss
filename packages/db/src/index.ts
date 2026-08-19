@@ -22,6 +22,7 @@ export * from './tracked-links';
 export * from './forms';
 export * from './ad-platforms';
 export * from './staff';
+export * from './staff-auth';
 export * from './staff-availability';
 export * from './booking-requests';
 export * from './audit-log';

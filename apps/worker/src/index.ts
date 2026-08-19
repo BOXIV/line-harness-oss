@@ -75,6 +75,9 @@ import { reconcileNotionStatuses } from './services/notion-status-sync.boxiv.js'
 // 監査ログ（管理操作の変更証跡, BOXIV）
 import { auditLogMiddleware } from './middleware/audit-log.boxiv.js';
 import { auditLogs } from './routes/audit-logs.boxiv.js';
+import { pruneExpiredStaffAuthRows } from '@line-crm/db';
+// 管理画面ログイン（メール6桁コード, BOXIV）
+import { authEmail } from './routes/auth-email.boxiv.js';
 
 export type Env = {
   Bindings: {
@@ -112,6 +115,26 @@ export type Env = {
     SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;
     SLACK_REMINDER_WEBHOOK_URL?: string;   // BOXIV: 催促メール/SMS の送信状況を流す監視用 Slack Incoming Webhook（未設定なら無効）
+    // 管理画面ログイン (BOXIV) — メール認証コード方式
+    SLACK_ADMIN_ALERT_WEBHOOK_URL?: string; // ログイン系の異常（コードメール失敗 等）の通報先。未設定なら SLACK_REMINDER_WEBHOOK_URL を流用
+    ADMIN_BASE_URL?: string;                // 管理画面の URL。メール本文のリンクに使う（未設定ならリンクを出さない）
+    // env API_KEY（合成 owner）と対になるメールアドレス。パスワードログインで一致を要求する。
+    // ⚠️ 未設定なら形式が妥当な任意のアドレスを受け付ける（最終手段が設定漏れで死なないように）
+    ADMIN_OWNER_EMAIL?: string;
+    ADMIN_LOGIN_CODE_TTL_MINUTES?: string;  // default: 10
+    ADMIN_LOGIN_MAX_ATTEMPTS?: string;      // default: 5（1発行あたりのコード検証回数の上限）
+    ADMIN_LOGIN_ISSUE_MAX?: string;         // default: 10（アカウント単位。第三者に消費されうるので緩め）
+    ADMIN_LOGIN_ISSUE_MAX_PER_IP?: string;  // default: 5（試行元プレフィクス × 宛先メール単位）
+    ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL?: string; // default: 100（試行元プレフィクスのみの外枠。行数を縛る）
+    ADMIN_LOGIN_ISSUE_WINDOW_MINUTES?: string; // default: 15
+    ADMIN_LOGIN_FAIL_MAX_PER_IP?: string;   // default: 10（コード検証失敗の IP 単位上限）
+    ADMIN_LOGIN_FAIL_WINDOW_MINUTES?: string;  // default: 15
+    // パスワード（＝APIキー）ログインの失敗上限。**メールコードとは別枠**。
+    // 守る秘密の強度が桁違いなので共有しない（共有すると弱い方の上限が強い方の入口を塞ぐ）
+    ADMIN_PW_FAIL_MAX_PER_EMAIL?: string;      // default: 10（プレフィクス × 宛先メール）
+    ADMIN_PW_FAIL_MAX_PER_IP_TOTAL?: string;   // default: 50（プレフィクスのみの外枠）
+    ADMIN_PW_FAIL_WINDOW_MINUTES?: string;     // default: 15
+    ADMIN_SESSION_TTL_HOURS?: string;       // default: 168（7日。iOS Safari の保存期間に合わせる）
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;
     NOTION_BUYER_DB_ID?: string;
@@ -184,7 +207,14 @@ export type Env = {
     TWILIO_FROM?: string;                           // Twilio番号(+81…) or Messaging Service SID(MG…)
   };
   Variables: {
+    // ⚠️ この staff の形（id / name / role）は 74 箇所の requireRole と
+    //    audit_log(migration 910) が依存している。変えないこと。
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff' };
+    // BOXIV: どの経路で認証されたか（migration 919 の audit_log.actor_via に記録）。
+    // 'session'=管理画面のメールログイン / 'api_key'=staff_members.api_key /
+    // 'env_key'=env API_KEY の env-owner。旧方式をいつ止めてよいかを実データで判断するために要る。
+    authVia?: 'session' | 'api_key' | 'env_key';
+    authSessionId?: string;
   };
 };
 
@@ -279,6 +309,8 @@ app.route('/', schemaReconcile);
 app.route('/', notionWebhook);
 // 監査ログ閲覧 (BOXIV)
 app.route('/', auditLogs);
+// 管理画面ログイン (BOXIV) — /api/auth/email/start|verify は認証スキップ（完全一致）
+app.route('/', authEmail);
 
 // Short link: /r/:ref → landing page with LINE open button
 app.get('/r/:ref', (c) => {
@@ -372,6 +404,15 @@ async function scheduled(
   // BOXIV: 12時間ごと(UTC 00:00 / 12:00 = JST 09:00 / 21:00) — Notion → D1 ステータス reconcile
   if (minute === 0 && hour % 12 === 0) {
     jobs.push(reconcileNotionStatuses(env.DB, env));
+    // 管理画面ログインの期限切れ行を掃除する（migration 919 / 920）。
+    // staff_login_challenges / staff_sessions / auth_throttle は放っておくと増え続ける。
+    // 特に auth_throttle は **無認証の口（/api/auth/email/*）から行が作られる**ので、
+    // 掃除しないと第三者が一方的に肥大させられる書込経路になる。
+    jobs.push(
+      pruneExpiredStaffAuthRows(env.DB).catch((e) =>
+        console.error('scheduled: pruneExpiredStaffAuthRows failed', e),
+      ),
+    );
   }
 
   await Promise.allSettled(jobs);

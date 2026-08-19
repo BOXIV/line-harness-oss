@@ -15,6 +15,14 @@
  *   2. Copy wrangler.boxiv.toml → wrangler.toml
  *   3. vite build + wrangler deploy
  *   4. Restore wrangler.toml from backup (always, even on failure)
+ *
+ * デプロイ前ゲート（BOXIV / 2026-08-18 追加）:
+ *   wrangler deploy の前に必ず `vitest run` を通す。ロール × エンドポイントの
+ *   到達性マトリクス（apps/worker/test/role-matrix.test.ts）が赤ならデプロイしない。
+ *   2026-08-15 に /api/friends/count へ認可を足した変更が、そこでログイン検証して
+ *   いた撮影スタッフ 5 名を 3 日間締め出した。あの変更はこのゲートで止まる。
+ *   ⚠️ 緊急時にゲートを外す手段は「下の runWorkerTests() 呼び出しを消す」だけ。
+ *      環境変数によるバイパスは意図的に用意していない。
  */
 import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
@@ -39,6 +47,17 @@ if (!existsSync(wranglerBoxiv)) {
   console.error('✗ wrangler.boxiv.toml not found at ' + wranglerBoxiv);
   process.exit(1);
 }
+
+// ── デプロイ前ゲート ──────────────────────────────────────────────────────────
+// テストは wrangler.toml の swap より前に実行する。vitest は wrangler.toml を
+// 読まない（vitest.config.ts が miniflare のバインディングを直接持つ）ので、
+// swap の途中状態に左右されない。
+function runWorkerTests() {
+  console.log('▶ vitest run (デプロイ前ゲート: ロール × エンドポイント到達性)');
+  execSync('pnpm exec vitest run', { cwd: workerDir, stdio: 'inherit' });
+}
+
+runWorkerTests();
 
 let swapped = false;
 try {

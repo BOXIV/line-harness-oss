@@ -1,7 +1,8 @@
 'use client'
 import { useState, useEffect } from 'react'
 import Header from '@/components/layout/header'
-import { fetchApi } from '@/lib/api'
+import { api, fetchApi } from '@/lib/api'
+import { useDisplayRole } from '@/contexts/current-staff-context'
 import { AREA_LABELS } from '@/lib/area-meta'
 import type { ApiResponse } from '@line-crm/shared'
 import type { StaffMember } from '@line-crm/shared'
@@ -47,6 +48,17 @@ export default function StaffPage() {
 
   // New API key banner
   const [newKey, setNewKey] = useState<NewApiKey | null>(null)
+  /** 管理者が発行した救済用ログインコード（メールが届かない人に口頭 / LINE で伝える） */
+  const [issuedCode, setIssuedCode] = useState<{
+    code: string
+    expiresAt: string
+    name: string
+    email: string | null
+  } | null>(null)
+  /** メールアドレスのインライン編集（オーナーのみ）。id → 入力中の値 */
+  const [createdNotice, setCreatedNotice] = useState<string | null>(null)
+  const [editingEmail, setEditingEmail] = useState<{ id: string; value: string } | null>(null)
+  const [emailSaving, setEmailSaving] = useState(false)
   const [copied, setCopied] = useState(false)
 
   // Create form
@@ -59,8 +71,13 @@ export default function StaffPage() {
   const [formError, setFormError] = useState('')
 
   // ログイン中ユーザーのロール（manager は撮影スタッフのみ追加可）
-  const [myRole, setMyRole] = useState<string | null>(null)
+  // ロールの正は GET /api/staff/me（CurrentStaffProvider 経由）。
+  // localStorage を直接読むと、権限を変えた直後の人が古い画面のままになる。
+  const myRole = useDisplayRole()
   const isManager = myRole === 'manager'
+  // メール変更は Worker 側で owner のみ。ボタンを出すかどうかもそれに合わせる
+  // （出しても 403 になるだけだが、押せるのに必ず失敗するボタンは出さない）。
+  const isOwner = myRole === 'owner'
 
   const loadMembers = async () => {
     setLoading(true)
@@ -80,7 +97,6 @@ export default function StaffPage() {
   }
 
   useEffect(() => {
-    setMyRole(localStorage.getItem('lh_staff_role'))
     loadMembers()
   }, [])
 
@@ -89,11 +105,13 @@ export default function StaffPage() {
     setFormLoading(true)
     setFormError('')
     try {
-      const body: { name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email?: string; workArea?: string } = {
+      // メールアドレスはログイン（6桁コードの宛先）そのものなので必須。
+      // 空で作るとその人は永久にログインできず、救済コードの宛先も無い。
+      const body: { name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email: string; workArea?: string } = {
         name: formName,
         role: formRole,
+        email: formEmail.trim(),
       }
-      if (formEmail) body.email = formEmail
       // 稼働エリアは撮影スタッフのみ設定
       if (formRole === 'staff') body.workArea = formWorkArea
 
@@ -102,9 +120,11 @@ export default function StaffPage() {
         body: JSON.stringify(body),
       })
       if (res.success) {
-        if (res.data.apiKey) {
-          setNewKey({ apiKey: res.data.apiKey, staffId: res.data.id })
-        }
+        // 作成時に平文パスワードは返らない（意図的）。新しい人はメールに届く
+        // 6桁コードでログインするので、資格情報を人づてに渡す必要が無い。
+        setCreatedNotice(
+          `${formName} さんを追加しました。ログイン用の6桁コードは ${body.email} に届きます。パスワードの受け渡しは不要です。`,
+        )
         setFormName('')
         setFormEmail('')
         setFormRole('staff')
@@ -148,7 +168,14 @@ export default function StaffPage() {
   }
 
   const handleRegenerateKey = async (member: StaffMember) => {
-    if (!confirm(`${member.name} のAPIキーを再生成しますか？\n現在のキーは無効になります。`)) return
+    if (
+      !confirm(
+        `${member.name} のパスワードを再発行しますか？\n\n` +
+          '現在のパスワードは無効になります。\n' +
+          '通常のログインはメールに届く6桁コードで行うため、この操作は基本的に不要です。',
+      )
+    )
+      return
     try {
       const res = await fetchApi<ApiResponse<{ apiKey: string }>>(`/api/staff/${member.id}/regenerate-key`, {
         method: 'POST',
@@ -156,10 +183,71 @@ export default function StaffPage() {
       if (res.success) {
         setNewKey({ apiKey: res.data.apiKey, staffId: member.id })
       } else {
-        setError(res.error ?? 'キー再生成に失敗しました')
+        setError(res.error ?? 'パスワードの再発行に失敗しました')
       }
     } catch {
-      setError('キー再生成に失敗しました')
+      setError('パスワードの再発行に失敗しました')
+    }
+  }
+
+  /**
+   * 救済用ログインコードの発行。
+   *
+   * メールが届かない人を入れるための経路だが、**構造上その人になりすませる**機能でもある。
+   * しかも旧方式のキー再生成と違って本人のログインを壊さないので、本人は気づかない。
+   * 発行者名は変更ログと Slack に必ず残る（それが唯一の抑止力）。
+   */
+  const handleIssueLoginCode = async (member: StaffRow) => {
+    if (
+      !confirm(
+        `${member.name} のログインコードを発行しますか？\n\n` +
+          'このコードを使うと、その人として管理画面に入れます。\n' +
+          '本人以外には絶対に渡さないでください。\n' +
+          '発行した事実とあなたの名前は変更ログと Slack に残ります。',
+      )
+    )
+      return
+    try {
+      const res = await api.staff.issueLoginCode(member.id)
+      if (res.success) {
+        setIssuedCode({
+          code: res.data.code,
+          expiresAt: res.data.expiresAt,
+          name: member.name,
+          email: res.data.staff.email,
+        })
+      } else {
+        setError(res.error ?? 'ログインコードの発行に失敗しました')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'ログインコードの発行に失敗しました')
+    }
+  }
+
+  /**
+   * メールアドレスの変更（オーナーのみ）。
+   *
+   * メールはログインの本人確認そのものなので、Worker 側は owner にしか許可していない
+   * （マネージャーに開けると、撮影スタッフのアドレスを自分のものへ書き換えて成り代われる）。
+   * 一方で「メール未設定・重複のスタッフはログインも救済コードも成立しない」ため、
+   * 画面から直せる口が無いと詰む。ここがその唯一の口。
+   */
+  const handleSaveEmail = async () => {
+    if (!editingEmail) return
+    setEmailSaving(true)
+    setError('')
+    try {
+      const res = await api.staff.update(editingEmail.id, { email: editingEmail.value.trim() })
+      if (res.success) {
+        setEditingEmail(null)
+        await loadMembers()
+      } else {
+        setError(res.error ?? 'メールアドレスの更新に失敗しました')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'メールアドレスの更新に失敗しました')
+    } finally {
+      setEmailSaving(false)
     }
   }
 
@@ -195,11 +283,24 @@ export default function StaffPage() {
         }
       />
 
-      {/* New API key banner */}
+      {/* 追加完了の案内（平文パスワードは出さない） */}
+      {createdNotice && (
+        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
+          <p className="text-sm text-green-800 flex-1">{createdNotice}</p>
+          <button
+            onClick={() => setCreatedNotice(null)}
+            className="shrink-0 px-3 py-1 text-xs font-medium text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            閉じる
+          </button>
+        </div>
+      )}
+
+      {/* パスワード再発行の結果（明示的に叩いたときだけ表示される） */}
       {newKey && (
         <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
           <p className="text-sm font-medium text-green-800 mb-2">
-            APIキーが発行されました。このキーは一度しか表示されません。
+            パスワードを再発行しました。この値は一度しか表示されません。
           </p>
           <div className="flex items-center gap-2">
             <code className="flex-1 text-xs bg-white border border-green-200 rounded px-3 py-2 font-mono break-all">
@@ -218,6 +319,37 @@ export default function StaffPage() {
               閉じる
             </button>
           </div>
+        </div>
+      )}
+
+      {/* 救済用ログインコード */}
+      {issuedCode && (
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-300 rounded-lg">
+          <p className="text-sm font-medium text-amber-900 mb-1">
+            {issuedCode.name} さんのログインコードを発行しました
+          </p>
+          <p className="text-xs text-amber-800 mb-3">
+            本人だけに伝えてください。このコードで、その人として管理画面に入れます。
+            発行した事実とあなたの名前は変更ログに残ります。
+          </p>
+          <p className="text-xs text-amber-800 mb-3">
+            このコードでログインするときに入力するメールアドレス:{' '}
+            <span className="font-mono">{issuedCode.email ?? '（未登録）'}</span>
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-lg bg-white border border-amber-300 rounded px-3 py-2 font-mono tracking-[0.3em] text-center">
+              {issuedCode.code}
+            </code>
+            <button
+              onClick={() => setIssuedCode(null)}
+              className="shrink-0 px-3 py-2 text-xs font-medium text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              閉じる
+            </button>
+          </div>
+          <p className="text-xs text-amber-700 mt-2">
+            有効期限: {new Date(issuedCode.expiresAt).toLocaleString('ja-JP')} / 1 回だけ使えます
+          </p>
         </div>
       )}
 
@@ -251,14 +383,18 @@ export default function StaffPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">メールアドレス</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">メールアドレス *</label>
                 <input
                   type="email"
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
+                  required
                   placeholder="taro@example.com"
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
+                <p className="mt-1 text-[11px] text-gray-500">
+                  ログイン用の認証コードはここへ届きます。本人が受信できるアドレスを入れてください。
+                </p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">ロール *</label>
@@ -308,7 +444,7 @@ export default function StaffPage() {
             <div className="flex items-center gap-3">
               <button
                 type="submit"
-                disabled={formLoading || !formName}
+                disabled={formLoading || !formName || !formEmail}
                 className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
                 style={{ backgroundColor: '#0f172a' }}
               >
@@ -361,7 +497,7 @@ export default function StaffPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">メール</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">ロール</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">稼働エリア</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">APIキー</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">パスワード</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">状態</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">操作</th>
               </tr>
@@ -370,7 +506,47 @@ export default function StaffPage() {
               {members.map((member) => (
                 <tr key={member.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{member.name}</td>
-                  <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{member.email ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">
+                    {editingEmail?.id === member.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="email"
+                          value={editingEmail.value}
+                          onChange={(e) => setEditingEmail({ id: member.id, value: e.target.value })}
+                          className="w-48 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleSaveEmail}
+                          disabled={emailSaving || !editingEmail.value.trim()}
+                          className="px-2 py-1 text-xs text-green-700 border border-green-300 rounded hover:bg-green-50 disabled:opacity-50"
+                        >
+                          保存
+                        </button>
+                        <button
+                          onClick={() => setEditingEmail(null)}
+                          className="px-2 py-1 text-xs text-gray-500 border border-gray-200 rounded hover:bg-gray-50"
+                        >
+                          取消
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className={member.email ? '' : 'text-red-600'}>
+                          {member.email ?? '未登録（ログインできません）'}
+                        </span>
+                        {isOwner && (
+                          <button
+                            onClick={() => setEditingEmail({ id: member.id, value: member.email ?? '' })}
+                            className="text-[11px] text-blue-600 hover:underline"
+                            title="ログイン用メールアドレスを変更します。旧アドレスへ通知が飛び、全セッションが失効します"
+                          >
+                            変更
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <RoleBadge role={member.role} />
                   </td>
@@ -409,11 +585,20 @@ export default function StaffPage() {
                           >
                             {member.isActive ? '無効化' : '有効化'}
                           </button>
+                          {member.isActive && (
+                            <button
+                              onClick={() => handleIssueLoginCode(member)}
+                              className="px-2.5 py-1 text-xs font-medium text-amber-700 bg-white border border-amber-300 rounded hover:bg-amber-50 transition-colors"
+                              title="メールが届かないときに、この人として入れるコードを発行します"
+                            >
+                              ログインコード発行
+                            </button>
+                          )}
                           <button
                             onClick={() => handleRegenerateKey(member)}
                             className="px-2.5 py-1 text-xs font-medium text-blue-600 bg-white border border-blue-200 rounded hover:bg-blue-50 transition-colors"
                           >
-                            キー再生成
+                            パスワード再発行
                           </button>
                           <button
                             onClick={() => handleDelete(member)}
