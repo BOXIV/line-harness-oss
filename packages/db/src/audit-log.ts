@@ -19,6 +19,10 @@ export interface AuditLogRow {
   status: number | null;
   detail: string;
   created_at: string;
+  /** 認証経路（migration 919）: 'session' | 'api_key' | 'env_key'。旧行は NULL。 */
+  actor_via: string | null;
+  /** session 経路のときの staff_sessions.id（migration 919）。 */
+  actor_session_id: string | null;
 }
 
 export interface AuditLogEntry {
@@ -37,6 +41,8 @@ export interface AuditLogEntry {
   status: number | null;
   detail: unknown;
   createdAt: string;
+  actorVia: string | null;
+  actorSessionId: string | null;
 }
 
 export interface AuditLogInput {
@@ -53,6 +59,8 @@ export interface AuditLogInput {
   path: string;
   status?: number | null;
   detail?: unknown;
+  actorVia?: string | null;
+  actorSessionId?: string | null;
 }
 
 function serializeAuditLog(row: AuditLogRow): AuditLogEntry {
@@ -78,6 +86,8 @@ function serializeAuditLog(row: AuditLogRow): AuditLogEntry {
     status: row.status,
     detail,
     createdAt: row.created_at,
+    actorVia: row.actor_via ?? null,
+    actorSessionId: row.actor_session_id ?? null,
   };
 }
 
@@ -91,8 +101,9 @@ export async function recordAuditLog(db: D1Database, input: AuditLogInput): Prom
     .prepare(
       `INSERT INTO audit_log
          (id, line_account_id, actor_id, actor_name, actor_role, action, summary,
-          target_type, target_id, target_label, method, path, status, detail, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          target_type, target_id, target_label, method, path, status, detail, created_at,
+          actor_via, actor_session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -110,6 +121,8 @@ export async function recordAuditLog(db: D1Database, input: AuditLogInput): Prom
       input.status ?? null,
       detailJson,
       now,
+      input.actorVia ?? null,
+      input.actorSessionId ?? null,
     )
     .run();
 }
