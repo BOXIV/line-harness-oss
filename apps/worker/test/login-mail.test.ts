@@ -136,3 +136,33 @@ describe('ログイン画面 URL の組み立て', () => {
     expect(text).toContain('246810'); // 本文にはある（手で入力してもらう）
   });
 })
+
+describe('迷惑メール報告の注意書き', () => {
+  // 抑制リストはアドレス単位でアカウント全体に効き、SendGrid は 202 を返して静かに破棄する。
+  // 技術で検知できない（API キーが送信専用スコープ）と決めた以上、本文が最後の防波堤になる。
+  it('ログインコードメールに ⚠️ 始まりの注意書きが入る', async () => {
+    await sendLoginCodeEmail(ENV, {
+      to: 'someone@example.test',
+      staffName: 'テスト',
+      code: '135790',
+      ttlMinutes: 10,
+      loginUrl: null,
+    });
+    const text: string = sent[0]!.body.content.find((c: any) => c.type === 'text/plain').value;
+    const line = text.split('\n').find((l) => l.startsWith('⚠️'));
+    expect(line, '⚠️ で始まる行が無い').toBeDefined();
+    expect(line).toContain('迷惑メール報告しないでください');
+    expect(line).toContain('ログインできなくなります');
+  });
+
+  it('メールアドレス変更の通知にも入る（同じ抑制リストに載るため）', async () => {
+    await notifyStaffEmailChanged(ENV, {
+      oldEmail: 'old@example.test',
+      newEmail: 'new@example.test',
+      staffName: 'テスト',
+      actorName: 'オーナー',
+    });
+    const text: string = sent[0]!.body.content.find((c: any) => c.type === 'text/plain').value;
+    expect(text.split('\n').some((l) => l.startsWith('⚠️'))).toBe(true);
+  });
+});

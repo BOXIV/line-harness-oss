@@ -15,6 +15,22 @@ export interface AdminAuthEmailEnv extends SendGridEnv {
   ADMIN_BASE_URL?: string;
 }
 
+/**
+ * 迷惑メール報告の注意書き（全メール共通）。
+ *
+ * 抑制リストは**機能ごとではなくアドレス単位でアカウント全体**に効く。BOXIV から出るメールは
+ * すべて同じ SendGrid アカウント・同じ送信元を共有しているので、**どのメールで報告を押されても
+ * その人はログイン認証コードを受け取れなくなる**。しかも SendGrid は抑制リスト在籍の宛先にも
+ * 202 を返して静かに破棄するため、送信側は成功にしか見えず Slack 通報も鳴らない
+ * （現行の API キーは送信専用スコープで抑制リストを読めない）。
+ * 技術で検知できないと決めた以上、本文で伝えるのが最後の防波堤になる。
+ *
+ * 撮影確定通知（PR #91）と文面を揃えている。片方だけ変えないこと。
+ */
+const SPAM_REPORT_WARNING =
+  '⚠️ このメールを迷惑メール報告しないでください。以後、ログイン用の認証メールが届かなくなり、' +
+  '管理画面にログインできなくなります。';
+
 /** Slack / ログに出す用の伏せ字。`toshiki.o@boxiv.co.jp` → `to***@boxiv.co.jp` */
 export function maskEmail(email: string | null | undefined): string {
   const value = String(email ?? '');
@@ -93,6 +109,8 @@ export async function sendLoginCodeEmail(
     'このメールに心当たりがない場合は、コードを誰にも教えず破棄してください。',
     'あなたのアカウントで誰かがログインを試みた可能性があります。',
     '',
+    SPAM_REPORT_WARNING,
+    '',
     '— BOXIV LINE Connect',
   );
 
@@ -137,6 +155,8 @@ export async function notifyStaffEmailChanged(
     'また、変更にともない現在のログインセッションはすべて無効化されました。',
     '',
     '心当たりがない場合は、至急 BOXIV の管理者へご連絡ください。',
+    '',
+    SPAM_REPORT_WARNING,
     '',
     '— BOXIV LINE Connect',
   ].join('\n');
