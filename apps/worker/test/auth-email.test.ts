@@ -953,16 +953,15 @@ describe('POST /api/auth/password — メールアドレス + パスワード', 
   it('宛先を変え続けても外枠で頭打ちになる（env キーへの無制限な総当たりを作らない）', async () => {
     // ADMIN_OWNER_EMAIL 未設定なら任意のアドレスで env キーが通るため、
     // 宛先ごとの枠だけだとアドレスを変え続けて無制限に試せてしまう。
-    // ⚠️ 外枠はテスト用に 12 へ下げている（vitest.config.ts）。既定 50 のままだと
-    //    51 回の直列リクエストが要り、5 秒の既定タイムアウトを超えて
-    //    **再現性のない失敗**になる。実際それが「原因未特定のフレーク」の正体だった。
+    // **本番と同じ既定値（50）で検証する**。51 回の直列リクエストになるが、
+    // testTimeout を 30 秒にしてあるので足りる（既定 5 秒だと間欠的に落ちていた）。
     const IP = '198.51.100.213';
     let throttledAt: number | null = null;
-    for (let i = 0; i < 16; i++) {
+    for (let i = 0; i < 60; i++) {
       const res = await login(`rotate-${i}@example.test`, 'lh_00000000000000000000000000000096', IP);
       if (res.status === 429) { throttledAt = i + 1; break; }
     }
-    expect(throttledAt, '外枠 12 で止まる').toBe(13);
+    expect(throttledAt, '外枠 50 で止まる').toBe(51);
   });
 
   it('メール未登録のアカウントは理由が分かる文言で返る', async () => {
