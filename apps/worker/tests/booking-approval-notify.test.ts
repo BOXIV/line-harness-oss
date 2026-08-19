@@ -237,6 +237,8 @@ describe('notifyBookingApprovedFollowups', () => {
     expect(text).toContain('Model 3');
     expect(text).toContain('1234');
     expect(text).toContain('090-0000-0000');
+    // 迷惑メール報告 → SendGrid 抑制リスト → ログインメール巻き添え を防ぐ注意書き（⚠️ 始まり）
+    expect(text).toContain('⚠️ このメールを迷惑メール報告しないでください');
   });
 
   it('Notion 障害時: throw せず Slack 通報し、メールは vehicle_info フォールバックで送る', async () => {
