@@ -17,6 +17,15 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       main: './src/index.ts',
+      // ⚠️ isolatedStorage を明示的に有効化する。既定に任せない。
+      // これが無いと全テストファイルが同じ D1 の中身を共有し、
+      // あるファイルの beforeEach の DELETE や ALTER TABLE が
+      // 別ファイルの前提を壊す。fileParallelism: false で順番には走るが、
+      // **順番に走ることと状態が分離されていることは別**。
+      // 実際、テストファイルを 1 つ追加した直後の実行で 1 件だけ落ち、
+      // その後は再現しないという不安定さが出た（原因は未特定だが、
+      // 状態共有はその最有力候補であり、塞げる側から塞ぐ）。
+      isolatedStorage: true,
       miniflare: {
         compatibilityDate: '2024-12-01',
         compatibilityFlags: ['nodejs_compat'],

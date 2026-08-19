@@ -30,6 +30,12 @@ describe('vitest.config.ts', () => {
     expect(configSource).toMatch(/fileParallelism:\s*false/);
   });
 
+  it('テストファイル間で D1 の状態を分離している', () => {
+    // fileParallelism: false は「順番に走る」だけで、状態は分離されない。
+    // 順番に走ることと状態が分離されていることは別。
+    expect(configSource).toMatch(/isolatedStorage:\s*true/);
+  });
+
   it('workers ランタイムのプールを使っている（environment 指定と同居させない）', () => {
     // cloudflareTest() がランタイムを提供するので、environment: 'node' とは同居できない。
     // マージ時に「両方の設定を併記」しようとして壊れかけたので固定する。
