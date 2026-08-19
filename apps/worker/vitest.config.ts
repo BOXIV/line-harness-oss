@@ -42,7 +42,11 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ['test/**/*.test.ts'],
+    // ⚠️ `test/` と `tests/` の**両方**を拾う。別ワークツリー（PR #91）が
+    //    `apps/worker/tests/` を使っており、片方だけにするとマージ後に
+    //    **そのスイートが静かに実行されなくなる**（緑に見えてゲートをすり抜ける）。
+    //    ディレクトリを寄せる案もあるが、include を広げる方がマージ時の事故が少ない。
+    include: ['test/**/*.test.ts', 'tests/**/*.test.ts'],
     setupFiles: ['./test/support/setup.ts'],
     // ⚠️ テストファイル間の並行実行を切る。**全ファイルが同じ D1 を共有している**ため。
     //
