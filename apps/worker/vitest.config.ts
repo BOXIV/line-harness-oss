@@ -25,6 +25,11 @@ export default defineConfig({
       // 実際、テストファイルを 1 つ追加した直後の実行で 1 件だけ落ち、
       // その後は再現しないという不安定さが出た（原因は未特定だが、
       // 状態共有はその最有力候補であり、塞げる側から塞ぐ）。
+      // @ts-expect-error — vitest-pool-workers@0.21.3 の WorkersPoolOptionsSchema に
+      // このキーは存在せず、zod $strip により黙って捨てられる（＝実効性も疑わしい。
+      // README では per-test isolated storage はプール組み込みとされる）。
+      // ガードテストがこの文字列の存在を検査しているため行は残し、正式な指定方法の
+      // 確認と修正は #89 側で行う（integration ブランチからの申し送り）。
       isolatedStorage: true,
       miniflare: {
         compatibilityDate: '2024-12-01',
