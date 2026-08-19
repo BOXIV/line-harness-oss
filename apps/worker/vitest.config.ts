@@ -17,20 +17,17 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       main: './src/index.ts',
-      // ⚠️ isolatedStorage を明示的に有効化する。既定に任せない。
-      // これが無いと全テストファイルが同じ D1 の中身を共有し、
-      // あるファイルの beforeEach の DELETE や ALTER TABLE が
-      // 別ファイルの前提を壊す。fileParallelism: false で順番には走るが、
-      // **順番に走ることと状態が分離されていることは別**。
-      // 実際、テストファイルを 1 つ追加した直後の実行で 1 件だけ落ち、
-      // その後は再現しないという不安定さが出た（原因は未特定だが、
-      // 状態共有はその最有力候補であり、塞げる側から塞ぐ）。
-      // @ts-expect-error — vitest-pool-workers@0.21.3 の WorkersPoolOptionsSchema に
-      // このキーは存在せず、zod $strip により黙って捨てられる（＝実効性も疑わしい。
-      // README では per-test isolated storage はプール組み込みとされる）。
-      // ガードテストがこの文字列の存在を検査しているため行は残し、正式な指定方法の
-      // 確認と修正は #89 側で行う（integration ブランチからの申し送り）。
-      isolatedStorage: true,
+      // ⚠️ isolatedStorage オプションは **書かないこと**（@cloudflare/vitest-pool-workers 0.21.3）。
+      //
+      // 一度「状態共有を塞ぐ」つもりで書いたが、実測すると:
+      //   - このバージョンの型・runtime のどちらにも isolatedStorage は**存在しない**
+      //     （dist/pool/index.mjs / index.d.mts への出現が 0 回）。
+      //     オプションスキーマは zod の $strip なので、書いても**黙って捨てられる**
+      //   - `tsc -p tsconfig.test.json` は TS2353 で**赤になる**
+      //   - そして **per-test/per-file のストレージ分離はプール組み込みで既に効いている**
+      //     （test/vitest-config.test.ts の「ファイル間で D1 状態が漏れない」で実証済み）
+      // 旧 `defineWorkersConfig` API の poolOptions.workers.isolatedStorage と混同したもの。
+      // 書いても効果はゼロで、typecheck を壊すだけ。
       miniflare: {
         compatibilityDate: '2024-12-01',
         compatibilityFlags: ['nodejs_compat'],
@@ -51,6 +48,10 @@ export default defineConfig({
           // 「外枠が効いた」ように見えて実際は別の層を測ってしまう
           // （実際に一度そのテストを書いてしまい、外枠を無効化しても緑のままだった）。
           ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL: '10',
+          // パスワード外枠もテスト用に下げる。既定 50 のままだと 51 回の直列リクエストが要り、
+          // 5 秒の既定タイムアウトを超えて **再現性のない失敗** になっていた
+          // （「原因未特定のフレーク」の正体がこれ。状態共有ではなく実行時間だった）。
+          ADMIN_PW_FAIL_MAX_PER_IP_TOTAL: '12',
         },
       },
     }),
