@@ -57,11 +57,21 @@ export async function seedStaff(db: D1Database): Promise<void> {
 
 const ORIGIN = 'https://worker.example.test';
 
+/**
+ * 既定のテスト用クライアント IP（TEST-NET-3 / RFC 5737）。
+ *
+ * ログインの試行元スロットル（migration 920）は IP 単位で数えるので、
+ * 付けないと全テストが同じ bucket を共有して互いを落とす。
+ * IP 単位の挙動を試すテストは init.headers で個別の IP を渡すこと。
+ */
+export const TEST_IP = '203.0.113.10';
+
 /** Bearer 付きでワーカーを叩く。token を省略すると Authorization ヘッダ自体を付けない。 */
 export function request(path: string, token?: string | null, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   if (token !== undefined && token !== null) headers.set('Authorization', `Bearer ${token}`);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (!headers.has('cf-connecting-ip')) headers.set('cf-connecting-ip', TEST_IP);
   return SELF.fetch(`${ORIGIN}${path}`, { ...init, headers });
 }
 

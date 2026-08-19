@@ -82,7 +82,7 @@ describe('POST /api/staff — メールアドレスの検証', () => {
     expect(res.status).toBe(409);
   });
 
-  it('正しいメールなら 201 で平文 API キーが 1 度だけ返る', async () => {
+  it('正しいメールなら 201。ただし平文パスワードは返さない', async () => {
     const res = await createStaff('owner', {
       name: '正常系',
       email: 'phase2-ok@example.test',
@@ -92,6 +92,20 @@ describe('POST /api/staff — メールアドレスの検証', () => {
     const body = await res.json<{ data: { id: string; email: string; apiKey: string } }>();
     createdIds.push(body.data.id);
     expect(body.data.email).toBe('phase2-ok@example.test');
+    // 新規作成では平文を出さない。出すと「資格情報を人づてに配る」運用が生まれ、
+    // この改修で無くそうとしているものを教育してしまう。マスク済みのみ。
+    expect(body.data.apiKey).toMatch(/^lh_\*{4}[0-9a-f]{4}$/);
+    expect(JSON.stringify(body)).not.toMatch(/lh_[0-9a-f]{32}/);
+  });
+
+  it('パスワードが要るときは再発行を明示的に叩く（そこでは平文が返る）', async () => {
+    const id = await newStaff('phase2-regen@example.test');
+    const res = await request(`/api/staff/${id}/regenerate-key`, ENV_API_KEY, {
+      method: 'POST',
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json<{ data: { apiKey: string } }>();
     expect(body.data.apiKey).toMatch(/^lh_[0-9a-f]{32}$/);
   });
 });

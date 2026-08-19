@@ -20,11 +20,115 @@ import type { StaffMember } from './staff';
 export const DEFAULT_CODE_TTL_MINUTES = 10;
 /** 1 チャレンジあたりのコード検証試行回数の上限 */
 export const DEFAULT_MAX_ATTEMPTS = 5;
-/** セッションの絶対期限（時間）。既定 14 日 */
-export const DEFAULT_SESSION_TTL_HOURS = 24 * 14;
-/** 同一スタッフがコード発行できる回数と窓（分）。総当たり用のコード量産を防ぐ */
-export const DEFAULT_ISSUE_MAX = 5;
+/**
+ * セッションの絶対期限（時間）。既定 7 日。
+ *
+ * iOS Safari はサイトを 7 日間触らないとブラウザの保存領域を消すため、
+ * それより長い期限は低頻度利用者（撮影スタッフ）には実効性が無い。
+ * 「端末が覚えている期間」と「サーバ側の期限」を揃えておくと、
+ * 切れた理由の説明が 1 つで済む。
+ */
+export const DEFAULT_SESSION_TTL_HOURS = 24 * 7;
+/**
+ * 同一スタッフがコード発行できる回数と窓（分）。
+ *
+ * この枠は **第三者に消費されうる**（start は認証不要でメールアドレスさえ知っていれば叩ける）。
+ * そのため枠自体は緩めに取り、実質的な抑止は下の IP 単位のスロットル（migration 920）で行う。
+ * ここを絞りすぎると、攻撃者が枠を食い潰して本人の「コードを送る」を無言で殺せる。
+ */
+export const DEFAULT_ISSUE_MAX = 10;
 export const DEFAULT_ISSUE_WINDOW_MINUTES = 15;
+/**
+ * 同一 IP から **同一スタッフ宛** にコードを発行できる回数の上限
+ * （窓は DEFAULT_ISSUE_WINDOW_MINUTES と共有）。
+ *
+ * IP だけで括ってはいけない。出口 IP を共有している職場やモバイル回線では、
+ * 別々の人が自分宛のコードを取っているだけで枠を食い合い、6 人目が
+ * 「コードを送る」を押しても無言で何も起きなくなる。
+ * 防ぎたいのは「第三者が特定アカウントの発行枠を消費する」ことなので、
+ * (IP, スタッフ) の組で数えるのが正しい粒度。
+ */
+export const DEFAULT_ISSUE_MAX_PER_IP = 5;
+
+/**
+ * 同一プレフィクスからのコード発行回数の**外枠**上限（メールアドレスに依らない）。
+ *
+ * 内側の (プレフィクス, メールハッシュ) 上限だけだと、鍵がメール由来なので
+ * 攻撃者がアドレスを変えるだけで auth_throttle の行を無限に作れる
+ * （1 アドレスにつき内側上限までは素通しなので手前で止まらない）。行数を縛るのがこの層の役目。
+ *
+ * メールアドレスと無関係に効くので、登録の有無で挙動が変わらない＝列挙に使えない。
+ *
+ * 100 の根拠: 正規の最悪ケースは「9 名が同じプレフィクスから各自 5 回まで再送」= 45 回。
+ * その 2 倍の余裕を取る。IPv6 は /64 に丸めるのでオフィス全体が 1 枠を共有する点に注意
+ * （絞りすぎると共有回線の締め出しが別の形で戻るため、env で緩められるようにしてある）。
+ */
+export const DEFAULT_ISSUE_MAX_PER_IP_TOTAL = 100;
+
+/**
+ * 同一 IP からのコード検証**失敗**回数の上限と窓（分）。総当たりの実質的な上限はここ。
+ *
+ * 成功は数えない（peekThrottle で門番だけして、失敗したときに hitThrottle で加算する）。
+ * 成功も数えると、社内 NAT やモバイルの CGNAT で出口 IP を共有している人たちが
+ * 「正しくログインしただけ」で互いを締め出す。Phase 4 の一斉オンボーディングで
+ * 全員を同じ場所に集めた瞬間に発火する類の事故になる。
+ *
+ * 20 / 15分は、10^6 通り・TTL 10分のコードに対して無視できる試行数でありながら、
+ * 共有 IP で数人が打ち間違えても届かない水準。
+ *
+ * ⚠️ **この上限だけでは「第三者による一時的なログイン封じ」を防げない。**
+ * 不一致時の加算は「その時点で生きているチャレンジ **全件** に +1」なので
+ * （verifyAndConsumeLoginCode の末尾）、1 本ずつ焼かれるのではない:
+ *
+ *   - **5 回の失敗バーストで、生きているコードが本数に関係なく全部ロックされる。**
+ *     1 本でも 5 本でも攻撃者のコストは 5 回（実測: 発行 5 本に対し 5 回の失敗で 5 本ロック、
+ *     攻撃者の消費は 20 のうち 5）。
+ *   - よって窓あたりの予算 20 は「4 本焼ける」ではなく「**4 回バーストできる**」。
+ *   - 本人が 1 本ずつ発行し直す動きなら、5 本の発行枠 > 4 バーストで最後の 1 本が残る。
+ *     しかし「メールが遅い」と思って**再送を続けて押す**と、発行枠 5 を先に使い切った状態で
+ *     全部が同時に生きるため、**1 バースト（5 回）で窓を潰される**。
+ *
+ * 実害の上限は「窓（既定 15 分）のあいだ本人がメールコードで入れない」。
+ * 恒久的な締め出しではなく、Slack には上限到達が鳴り、管理者による救済コード発行の経路も
+ * 生きている。緩和するなら「再送は生きているコードを再利用して発行枠を消費しない」方向だが、
+ * それはメール送信回数の上限を別に持つ必要がある。ここは設計上の綱引きとして現状を選んでいる。
+ *
+ * この値を上げても下げてもこの性質は変わらない（バーストのコストは DEFAULT_MAX_ATTEMPTS で決まる）。
+ * 上げると総当たりの試行回数が増え、下げると共有回線での誤ロックが増える、という別の綱引きになる。
+ */
+export const DEFAULT_VERIFY_FAIL_MAX_PER_IP = 20;
+export const DEFAULT_VERIFY_FAIL_WINDOW_MINUTES = 15;
+
+/**
+ * パスワード（＝APIキー）ログインの失敗上限。**メールコードとは別の枠**にする。
+ *
+ * 守っている秘密の強度が桁違いに違うため、枠を共有してはいけない:
+ *   - メールコードは 10^6 通り。総当たりが現実的なので厳しい上限が要る
+ *   - パスワードは `lh_` + 32hex（128bit）か env API_KEY（実測 51 文字・英数記号混在）。
+ *     オンラインでの総当たりは非現実的
+ * 共有すると、弱い方（コード）を守るための上限が強い方（パスワード）の入口を塞ぐ。
+ * 実際それが起きていた: 他人のコード入力ミスで枠が埋まると、
+ * 正しいオーナーキーを持つ人が**資格情報を見てもらう前に 429 で門前払い**されていた。
+ *
+ * 枠は (プレフィクス, 宛先メール) の組で数える。他人の失敗で締め出されないため。
+ * 加えてプレフィクスのみの外枠を置く。メールアドレスを変えれば枠が増える、を塞ぐ
+ * （env API_KEY は ADMIN_OWNER_EMAIL 未設定なら任意のアドレスで通るので、
+ *   外枠が無いとアドレスを変え続けて無制限に試せてしまう）。
+ */
+export const DEFAULT_PW_FAIL_MAX_PER_EMAIL = 10;
+export const DEFAULT_PW_FAIL_MAX_PER_IP_TOTAL = 50;
+export const DEFAULT_PW_FAIL_WINDOW_MINUTES = 15;
+
+/**
+ * verify が一度に照合する「生きているチャレンジ」の既定上限。
+ *
+ * 発行上限から導出する。別々の定数にすると、発行上限を上げたときに
+ * 古い方のコードが照合対象から静かに落ちる。
+ * env で ADMIN_LOGIN_ISSUE_MAX を上書きした場合は、呼び出し側が
+ * verifyAndConsumeLoginCode の candidateLimit で同じ値を渡すこと
+ * （定数のままだと上書き分に追随しない）。
+ */
+const CANDIDATE_LIMIT = DEFAULT_ISSUE_MAX;
 
 /** セッショントークンのプレフィクス。既存 API キー（`lh_` + 32hex）と衝突しない。 */
 export const SESSION_TOKEN_PREFIX = 'lhs_';
@@ -109,6 +213,174 @@ export function isValidEmail(email: string): boolean {
  */
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// 試行元（IP）単位のスロットル — migration 920
+// ---------------------------------------------------------------------------
+
+export interface ThrottleResult {
+  /** 上限内なら true。**この試行を含めた**カウントで判定する。 */
+  allowed: boolean;
+  count: number;
+}
+
+/**
+ * bucket のカウンタを 1 進め、窓の中で上限を超えていないかを返す。
+ *
+ * 窓の切り替えと加算を **単一 UPSERT + RETURNING** で行う（read-then-write しない）。
+ * 同時リクエストが来ても数え漏らさないため、ここは 1 文であることが要件。
+ *
+ * アカウント単位ではなく試行元単位で数えるのが要点。start/verify は認証不要なので、
+ * アカウント単位のカウンタは「メールアドレスを知っているだけの第三者」に消費でき、
+ * 本人のログインを封じる手段になってしまう（migration 920 のコメント参照）。
+ */
+export async function hitThrottle(
+  db: D1Database,
+  bucket: string,
+  max: number,
+  windowMinutes: number,
+): Promise<ThrottleResult> {
+  const now = new Date();
+  const nowIso = jstIso(now);
+  const windowStart = addMinutes(now, -windowMinutes);
+
+  const row = await db
+    .prepare(
+      `INSERT INTO auth_throttle (bucket, count, window_started_at, updated_at)
+            VALUES (?, 1, ?, ?)
+       ON CONFLICT(bucket) DO UPDATE SET
+            count = CASE WHEN auth_throttle.window_started_at <= ? THEN 1
+                         ELSE auth_throttle.count + 1 END,
+            window_started_at = CASE WHEN auth_throttle.window_started_at <= ? THEN ?
+                                     ELSE auth_throttle.window_started_at END,
+            updated_at = ?
+       RETURNING count`,
+    )
+    .bind(bucket, nowIso, nowIso, windowStart, windowStart, nowIso, nowIso)
+    .first<{ count: number }>();
+
+  const count = row?.count ?? 1;
+  return { allowed: count <= max, count };
+}
+
+/**
+ * スロットル bucket 名。scope を渡すと (IP, scope) の組で数える。
+ * 発行上限は scope=staffId で括る（IP だけだと共有回線の別人同士が枠を食い合う）。
+ */
+/**
+ * IPv6 を /64 に丸める。IPv4 はそのまま返す。
+ *
+ * **これが無いと IP 単位の制御が全部無意味になる。**
+ * cf-connecting-ip は実際に IPv6 で届き（実測: `240a:61:30d0:...:2d93`）、
+ * IPv6 は家庭回線でも VPS でも **1 契約に /64 が割り当たるのが標準**。
+ * アドレス 1 個ずつを鍵にすると、攻撃者は 2^64 個の送信元を自由に使えるので、
+ * 失敗上限も発行上限も素通りし、上限到達の Slack 通報は永久に鳴らない。
+ *
+ * /64 を選ぶ理由: モバイルは端末ごとに /64 が割り当たるので同僚同士が潰し合わない。
+ * オフィスの IPv6 は 1 つの /64 を共有するが、それは IPv4 の NAT 共有と同じ状況で、
+ * (プレフィクス, メールハッシュ) の鍵が既に同僚同士の潰し合いを防いでいる。
+ *
+ * ⚠️ /48 以上を持つ相手はプレフィクスを変えて回避できる。これは多層防御の 1 枚であって、
+ *    単独で総当たりを止めるものではない（実際の推測回数はチャレンジ単位の attempts で縛る）。
+ */
+export function normalizeThrottleHost(ip: string | null | undefined): string {
+  const raw = String(ip ?? '').trim();
+  if (!raw) return 'unknown';
+
+  // ゾーンインデックス（fe80::1%eth0）は落とす
+  const head = raw.split('%')[0]!;
+  if (!head.includes(':')) return head; // IPv4
+
+  // IPv4 射影/互換アドレス（::ffff:192.0.2.1）は IPv4 として扱う。
+  // /64 に丸めると全部 0:0:0:0 になり、無関係な相手が 1 つの枠を共有してしまう。
+  const mapped = /^(?:::ffff:|::)((?:\d{1,3}\.){3}\d{1,3})$/i.exec(head);
+  if (mapped) return mapped[1]!;
+
+  const groups = expandIpv6(head);
+  if (!groups) return head; // 解釈できない形はそのまま（丸めないほうが安全側）
+  return `${groups.slice(0, 4).join(':')}::/64`;
+}
+
+/** IPv6 を 8 グループへ展開する。解釈できなければ null。 */
+function expandIpv6(input: string): string[] | null {
+  let s = input.toLowerCase();
+
+  // 末尾に IPv4 記法を持つ形（2001:db8::192.0.2.1）は 2 グループの 16 進へ直す
+  const tail = /((?:\d{1,3}\.){3}\d{1,3})$/.exec(s);
+  if (tail) {
+    const octets = tail[1]!.split('.').map((n) => Number(n));
+    if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const hex = `${((octets[0]! << 8) | octets[1]!).toString(16)}:${((octets[2]! << 8) | octets[3]!).toString(16)}`;
+    s = s.slice(0, s.length - tail[1]!.length) + hex;
+  }
+
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+
+  const toGroups = (part: string) => (part ? part.split(':').filter((x) => x !== '') : []);
+  const left = toGroups(halves[0] ?? '');
+  const right = halves.length === 2 ? toGroups(halves[1] ?? '') : [];
+
+  let groups: string[];
+  if (halves.length === 1) {
+    if (left.length !== 8) return null;
+    groups = left;
+  } else {
+    const fill = 8 - left.length - right.length;
+    if (fill < 0) return null;
+    groups = [...left, ...Array(fill).fill('0'), ...right];
+  }
+
+  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  // 先頭 0 を落として正規化（2001:0db8 と 2001:db8 が別の鍵にならないように）
+  return groups.map((g) => g.replace(/^0+(?=.)/, ''));
+}
+
+export type ThrottleKind = 'login_issue' | 'login_fail' | 'login_pw';
+
+export function throttleBucket(
+  kind: ThrottleKind,
+  ip: string | null | undefined,
+  scope?: string | null,
+): string {
+  // 区切りに `|` を使う。`:` にしてはいけない — IPv6 アドレスは `:` を含むため
+  // `login_fail:ip:<ipv6>:<scope>` 形式だと scope が 16 進として読める語のとき
+  // 「末尾がその語の IPv6 アドレス」と衝突しうる。`alert` は 16 進ではないので
+  // 今は無事だが、将来 `beef` `face` のような scope を足した瞬間に静かに壊れる。
+  // `|` は IP にもスタッフ ID(UUID) にも現れないので、この推論自体が不要になる。
+  const host = normalizeThrottleHost(ip);
+  return scope ? `${kind}|${host}|${scope}` : `${kind}|${host}`;
+}
+
+/**
+ * 窓の中の現在値を **加算せずに** 読む。
+ *
+ * 「門番は成功・失敗どちらでも通すが、加算するのは失敗のときだけ」を実現するために要る。
+ * hitThrottle だけで門番も兼ねると、成功したログインまで枠を消費して
+ * 共有 IP の利用者同士が締め出し合う。
+ *
+ * read-then-write になるので、同時実行時は上限を並列数ぶん超えうる。
+ * ここは厳密なクォータではなく総当たりの抑止なので、その緩さは許容する
+ * （チャレンジ単位の attempts が別途 5 回で効いている）。
+ *
+ * ⚠️ 窓の判定式 `window_started_at > windowStart` は、hitThrottle の CASE 式
+ *    `window_started_at <= windowStart`（＝古いのでリセット）と **厳密な補集合**であること。
+ *    境界（完全一致）では peek が 0 を返し hit が 1 にリセットして辻褄が合う。
+ *    片方だけ書き換えると、窓の境目で「門番は通すのに加算はリセットされる」等のズレが出る。
+ *    どちらかを触るときは必ず両方を見ること。
+ */
+export async function peekThrottle(
+  db: D1Database,
+  bucket: string,
+  windowMinutes: number,
+): Promise<number> {
+  const windowStart = addMinutes(new Date(), -windowMinutes);
+  const row = await db
+    .prepare('SELECT count FROM auth_throttle WHERE bucket = ? AND window_started_at > ?')
+    .bind(bucket, windowStart)
+    .first<{ count: number }>();
+  return row?.count ?? 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,25 +475,35 @@ export async function countRecentChallenges(
 }
 
 export type VerifyCodeResult =
-  | { ok: true; challenge: StaffLoginChallengeRow }
+  | { ok: true; challenge: StaffLoginChallengeRow; session: CreatedSession | null }
   | { ok: false; reason: 'no_challenge' | 'locked' | 'invalid' };
 
 /**
- * コードを検証して消費する（単回）。
+ * コードを検証して消費する（単回）。session を渡すと、消費とセッション発行を
+ * **同一 batch（＝1 トランザクション）**で行う。
  *
- * 生きているチャレンジを新しい順に最大 5 件見て、ハッシュ一致した 1 件を
+ * 生きているチャレンジを新しい順に CANDIDATE_LIMIT 件見て、ハッシュ一致した 1 件を
  *   UPDATE ... WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts
  * の単一文で消費する。meta.changes === 1 のときだけ成功とみなすので、
  * 同じコードで同時に 2 本走っても 1 本しか通らない。
  *
- * 不一致のときは生きているチャレンジ全部の attempts を 1 つ進める。
- * 「発行し直せば試行回数がリセットされる」抜け道を塞ぐため、加算はチャレンジ単位ではなく
- * その時点で生きている全チャレンジに効かせる。
+ * ⚠️ 消費とセッション発行を分けて実行してはいけない。分けると、セッション発行が失敗した
+ *    ときに「コードは消費済みなのにログインできず、入れ直しても no_challenge」という
+ *    抜け出せない状態になる。INSERT 側にも同じ条件を WHERE EXISTS で持たせてあるので、
+ *    どちらか一方だけが成立することはない。
+ *
+ * 不一致のときは **この時点で生きていたチャレンジ**（candidates）の attempts を 1 つ進める。
+ * 加算対象を staff_id 全件にすると、リクエスト中に発行された本人の新しいコードまで
+ * 巻き添えで焼けるため、読み出した候補の id に限定する。
+ * 「発行し直せば試行枠がリセットされる」抜け道は、アカウント単位の attempts ではなく
+ * 試行元 IP 単位のスロットル（hitThrottle / migration 920）で塞ぐ。
  */
 export async function verifyAndConsumeLoginCode(
   db: D1Database,
   staffId: string,
   code: string,
+  session?: CreateSessionInput,
+  candidateLimit: number = CANDIDATE_LIMIT,
 ): Promise<VerifyCodeResult> {
   const now = jstNow();
 
@@ -230,9 +512,9 @@ export async function verifyAndConsumeLoginCode(
       `SELECT * FROM staff_login_challenges
         WHERE staff_id = ? AND used_at IS NULL AND expires_at > ?
         ORDER BY created_at DESC
-        LIMIT 5`,
+        LIMIT ?`,
     )
-    .bind(staffId, now)
+    .bind(staffId, now, Math.max(candidateLimit, 1))
     .all<StaffLoginChallengeRow>();
 
   const rows = candidates.results ?? [];
@@ -245,29 +527,45 @@ export async function verifyAndConsumeLoginCode(
     const expected = await hashLoginCode(row.id, code);
     if (!timingSafeEqualHex(expected, row.code_hash)) continue;
 
-    const consumed = await db
-      .prepare(
-        `UPDATE staff_login_challenges
+    const consumeSql = `UPDATE staff_login_challenges
             SET used_at = ?, attempts = attempts + 1
-          WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`,
-      )
-      .bind(now, row.id, now)
-      .run();
+          WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`;
 
-    if (consumed.meta.changes === 1) {
-      return { ok: true, challenge: { ...row, used_at: now, attempts: row.attempts + 1 } };
+    if (!session) {
+      const consumed = await db.prepare(consumeSql).bind(now, row.id, now).run();
+      if (consumed.meta.changes === 1) {
+        return {
+          ok: true,
+          challenge: { ...row, used_at: now, attempts: row.attempts + 1 },
+          session: null,
+        };
+      }
+      // changes === 0 = 同時に別リクエストが消費した / 直前に期限切れ。使い回しは許さない。
+      return { ok: false, reason: 'invalid' };
     }
-    // changes === 0 = 同時に別リクエストが消費した / 直前に期限切れ。使い回しは許さない。
+
+    const pending = await buildSessionInsert(db, session, row.id, now);
+    const [inserted, consumed] = await db.batch([pending.statement, db.prepare(consumeSql).bind(now, row.id, now)]);
+
+    if (consumed.meta.changes === 1 && inserted.meta.changes === 1) {
+      return {
+        ok: true,
+        challenge: { ...row, used_at: now, attempts: row.attempts + 1 },
+        session: pending.session,
+      };
+    }
     return { ok: false, reason: 'invalid' };
   }
 
+  const ids = live.map((r) => r.id);
   await db
     .prepare(
       `UPDATE staff_login_challenges
           SET attempts = attempts + 1
-        WHERE staff_id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`,
+        WHERE id IN (${ids.map(() => '?').join(', ')})
+          AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts`,
     )
-    .bind(staffId, now)
+    .bind(...ids, now)
     .run();
 
   return { ok: false, reason: 'invalid' };
@@ -317,36 +615,72 @@ export interface CreatedSession {
   expiresAt: string;
 }
 
+interface PendingSession {
+  session: CreatedSession;
+  statement: D1PreparedStatement;
+}
+
+/**
+ * セッションの INSERT 文とトークンを組み立てる（まだ実行しない）。
+ *
+ * challengeId を渡すと「そのチャレンジがまだ消費可能なときだけ挿入する」条件付き INSERT になる。
+ * これを同一 batch 内の消費 UPDATE と並べることで、**片方だけ成立することがなくなる**。
+ * 分けて実行すると、消費だけ通ってセッション発行が落ちたときに
+ * 「正しいコードを打ったのに 401、入れ直しても no_challenge」という抜け出せない状態になる。
+ */
+async function buildSessionInsert(
+  db: D1Database,
+  input: CreateSessionInput,
+  challengeId: string | null,
+  now: string,
+): Promise<PendingSession> {
+  const id = randomHex(16);
+  const secret = randomHex(32);
+  const secretHash = await sha256Hex(secret);
+  const createdAt = new Date();
+  const expiresAt = addHours(createdAt, input.ttlHours ?? DEFAULT_SESSION_TTL_HOURS);
+
+  const columns =
+    '(id, staff_id, secret_hash, issued_via, user_agent, ip, created_at, last_used_at, expires_at, revoked_at, revoked_reason)';
+  const values = [
+    id,
+    input.staffId,
+    secretHash,
+    input.issuedVia ?? 'email_code',
+    input.userAgent ?? null,
+    input.ip ?? null,
+    jstIso(createdAt),
+    expiresAt,
+  ];
+
+  const statement = challengeId
+    ? db
+        .prepare(
+          `INSERT INTO staff_sessions ${columns}
+           SELECT ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL
+            WHERE EXISTS (
+                  SELECT 1 FROM staff_login_challenges
+                   WHERE id = ? AND used_at IS NULL AND expires_at > ? AND attempts < max_attempts
+                 )`,
+        )
+        .bind(...values, challengeId, now)
+    : db
+        .prepare(`INSERT INTO staff_sessions ${columns} VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`)
+        .bind(...values);
+
+  return {
+    session: { id, token: `${SESSION_TOKEN_PREFIX}${id}.${secret}`, expiresAt },
+    statement,
+  };
+}
+
 export async function createStaffSession(
   db: D1Database,
   input: CreateSessionInput,
 ): Promise<CreatedSession> {
-  const id = randomHex(16);
-  const secret = randomHex(32);
-  const secretHash = await sha256Hex(secret);
-  const now = new Date();
-  const expiresAt = addHours(now, input.ttlHours ?? DEFAULT_SESSION_TTL_HOURS);
-
-  await db
-    .prepare(
-      `INSERT INTO staff_sessions
-         (id, staff_id, secret_hash, issued_via, user_agent, ip,
-          created_at, last_used_at, expires_at, revoked_at, revoked_reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
-    )
-    .bind(
-      id,
-      input.staffId,
-      secretHash,
-      input.issuedVia ?? 'email_code',
-      input.userAgent ?? null,
-      input.ip ?? null,
-      jstIso(now),
-      expiresAt,
-    )
-    .run();
-
-  return { id, token: `${SESSION_TOKEN_PREFIX}${id}.${secret}`, expiresAt };
+  const pending = await buildSessionInsert(db, input, null, jstNow());
+  await pending.statement.run();
+  return pending.session;
 }
 
 /** `lhs_<id>.<secret>` を分解する。形が違えば null。 */
@@ -587,8 +921,12 @@ export function staffAuthCascadeStatements(db: D1Database, staffId: string): D1P
 /** 期限切れ行の掃除（cron から呼ぶ想定。呼ばなくても機能は壊れない）。 */
 export async function pruneExpiredStaffAuthRows(db: D1Database, keepDays = 90): Promise<void> {
   const cutoff = addHours(new Date(), -24 * keepDays);
+  // auth_throttle は bucket が IP 単位なので放置すると際限なく増える。
+  // 窓（分オーダー）を大きく超えた行は残しておく意味が無いので、1 日で切る。
+  const throttleCutoff = addHours(new Date(), -24);
   await db.batch([
     db.prepare('DELETE FROM staff_login_challenges WHERE expires_at < ?').bind(cutoff),
     db.prepare('DELETE FROM staff_sessions WHERE expires_at < ?').bind(cutoff),
+    db.prepare('DELETE FROM auth_throttle WHERE updated_at < ?').bind(throttleCutoff),
   ]);
 }

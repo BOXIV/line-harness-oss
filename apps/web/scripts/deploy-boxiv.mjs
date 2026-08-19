@@ -22,6 +22,14 @@ const webDir = resolve(__dirname, '..');
 const PROD_API_URL = process.env.LINE_HARNESS_API_URL;
 const PAGES_PROJECT = 'line-connect-admin';
 
+// ── デプロイ前ゲート ──────────────────────────────────────────────────────────
+// 認証の戻り先検証（safeNextPath）のように、文字列判定を 1 文字間違えると
+// 外部サイトへ飛ばせる種類のロジックが web 側にもある。実際 safeNextPath は
+// 2 回続けて穴が開いた（文字列判定 → URL 解決 → 権限部の再解釈）。
+// ⚠️ 緊急時にゲートを外す手段は「この呼び出しを消す」だけ。環境変数バイパスは用意しない。
+console.log('▶ vitest run (デプロイ前ゲート)');
+execSync('pnpm exec vitest run', { cwd: webDir, stdio: 'inherit' });
+
 console.log('▶ next build (NEXT_PUBLIC_API_URL=' + PROD_API_URL + ')');
 execSync('pnpm exec next build', {
   cwd: webDir,

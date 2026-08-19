@@ -32,6 +32,47 @@ not_found_handling = "single-page-application"
 #   この行を削除して正 URL(/link/callback)へ戻す。callback は新旧どちらでも受けられる。
 LINE_LOGIN_CALLBACK_PATH = "/listing-form/callback"
 
+# ── 管理画面ログイン（メール認証コード）のスロットル ─────────────────────────
+# ⚠️ [vars] は test / prod で共有される。deploy-boxiv-test.mjs が上書きするのは
+#    name / d1_databases / r2_buckets の 3 つだけで、vars は素通りする。
+#    環境ごとに違う値が要るもの（ADMIN_BASE_URL）は vars ではなく wrangler secret に置くこと。
+#    スロットルの数値は両環境で同じであるべきなので vars が正しく、読み出せる利点もそのまま効く。
+#
+# 明示するのはこの 1 つだけ。「絞りすぎると共有回線の締め出しが別の形で戻る」性質があり、
+# 実運用で噛んだときにデプロイだけで緩められるよう、既定値でも書いておく。
+# 100 の根拠: 正規の最悪ケース（9 名が同じプレフィクスから各自 5 回まで再送）= 45 回の 2 倍。
+# IPv6 は /64 に丸めるのでオフィス全体が 1 枠を共有する点に注意。
+ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL = "100"
+
+# セッションの絶対期限。既定 168（7日）→ **720（30日）**（2026-08-19 ユーザー判断）。
+# 7日にしていたのは「iOS Safari は7日サイトを触らないと localStorage を消す」ため、
+# それより長くしても低頻度の iPhone 利用者には体感が変わらないから。
+# ただし PC 中心のマネージャーには効くので、揃える意味が薄いと判断して 30日にした。
+# ⚠️ 盗まれたトークンの有効期間も 30日になる。無効化・ロール変更で即時失効できる設計が前提。
+ADMIN_SESSION_TTL_HOURS = "720"
+
+# 以下は **既定のままにすることを検討したうえで選んでいる**（未設定＝未検討ではない）。
+# 変えたくなったらここに書き足す。既定値は packages/db/src/staff-auth.ts。
+#   ADMIN_LOGIN_CODE_TTL_MINUTES     = "10"   コードの有効期限
+#   ADMIN_LOGIN_MAX_ATTEMPTS         = "5"    1 チャレンジあたりの検証試行上限
+#   ADMIN_LOGIN_ISSUE_MAX            = "10"   アカウント単位の発行上限
+#   ADMIN_LOGIN_ISSUE_MAX_PER_IP     = "5"    (プレフィクス × 宛先メール) 単位の発行上限
+#   ADMIN_LOGIN_ISSUE_WINDOW_MINUTES = "15"   発行系の窓
+#   ADMIN_LOGIN_FAIL_MAX_PER_IP      = "20"   プレフィクス単位の検証失敗上限
+#     ⚠️ この上限だけでは「第三者による一時的なログイン封じ」は防げない。
+#        不一致時の加算は生存中のチャレンジ全件に +1 なので、5 回の失敗バーストで
+#        その時点のコードが本数に関係なく全部ロックされる（実測）。20 は「4 本焼ける」ではなく
+#        「4 回バーストできる」の意味。本人が再送を押して発行枠を先に使い切っていると
+#        1 バーストで窓を潰される。実害の上限は窓 15 分の一時的なログイン不能で、
+#        Slack には鳴り、救済コード発行の経路も生きている。詳細は staff-auth.ts のコメント。
+#   ADMIN_LOGIN_FAIL_WINDOW_MINUTES  = "15"   検証失敗の窓
+#   ADMIN_PW_FAIL_MAX_PER_EMAIL      = "10"   パスワード失敗（プレフィクス × 宛先メール）
+#   ADMIN_PW_FAIL_MAX_PER_IP_TOTAL   = "50"   同 外枠（プレフィクスのみ）
+#   ADMIN_PW_FAIL_WINDOW_MINUTES     = "15"   同 窓
+#     ⚠️ パスワードの枠はメールコードの枠と **共有しない**。守る秘密の強度が桁違いなので、
+#        共有すると弱い方(コード)の上限が強い方(パスワード)の入口を塞ぐ。実際そうなっていた。
+#   （ADMIN_SESSION_TTL_HOURS は上の [vars] に 720 を明示済み。コード既定は 168）
+
 [[d1_databases]]
 binding = "DB"
 database_name = "line-connect"

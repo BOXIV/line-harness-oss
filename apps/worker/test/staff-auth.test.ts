@@ -29,6 +29,7 @@ const STAFF_EMAIL = `${STAFF_FIXTURES.staff.id}@example.test`;
 beforeEach(async () => {
   await testDb.prepare('DELETE FROM staff_login_challenges').run();
   await testDb.prepare('DELETE FROM staff_sessions').run();
+  await testDb.prepare('DELETE FROM auth_throttle').run();
 });
 
 describe('generateLoginCode', () => {
@@ -102,7 +103,10 @@ describe('ログインコードの検証', () => {
     });
   });
 
-  it('コードを発行し直しても試行回数はリセットされない（発行連打で総当たりを稼げない）', async () => {
+  it('同一リクエスト時点で生きているチャレンジは全て試行回数が進む', async () => {
+    // 「発行し直せば試行枠がリセットされる」抜け道の実質的な抑止は、ここではなく
+    // 試行元 IP 単位のスロットル（hitThrottle / migration 920）が担う。
+    // このテストが固定するのは「1 回の失敗で、その時点の生存チャレンジが等しく1つ進む」こと。
     const first = await createLoginChallenge(testDb, {
       staffId: STAFF_ID,
       email: STAFF_EMAIL,
