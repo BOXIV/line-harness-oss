@@ -29,6 +29,9 @@ import {
   DEFAULT_ISSUE_MAX_PER_IP_TOTAL,
   DEFAULT_ISSUE_WINDOW_MINUTES,
   DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_PW_FAIL_MAX_PER_EMAIL,
+  DEFAULT_PW_FAIL_MAX_PER_IP_TOTAL,
+  DEFAULT_PW_FAIL_WINDOW_MINUTES,
   DEFAULT_SESSION_TTL_HOURS,
   DEFAULT_VERIFY_FAIL_MAX_PER_IP,
   DEFAULT_VERIFY_FAIL_WINDOW_MINUTES,
@@ -70,6 +73,12 @@ function config(env: Env['Bindings']) {
       env.ADMIN_LOGIN_FAIL_WINDOW_MINUTES,
       DEFAULT_VERIFY_FAIL_WINDOW_MINUTES,
     ),
+    pwFailMaxPerEmail: intEnv(env.ADMIN_PW_FAIL_MAX_PER_EMAIL, DEFAULT_PW_FAIL_MAX_PER_EMAIL),
+    pwFailMaxPerIpTotal: intEnv(
+      env.ADMIN_PW_FAIL_MAX_PER_IP_TOTAL,
+      DEFAULT_PW_FAIL_MAX_PER_IP_TOTAL,
+    ),
+    pwFailWindowMinutes: intEnv(env.ADMIN_PW_FAIL_WINDOW_MINUTES, DEFAULT_PW_FAIL_WINDOW_MINUTES),
     sessionTtlHours: intEnv(env.ADMIN_SESSION_TTL_HOURS, DEFAULT_SESSION_TTL_HOURS),
   };
 }
@@ -108,7 +117,7 @@ function clientIp(headers: Headers): string | null {
  */
 async function ipThrottle(
   c: { env: Env['Bindings'] },
-  kind: 'login_issue' | 'login_fail',
+  kind: 'login_issue' | 'login_fail' | 'login_pw',
   ip: string | null,
   max: number,
   windowMinutes: number,
@@ -131,7 +140,7 @@ async function ipThrottle(
  */
 async function notifyOncePerWindow(
   c: { env: Env['Bindings'] },
-  kind: 'login_issue' | 'login_fail',
+  kind: 'login_issue' | 'login_fail' | 'login_pw',
   ip: string | null,
   windowMinutes: number,
   text: string,
@@ -159,7 +168,7 @@ async function emailScope(email: string): Promise<string> {
  */
 async function ipThrottleExceeded(
   c: { env: Env['Bindings'] },
-  kind: 'login_issue' | 'login_fail',
+  kind: 'login_issue' | 'login_fail' | 'login_pw',
   ip: string | null,
   max: number,
   windowMinutes: number,
@@ -597,28 +606,74 @@ authEmail.post('/api/auth/password', async (c) => {
 
     const ip = clientIp(c.req.raw.headers);
 
-    // コード検証と同じ失敗枠を使う。パスワード総当たりもここで頭打ちにする
-    // （従来この経路には画面側の試行制限が一切無かった）。
-    if (await ipThrottleExceeded(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes)) {
+    // ⚠️ **メールコードの失敗枠とは別の枠を使う。**
+    //    守っている秘密の強度が桁違いに違うため（コード=10^6 / パスワード=128bit 以上）、
+    //    枠を共有すると弱い方を守るための上限が強い方の入口を塞ぐ。
+    //    実際それが起きていた: 他人のコード入力ミスで枠が埋まると、正しいオーナーキーを
+    //    持つ人が**資格情報を見てもらう前に 429**で門前払いされ、
+    //    「メール不達時の最終手段」がフォームから使えなくなっていた。
+    //
+    //    枠は (プレフィクス, 宛先メール) の組。他人の失敗に巻き込まれない。
+    //    加えてプレフィクスのみの外枠を置く。ADMIN_OWNER_EMAIL 未設定時は任意のアドレスで
+    //    env API_KEY が通るので、外枠が無いとアドレスを変え続けて無制限に試せてしまう。
+    const emailKey = await emailScope(email);
+    const pwGate =
+      (await ipThrottleExceeded(
+        c,
+        'login_pw',
+        ip,
+        cfg.pwFailMaxPerEmail,
+        cfg.pwFailWindowMinutes,
+        emailKey,
+      )) ||
+      (await ipThrottleExceeded(
+        c,
+        'login_pw',
+        ip,
+        cfg.pwFailMaxPerIpTotal,
+        cfg.pwFailWindowMinutes,
+      ));
+    if (pwGate) {
       return c.json(
         {
           success: false,
-          error: `ログインの試行が多すぎます。${cfg.failWindowMinutes}分ほど待ってから、もう一度お試しください`,
+          error: `ログインの試行が多すぎます。${cfg.pwFailWindowMinutes}分ほど待ってから、もう一度お試しください`,
         },
         429,
       );
     }
 
     const resolved = await resolvePasswordLogin(c.env, email, password);
-    if (!resolved) {
-      const failed = await ipThrottle(c, 'login_fail', ip, cfg.failMaxPerIp, cfg.failWindowMinutes);
-      if (failed.count >= cfg.failMaxPerIp) {
+    if (!resolved.ok) {
+      // 失敗したときだけ、両方の枠を消費する。
+      await ipThrottle(c, 'login_pw', ip, cfg.pwFailMaxPerEmail, cfg.pwFailWindowMinutes, emailKey);
+      const outer = await ipThrottle(
+        c,
+        'login_pw',
+        ip,
+        cfg.pwFailMaxPerIpTotal,
+        cfg.pwFailWindowMinutes,
+      );
+      if (outer.count >= cfg.pwFailMaxPerIpTotal) {
         await notifyOncePerWindow(
           c,
-          'login_fail',
+          'login_pw',
           ip,
-          cfg.failWindowMinutes,
-          `:lock: 管理画面ログインの失敗が同一プレフィクスで上限に達しました（${cfg.failWindowMinutes}分で${failed.count}回）。総当たりの可能性があります。`,
+          cfg.pwFailWindowMinutes,
+          `:lock: パスワードログインの失敗が同一プレフィクスで外枠上限に達しました（${cfg.pwFailWindowMinutes}分で${outer.count}回）。総当たりの可能性があります。`,
+        );
+      }
+      // メール未登録のアカウントは、正しいパスコードを入れても構造上一致しない。
+      // ここだけ理由を返す（この分岐に入るには**正しいパスワードが必要**なので、
+      // 存在の漏洩にはならない。汎用文言のままだと本人が原因に辿り着けない）。
+      if (resolved.reason === 'no_email') {
+        return c.json(
+          {
+            success: false,
+            error:
+              'このアカウントにはメールアドレスが登録されていません。オーナーに登録を依頼してください',
+          },
+          401,
         );
       }
       return c.json(FAIL, 401);
@@ -654,10 +709,15 @@ authEmail.post('/api/auth/password', async (c) => {
   }
 });
 
-interface ResolvedPasswordLogin {
-  staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email: string | null; workArea: string | null };
-  via: 'api_key' | 'env_key';
-}
+type PasswordLoginResult =
+  | {
+      ok: true;
+      staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email: string | null; workArea: string | null };
+      via: 'api_key' | 'env_key';
+    }
+  // 'no_email' = パスワードは正しいが、そのアカウントにメールアドレスが無い。
+  //   この分岐に入るには正しいパスワードが必要なので、理由を返しても存在は漏れない。
+  | { ok: false; reason: 'mismatch' | 'no_email' };
 
 /**
  * メールアドレスとパスワード（＝APIキー）の組を検証する。
@@ -671,11 +731,17 @@ async function resolvePasswordLogin(
   env: Env['Bindings'],
   email: string,
   password: string,
-): Promise<ResolvedPasswordLogin | null> {
+): Promise<PasswordLoginResult> {
   const staff = await getStaffByApiKey(env.DB, password);
   if (staff) {
-    if (normalizeEmail(staff.email ?? '') !== normalizeEmail(email)) return null;
+    // メール未登録の行は normalizeEmail('') と比較することになり、何を入れても必ず不一致。
+    // 旧「APIキーを貼るだけ」の入口が無くなった今、その人は画面から入る手段を失う。
+    // 理由を返して原因に辿り着けるようにする（#88 で作成時のメール必須化が入っているので
+    // 新規では起きないが、既存行や直接 SQL で作られた行では起こりうる）。
+    if (!staff.email || !staff.email.trim()) return { ok: false, reason: 'no_email' };
+    if (normalizeEmail(staff.email) !== normalizeEmail(email)) return { ok: false, reason: 'mismatch' };
     return {
+      ok: true,
       staff: {
         id: staff.id,
         name: staff.name,
@@ -689,14 +755,17 @@ async function resolvePasswordLogin(
 
   if (env.API_KEY && password === env.API_KEY) {
     const ownerEmail = (env.ADMIN_OWNER_EMAIL ?? '').trim();
-    if (ownerEmail && normalizeEmail(ownerEmail) !== normalizeEmail(email)) return null;
+    if (ownerEmail && normalizeEmail(ownerEmail) !== normalizeEmail(email)) {
+      return { ok: false, reason: 'mismatch' };
+    }
     return {
+      ok: true,
       staff: { id: 'env-owner', name: 'Owner', role: 'owner', email: ownerEmail || null, workArea: null },
       via: 'env_key',
     };
   }
 
-  return null;
+  return { ok: false, reason: 'mismatch' };
 }
 
 // ---------------------------------------------------------------------------

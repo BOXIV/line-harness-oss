@@ -916,12 +916,70 @@ describe('POST /api/auth/password — メールアドレス + パスワード', 
     expect((await login('test-inactive@example.test', INACTIVE_STAFF.apiKey)).status).toBe(401);
   });
 
-  it('失敗はコード検証と同じ IP 枠を消費し、上限で 429 になる', async () => {
+  it('失敗は上限で 429 になる（パスワード専用の枠）', async () => {
     const IP = '198.51.100.210';
-    for (let i = 0; i < 20; i++) {
+    // 既定 ADMIN_PW_FAIL_MAX_PER_EMAIL = 10
+    for (let i = 0; i < 10; i++) {
       expect((await login(MAIL, 'lh_00000000000000000000000000000098', IP)).status).toBe(401);
     }
     expect((await login(MAIL, KEY, IP)).status).toBe(429);
+  });
+
+  it('★メールコードの失敗で埋まっても、パスワードでは締め出されない', async () => {
+    // 以前は両者が同じ枠を共有していたため、他人のコード入力ミスが溜まると
+    // 正しいオーナーキーを持つ人が資格情報を見てもらう前に 429 になっていた。
+    // ＝「メール不達時の最終手段」がフォームから使えない状態。
+    const IP = '198.51.100.211';
+    for (let i = 0; i < 21; i++) {
+      await verify(emailOf(STAFF.id), '000010', IP);
+    }
+    // コード側は上限に達している
+    expect((await verify(emailOf(STAFF.id), '000010', IP)).status).toBe(429);
+    // それでもパスワードでは通る
+    expect((await login(MAIL, KEY, IP)).status).toBe(200);
+  });
+
+  it('★他人のパスワード失敗では締め出されない（宛先ごとに別枠）', async () => {
+    const IP = '198.51.100.212';
+    const other = emailOf(STAFF.id);
+    for (let i = 0; i < 12; i++) {
+      await login(other, 'lh_00000000000000000000000000000097', IP);
+    }
+    expect((await login(other, 'lh_00000000000000000000000000000097', IP)).status).toBe(429);
+    // 別の宛先は無傷
+    expect((await login(MAIL, KEY, IP)).status).toBe(200);
+  });
+
+  it('宛先を変え続けても外枠で頭打ちになる（env キーへの無制限な総当たりを作らない）', async () => {
+    // ADMIN_OWNER_EMAIL 未設定なら任意のアドレスで env キーが通るため、
+    // 宛先ごとの枠だけだとアドレスを変え続けて無制限に試せてしまう。
+    const IP = '198.51.100.213';
+    let throttledAt: number | null = null;
+    for (let i = 0; i < 60; i++) {
+      const res = await login(`rotate-${i}@example.test`, 'lh_00000000000000000000000000000096', IP);
+      if (res.status === 429) { throttledAt = i + 1; break; }
+    }
+    // 既定 ADMIN_PW_FAIL_MAX_PER_IP_TOTAL = 50
+    expect(throttledAt, '外枠 50 で止まる').toBe(51);
+  });
+
+  it('メール未登録のアカウントは理由が分かる文言で返る', async () => {
+    // 正しいパスワードが無いとこの分岐に入れないので、存在の漏洩にはならない。
+    await testDb
+      .prepare('UPDATE staff_members SET email = NULL WHERE id = ?')
+      .bind(STAFF_FIXTURES.admin.id)
+      .run();
+    try {
+      const res = await login('anything@example.test', STAFF_FIXTURES.admin.apiKey, '198.51.100.214');
+      expect(res.status).toBe(401);
+      const body = await res.json<{ error: string }>();
+      expect(body.error).toContain('メールアドレスが登録されていません');
+    } finally {
+      await testDb
+        .prepare('UPDATE staff_members SET email = ? WHERE id = ?')
+        .bind(`${STAFF_FIXTURES.admin.id}@example.test`, STAFF_FIXTURES.admin.id)
+        .run();
+    }
   });
 
   it('成功が監査ログに api_key 経路として残る', async () => {

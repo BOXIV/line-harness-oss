@@ -100,6 +100,26 @@ export const DEFAULT_VERIFY_FAIL_MAX_PER_IP = 20;
 export const DEFAULT_VERIFY_FAIL_WINDOW_MINUTES = 15;
 
 /**
+ * パスワード（＝APIキー）ログインの失敗上限。**メールコードとは別の枠**にする。
+ *
+ * 守っている秘密の強度が桁違いに違うため、枠を共有してはいけない:
+ *   - メールコードは 10^6 通り。総当たりが現実的なので厳しい上限が要る
+ *   - パスワードは `lh_` + 32hex（128bit）か env API_KEY（実測 51 文字・英数記号混在）。
+ *     オンラインでの総当たりは非現実的
+ * 共有すると、弱い方（コード）を守るための上限が強い方（パスワード）の入口を塞ぐ。
+ * 実際それが起きていた: 他人のコード入力ミスで枠が埋まると、
+ * 正しいオーナーキーを持つ人が**資格情報を見てもらう前に 429 で門前払い**されていた。
+ *
+ * 枠は (プレフィクス, 宛先メール) の組で数える。他人の失敗で締め出されないため。
+ * 加えてプレフィクスのみの外枠を置く。メールアドレスを変えれば枠が増える、を塞ぐ
+ * （env API_KEY は ADMIN_OWNER_EMAIL 未設定なら任意のアドレスで通るので、
+ *   外枠が無いとアドレスを変え続けて無制限に試せてしまう）。
+ */
+export const DEFAULT_PW_FAIL_MAX_PER_EMAIL = 10;
+export const DEFAULT_PW_FAIL_MAX_PER_IP_TOTAL = 50;
+export const DEFAULT_PW_FAIL_WINDOW_MINUTES = 15;
+
+/**
  * verify が一度に照合する「生きているチャレンジ」の既定上限。
  *
  * 発行上限から導出する。別々の定数にすると、発行上限を上げたときに
@@ -317,8 +337,10 @@ function expandIpv6(input: string): string[] | null {
   return groups.map((g) => g.replace(/^0+(?=.)/, ''));
 }
 
+export type ThrottleKind = 'login_issue' | 'login_fail' | 'login_pw';
+
 export function throttleBucket(
-  kind: 'login_issue' | 'login_fail',
+  kind: ThrottleKind,
   ip: string | null | undefined,
   scope?: string | null,
 ): string {

@@ -126,6 +126,11 @@ export type Env = {
     ADMIN_LOGIN_ISSUE_WINDOW_MINUTES?: string; // default: 15
     ADMIN_LOGIN_FAIL_MAX_PER_IP?: string;   // default: 10（コード検証失敗の IP 単位上限）
     ADMIN_LOGIN_FAIL_WINDOW_MINUTES?: string;  // default: 15
+    // パスワード（＝APIキー）ログインの失敗上限。**メールコードとは別枠**。
+    // 守る秘密の強度が桁違いなので共有しない（共有すると弱い方の上限が強い方の入口を塞ぐ）
+    ADMIN_PW_FAIL_MAX_PER_EMAIL?: string;      // default: 10（プレフィクス × 宛先メール）
+    ADMIN_PW_FAIL_MAX_PER_IP_TOTAL?: string;   // default: 50（プレフィクスのみの外枠）
+    ADMIN_PW_FAIL_WINDOW_MINUTES?: string;     // default: 15
     ADMIN_SESSION_TTL_HOURS?: string;       // default: 168（7日。iOS Safari の保存期間に合わせる）
     // 顧客ステータス (BOXIV) — Notion 出品者DB / 購入者DB の Status 同期用
     NOTION_SELLER_DB_ID?: string;

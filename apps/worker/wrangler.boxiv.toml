@@ -59,6 +59,11 @@ ADMIN_LOGIN_ISSUE_MAX_PER_IP_TOTAL = "100"
 #        1 バーストで窓を潰される。実害の上限は窓 15 分の一時的なログイン不能で、
 #        Slack には鳴り、救済コード発行の経路も生きている。詳細は staff-auth.ts のコメント。
 #   ADMIN_LOGIN_FAIL_WINDOW_MINUTES  = "15"   検証失敗の窓
+#   ADMIN_PW_FAIL_MAX_PER_EMAIL      = "10"   パスワード失敗（プレフィクス × 宛先メール）
+#   ADMIN_PW_FAIL_MAX_PER_IP_TOTAL   = "50"   同 外枠（プレフィクスのみ）
+#   ADMIN_PW_FAIL_WINDOW_MINUTES     = "15"   同 窓
+#     ⚠️ パスワードの枠はメールコードの枠と **共有しない**。守る秘密の強度が桁違いなので、
+#        共有すると弱い方(コード)の上限が強い方(パスワード)の入口を塞ぐ。実際そうなっていた。
 #   ADMIN_SESSION_TTL_HOURS          = "168"  セッションの絶対期限（7日 / iOS Safari の保存期間に合わせる）
 
 [[d1_databases]]
