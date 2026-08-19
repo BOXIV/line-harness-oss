@@ -44,5 +44,20 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     setupFiles: ['./test/support/setup.ts'],
+    // ⚠️ テストファイル間の並行実行を切る。**全ファイルが同じ D1 を共有している**ため。
+    //
+    // 具体的な衝突:
+    //   - auth-email.test.ts と staff-auth.test.ts が beforeEach で
+    //     `DELETE FROM auth_throttle` する。並行だと片方の掃除が
+    //     もう片方の計測中カウンタを消し、スロットルのテストが偽の緑/赤になる
+    //   - audit-log-degrade.test.ts は `ALTER TABLE audit_log DROP COLUMN actor_via` を
+    //     一時的に実行する。並行だと他ファイルの監査ログ書き込みが劣化パスに落ちる
+    //
+    // 実際に「宛先を変え続けても外枠で頭打ちになる」が 1 回だけ落ち、
+    // 直後の 5 回は緑という再現性のない失敗が出た。
+    // **デプロイゲートが不安定なのは、ゲートが無いより悪い** —
+    // 「落ちたら再実行」を学習させると、本物の失敗まで再実行で流される。
+    // 実行時間は数秒なので、決定性を優先する。
+    fileParallelism: false,
   },
 });

@@ -28,8 +28,8 @@ export interface AdminAuthEmailEnv extends SendGridEnv {
  * 撮影確定通知（PR #91）と文面を揃えている。片方だけ変えないこと。
  */
 const SPAM_REPORT_WARNING =
-  '⚠️ このメールを迷惑メール報告しないでください。以後、ログイン用の認証メールが届かなくなり、' +
-  '管理画面にログインできなくなります。';
+  '⚠️ このメールを迷惑メール報告しないでください。管理画面ログイン用の認証メールを含む、' +
+  'BOXIV からのすべてのメールが届かなくなります。';
 
 /** Slack / ログに出す用の伏せ字。`toshiki.o@boxiv.co.jp` → `to***@boxiv.co.jp` */
 export function maskEmail(email: string | null | undefined): string {

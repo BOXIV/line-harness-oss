@@ -152,7 +152,9 @@ describe('迷惑メール報告の注意書き', () => {
     const line = text.split('\n').find((l) => l.startsWith('⚠️'));
     expect(line, '⚠️ で始まる行が無い').toBeDefined();
     expect(line).toContain('迷惑メール報告しないでください');
-    expect(line).toContain('ログインできなくなります');
+    // 撮影確定通知（PR #91）と同一の文面にしている。受信者は両方のメールを見るので、
+    // 揃っていないと「別の注意」だと思われる。片方だけ変えないこと。
+    expect(line).toContain('BOXIV からのすべてのメールが届かなくなります');
   });
 
   it('メールアドレス変更の通知にも入る（同じ抑制リストに載るため）', async () => {
