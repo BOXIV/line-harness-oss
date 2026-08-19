@@ -28,6 +28,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db build
 
+      # デプロイ前ゲート: ロール × エンドポイント到達性マトリクス（BOXIV）
+      # 認可の変更で特定ロールが締め出される事故（2026-08-15）の再発防止。
+      - run: pnpm --filter worker test
+
       - run: pnpm --filter worker build
         env:
           VITE_LIFF_ID: ${{ vars.VITE_LIFF_ID }}

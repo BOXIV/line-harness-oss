@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": ".",
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "vite/client"]
+  },
+  "include": ["test/**/*.ts", "vitest.config.ts"]
+}
