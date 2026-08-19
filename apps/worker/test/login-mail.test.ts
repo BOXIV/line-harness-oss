@@ -56,7 +56,7 @@ describe('ログインコードメール', () => {
     expect(t.open_tracking).toEqual({ enable: false });
   });
 
-  it('本文はコードが主・リンクが従（リンクは開くだけでは消費されない旨を明記）', async () => {
+  it('本文はコードが主・リンクは補助（リンクにコードは載せない）', async () => {
     await sendLoginCodeEmail(ENV, {
       to: 'someone@example.test',
       staffName: 'テスト',
@@ -67,7 +67,8 @@ describe('ログインコードメール', () => {
     const text: string = sent[0]!.body.content.find((c: any) => c.type === 'text/plain').value;
     // コードが本文の先頭側、リンクはその後
     expect(text.indexOf('123456')).toBeLessThan(text.indexOf('https://admin.example.test'));
-    expect(text).toContain('開くだけでは');
+    // リンクは「メールアドレスが入力済みになる」だけの補助。コードは手で入れてもらう。
+    expect(text).toContain('上のコードを入力してください');
     expect(sent[0]!.body.subject).toContain('123456');
   });
 
@@ -97,3 +98,41 @@ describe('メールアドレス変更の通知', () => {
     expect(sent[0]!.body.tracking_settings.click_tracking.enable).toBe(false);
   });
 });
+
+describe('ログイン画面 URL の組み立て', () => {
+  it('コードをクエリに載せない（URL 単体では何の権限も持たない）', async () => {
+    const { buildLoginPageUrl } = await import('../src/services/staff-auth-email.boxiv.js');
+    const url = buildLoginPageUrl('https://admin.example.test', 'someone+tag@example.test');
+    expect(url).toBe('https://admin.example.test/login?email=someone%2Btag%40example.test');
+    // ここが一番の要点。載せると URL が「ワンクリックのログイン手段」になり、
+    // 履歴・プロキシログ・**メール転送**のいずれにも完全な資格情報が乗る。
+    expect(url).not.toContain('code');
+  });
+
+  it('末尾スラッシュを正規化する', async () => {
+    const { buildLoginPageUrl } = await import('../src/services/staff-auth-email.boxiv.js');
+    expect(buildLoginPageUrl('https://admin.example.test///', 'a@b.test')).toBe(
+      'https://admin.example.test/login?email=a%40b.test',
+    );
+  });
+
+  it('ADMIN_BASE_URL 未設定なら null（本文にリンクを出さない）', async () => {
+    const { buildLoginPageUrl } = await import('../src/services/staff-auth-email.boxiv.js');
+    expect(buildLoginPageUrl(undefined, 'a@b.test')).toBeNull();
+    expect(buildLoginPageUrl('', 'a@b.test')).toBeNull();
+  });
+
+  it('本文に載るリンクにもコードが含まれない', async () => {
+    await sendLoginCodeEmail(ENV, {
+      to: 'someone@example.test',
+      staffName: 'テスト',
+      code: '246810',
+      ttlMinutes: 10,
+      loginUrl: 'https://admin.example.test/login?email=someone%40example.test',
+    });
+    const text: string = sent[0]!.body.content.find((c: any) => c.type === 'text/plain').value;
+    const link = text.split('\n').find((l) => l.startsWith('https://'))!;
+    expect(link).not.toContain('246810');
+    expect(text).toContain('246810'); // 本文にはある（手で入力してもらう）
+  });
+})

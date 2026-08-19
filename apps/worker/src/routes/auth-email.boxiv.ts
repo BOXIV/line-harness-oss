@@ -35,6 +35,7 @@ import {
 import { requireRole } from '../middleware/role-guard.js';
 import {
   alertAdminAuth,
+  buildLoginPageUrl,
   maskEmail,
   sendLoginCodeEmail,
 } from '../services/staff-auth-email.boxiv.js';
@@ -345,11 +346,10 @@ authEmail.post('/api/auth/email/start', async (c) => {
       requestIp: ip,
     });
 
-    // リンクはコードを「入力済みにする」だけ。開いた時点では消費されない（消費は POST /verify）。
-    const base = (c.env.ADMIN_BASE_URL ?? '').replace(/\/+$/, '');
-    const loginUrl = base
-      ? `${base}/login?email=${encodeURIComponent(staff.email ?? email)}&code=${challenge.code}`
-      : null;
+    // リンクは **メールアドレスだけ** を入力済みにする。コードは載せない
+    // （載せると URL 自体が完全なログイン手段になり、履歴・プロキシログ・転送に乗る）。
+    // 詳細は buildLoginPageUrl のコメント。
+    const loginUrl = buildLoginPageUrl(c.env.ADMIN_BASE_URL, staff.email ?? email);
 
     const sent = await sendLoginCodeEmail(c.env, {
       to: staff.email ?? email,

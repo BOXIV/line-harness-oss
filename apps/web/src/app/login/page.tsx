@@ -36,8 +36,17 @@ function LoginForm() {
   useEffect(() => {
     const qsEmail = params.get('email')
     const qsCode = params.get('code')
-    if (qsEmail) setEmail(qsEmail)
+    if (qsEmail) {
+      setEmail(qsEmail)
+      // ⚠️ メールアドレス入力段に留めてはいけない。リンクから来た人は **既にコードを持っている**
+      //    ので、そこで「認証コードを送る」を押すと 2 通目が飛び、1 通目が無効化されたと
+      //    誤解する上に発行枠も減る。コード入力段へ直行させる。
+      setStep('code')
+      setNotice('メールに記載の6桁コードを入力してください。')
+    }
     if (qsCode) {
+      // 旧リンク（コードをクエリに含む形）で来た場合の互換。生成は止めたが、
+      // 送信済みメールがまだ有効なことがあるため受け口は残す。
       setCode(qsCode)
       setStep('code')
       setNotice('メールのコードを読み込みました。「ログイン」を押してください。')

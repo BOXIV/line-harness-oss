@@ -36,6 +36,30 @@ export async function alertAdminAuth(env: AdminAuthEmailEnv, text: string): Prom
 }
 
 /**
+ * メール本文に載せるログイン画面の URL。
+ *
+ * **コードは絶対にクエリに載せない。** 載せると URL 自体が完全なログイン手段になり、
+ *   - ブラウザ履歴に残る
+ *   - 企業のメールゲートウェイ / プロキシの URL ログに残る
+ *   - **メールを転送すると、ワンクリックのログインリンクごと相手に渡る**
+ * の 3 つが同時に成立する。3 つ目は実際に起きた: 到達性の検証で
+ * 「届きました」と報告する際に、URL ごとチャットへ貼られた。
+ * 責める話ではなく、**「届いたか確認する」ときに人が自然にやること**なので、
+ * 貼られても数字だけで済む形にしておく必要がある。
+ *
+ * `email` だけを載せるのは、再入力の手間を省く利便性は保ちつつ、
+ * URL が単体では何の権限も持たないため。コードは本文から手で入れてもらう＝本来の姿。
+ *
+ * ⚠️ GET でコードを消費しない設計は「スキャナの先読みで焼かれない」ためのもので、
+ *    「URL が資格情報になる」問題は別。前者を満たしても後者は防げない。
+ */
+export function buildLoginPageUrl(base: string | null | undefined, email: string): string | null {
+  const trimmed = (base ?? '').replace(/\/+$/, '');
+  if (!trimmed) return null;
+  return `${trimmed}/login?email=${encodeURIComponent(email)}`;
+}
+
+/**
  * ログイン用の 6 桁コードを送る。
  *
  * 本文は「コードが主・リンクが従」の順で書く。リンクを主導線にするとメールスキャナ
@@ -60,8 +84,7 @@ export async function sendLoginCodeEmail(
   ];
   if (input.loginUrl) {
     lines.push(
-      'ログイン画面（メールアドレスとコードが入力済みになります。開くだけでは',
-      'ログインされないので、画面のボタンを押してください）:',
+      'ログイン画面（メールアドレスが入力済みになります。上のコードを入力してください）:',
       input.loginUrl,
       '',
     );
