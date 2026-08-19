@@ -105,6 +105,9 @@ export type Env = {
     NOTION_PROP_VEHICLE?: string;
     NOTION_PROP_PHONE?: string;
     NOTION_PROP_ADDRESS?: string;
+    // 撮影予約 承認時の出品者リスト自動入力（booking-approval-notify.boxiv.ts）
+    NOTION_BOOKING_DATE_PROP?: string;   // default: 撮影予定日
+    NOTION_BOOKING_PLATE_PROP?: string;  // default: [LINE]ナンバー下4桁
     // 出品フォーム LINE 連携 (BOXIV) — Slack 通知用 (claude-sellentry bot)
     SELLENTRY_SLACK_BOT_TOKEN?: string;
     SLACK_LISTING_LINK_CHANNEL_ID?: string;

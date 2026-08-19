@@ -37,7 +37,10 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ['test/**/*.test.ts'],
+    // ⚠️ `test/` と `tests/` の**両方**を拾う。boxiv-main 側が `apps/worker/tests/` を使っており
+    //    （撮影予約の承認通知）、片方だけにするとそのスイートが **静かに実行されなくなる**。
+    //    テストが 0 件でも vitest は緑を返すので、デプロイゲートは何も検査せず通ってしまう。
+    include: ['test/**/*.test.ts', 'tests/**/*.test.ts'],
     setupFiles: ['./test/support/setup.ts'],
   },
 });
