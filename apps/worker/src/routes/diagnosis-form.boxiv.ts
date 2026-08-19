@@ -103,6 +103,9 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
   let specJson: string | null = null;
   let spec: Record<string, unknown> = {};
   let specError: string | null = null;
+  // 失敗の分類（auth/upstream/timeout/empty …）。Slack の文面と D1 の記録を分ける根拠にする。
+  let specKind: string | null = null;
+  let specNeedsHuman = false;
   // spec_attempts は「取得サイクル数」（送信時=1／バックフィル1回=1）。バックオフ段数の指標で、
   // 1 サイクル内の HTTP 試行回数は spec_error の "attemptN/M" 側に残る。
   let specTried = false;
@@ -117,8 +120,12 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
       specJson = result.specJson;
       spec = result.spec;
     } else {
-      specError = result.error;
-      console.error('diagnosis-form: spec_API failed', leadId, vin, result.error);
+      specKind = result.kind;
+      specNeedsHuman = result.needsHuman;
+      // 分類を先頭に付けて残す。上流が全部 HTTP 500 で返すので、生のエラー文字列だけでは
+      // 「待てば直る」のか「キーが死んでいる」のかを後から誰も判定できない。
+      specError = `[${result.kind}] ${result.error}`;
+      console.error('diagnosis-form: spec_API failed', leadId, vin, specError);
     }
   }
 
@@ -225,9 +232,15 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
           ? `SoH: ${code(f.batterySoH + '%')}（劣化率 ${f.degradationPct}%）`
           : `spec_API: ${code(status === 'API取得不可' ? '取得不可 ⚠️' : '未実行')}`
       );
-      // 取得不可の時は原因と「自動で再取得する」ことを明示する（運用が手を出す前に待てるように）
+      // 取得不可の時は原因と「次に何が起きるか」を明示する。
+      // キー起因（auth / nokey）は待っても直らないので、待機案内ではなく即対応を促す。
       if (status === 'API取得不可') {
-        lines.push(`原因: ${code(specError ?? '不明')}`, '⏳ 自動で再取得を試みます（最大6回・24時間まで）');
+        lines.push(`原因: ${code(specError ?? '不明')}`);
+        lines.push(
+          specNeedsHuman
+            ? `🚨 ${specKind === 'nokey' ? 'Worker に spec_API キーが入っていません' : 'spec_API キーが拒否されています'} — 自動では復旧しません。\`VEHICLE_SPECS_API_KEY\` を確認してください`
+            : '⏳ 自動で再取得を試みます（最大8回・約3日まで）'
+        );
       }
       // 推定で埋めた場合は運用が裏取りできるよう明示する（API の実値ではない）
       if (f.derived) {
@@ -240,8 +253,8 @@ diagnosisForm.post('/diagnosis-form/submit', async (c) => {
           channel: slackChannel,
           attachments: [
             {
-              // 重複は黄色、通常は緑
-              color: isDuplicate ? '#f2c744' : '#2fd06f',
+              // キー起因の spec 失敗は赤（要即対応）、重複は黄色、通常は緑
+              color: specNeedsHuman ? '#e01e5a' : isDuplicate ? '#f2c744' : '#2fd06f',
               fallback: `バッテリー診断 依頼受付 ${leadId}${isDuplicate ? '（重複）' : ''}`,
               text: lines.join('\n'),
             },
