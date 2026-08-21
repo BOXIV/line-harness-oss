@@ -10,6 +10,8 @@ import type {
   ConversionPoint,
   Affiliate,
   Template,
+  TemplateCategory,
+  TemplateSource,
   Automation,
   AutomationLog,
   Chat,
@@ -376,24 +378,18 @@ export const api = {
       ),
   },
   templates: {
-    list: (category?: string) =>
-      fetchApi<ApiResponse<{ id: string; name: string; category: string; messageType: string; messageContent: string; createdAt: string; updatedAt: string }[]>>(
-        '/api/templates' + (category ? '?' + new URLSearchParams({ category }) : ''),
-      ),
-    get: (id: string) =>
-      fetchApi<ApiResponse<{ id: string; name: string; category: string; messageType: string; messageContent: string; createdAt: string; updatedAt: string }>>(
-        `/api/templates/${id}`,
-      ),
-    create: (data: { name: string; category: string; messageType: string; messageContent: string }) =>
-      fetchApi<ApiResponse<{ id: string; name: string; category: string; messageType: string; messageContent: string; createdAt: string; updatedAt: string }>>(
-        '/api/templates',
-        { method: 'POST', body: JSON.stringify(data) },
-      ),
-    update: (id: string, data: Partial<{ name: string; category: string; messageType: string; messageContent: string }>) =>
-      fetchApi<ApiResponse<{ id: string; name: string; category: string; messageType: string; messageContent: string; createdAt: string; updatedAt: string }>>(
-        `/api/templates/${id}`,
-        { method: 'PUT', body: JSON.stringify(data) },
-      ),
+    list: (filter?: { category?: string; source?: TemplateSource }) => {
+      const params = new URLSearchParams()
+      if (filter?.category) params.set('category', filter.category)
+      if (filter?.source) params.set('source', filter.source)
+      const query = params.toString()
+      return fetchApi<ApiResponse<Template[]>>('/api/templates' + (query ? `?${query}` : ''))
+    },
+    get: (id: string) => fetchApi<ApiResponse<Template>>(`/api/templates/${id}`),
+    create: (data: { name: string; category: string; messageType: string; messageContent: string; source: TemplateSource }) =>
+      fetchApi<ApiResponse<Template>>('/api/templates', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Partial<{ name: string; category: string; messageType: string; messageContent: string; source: TemplateSource }>) =>
+      fetchApi<ApiResponse<Template>>(`/api/templates/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/templates/${id}`, { method: 'DELETE' }),
     reorder: (ids: string[]) =>
@@ -403,13 +399,18 @@ export const api = {
       }),
   },
   templateCategories: {
-    list: () =>
-      fetchApi<ApiResponse<{ id: string | null; name: string; sortOrder: number }[]>>('/api/template-categories'),
-    reorder: (names: string[]) =>
-      fetchApi<ApiResponse<{ id: string | null; name: string; sortOrder: number }[]>>('/api/template-categories/reorder', {
-        method: 'PUT',
-        body: JSON.stringify({ names }),
-      }),
+    // source を渡すと「そのタブに出るテンプレが属するカテゴリ」だけが返る。
+    list: (source?: TemplateSource) =>
+      fetchApi<ApiResponse<TemplateCategory[]>>(
+        '/api/template-categories' + (source ? `?source=${source}` : ''),
+      ),
+    // タブで絞っている間は names が部分集合になる。worker 側が全体順へ差し込むので、
+    // 返ってくるのは source で絞った表示順（＝呼び出し元がそのまま state に入れられる）。
+    reorder: (names: string[], source?: TemplateSource) =>
+      fetchApi<ApiResponse<TemplateCategory[]>>(
+        '/api/template-categories/reorder' + (source ? `?source=${source}` : ''),
+        { method: 'PUT', body: JSON.stringify({ names }) },
+      ),
   },
   automations: {
     list: (params?: { accountId?: string }) => {

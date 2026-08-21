@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
+import type { FriendSource } from '@/lib/friend-source'
 
 interface ScheduledMessage {
   id: string
@@ -20,6 +21,8 @@ interface ScheduledMessagePanelProps {
   onClose: () => void
   friendId: string
   friendName: string
+  /** 送信相手の分類。テンプレ選択の初期タブ（出品者向け/購入者向け）に使う。 */
+  friendSource?: FriendSource
 }
 
 const statusLabel: Record<string, { label: string; cls: string }> = {
@@ -58,6 +61,7 @@ export default function ScheduledMessagePanel({
   onClose,
   friendId,
   friendName,
+  friendSource,
 }: ScheduledMessagePanelProps) {
   const [items, setItems] = useState<ScheduledMessage[]>([])
   const [loading, setLoading] = useState(false)
@@ -290,6 +294,7 @@ export default function ScheduledMessagePanel({
         setShowTemplatePicker(false)
       }}
       submitLabel="この内容を予約フォームに反映"
+      friendSource={friendSource}
     />
     </>
   )

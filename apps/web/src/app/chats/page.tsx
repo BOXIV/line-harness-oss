@@ -1083,6 +1083,7 @@ export default function ChatsPage() {
         isOpen={showTemplatePicker}
         onClose={() => setShowTemplatePicker(false)}
         onSubmit={handleSendTemplate}
+        friendSource={detailSource}
       />
 
       {chatDetail && (
@@ -1091,6 +1092,7 @@ export default function ChatsPage() {
           onClose={() => setShowSchedulePanel(false)}
           friendId={chatDetail.friendId}
           friendName={chatDetail.friendName}
+          friendSource={detailSource}
         />
       )}
 

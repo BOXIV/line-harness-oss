@@ -7,6 +7,13 @@ import FlexPreviewPane from '@/components/templates/flex-preview-pane'
 import TemplateEditModal from '@/components/templates/template-edit-modal'
 import type { EditingTemplate } from '@/components/templates/template-edit-modal'
 import ReorderModal from '@/components/templates/reorder-modal'
+import {
+  TEMPLATE_SOURCE_TABS,
+  TEMPLATE_SOURCE_LABELS,
+  TEMPLATE_SOURCE_BADGE_CLASS,
+  normalizeTemplateSource,
+  type TemplateSource,
+} from '@/lib/template-source'
 
 interface Template {
   id: string
@@ -14,6 +21,8 @@ interface Template {
   category: string
   messageType: string
   messageContent: string
+  /** 出品者向け / 購入者向け / 共通（migration 922）。 */
+  source: TemplateSource
   createdAt: string
   updatedAt: string
 }
@@ -29,6 +38,7 @@ interface CreateFormState {
   category: string
   messageType: string
   messageContent: string
+  source: TemplateSource
 }
 
 // カテゴリ名から安定した色相を生成（ブロックごとの色分け用）。
@@ -53,12 +63,15 @@ export default function TemplatesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  // 出品者向け / 購入者向け / 共通のタブ。カテゴリチップはこのタブの中での絞り込み。
+  const [sourceTab, setSourceTab] = useState<'all' | TemplateSource>('all')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [form, setForm] = useState<CreateFormState>({
     name: '',
     category: '',
     messageType: 'text',
     messageContent: '',
+    source: 'common',
   })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
@@ -66,14 +79,17 @@ export default function TemplatesPage() {
   const [categories, setCategories] = useState<{ id: string | null; name: string; sortOrder: number }[]>([])
   const [reordering, setReordering] = useState<'categories' | 'templates' | null>(null)
 
+  const sourceFilter = sourceTab === 'all' ? undefined : sourceTab
+
   const loadCategories = useCallback(async () => {
     try {
-      const res = await api.templateCategories.list()
+      // タブの中に実在するカテゴリだけを返してもらう（押しても 0 件のチップを出さない）。
+      const res = await api.templateCategories.list(sourceFilter)
       if (res.success) setCategories(res.data)
     } catch {
       // カテゴリ取得失敗はチップバー非表示に留める（一覧自体は表示できる）
     }
-  }, [])
+  }, [sourceFilter])
 
   useEffect(() => {
     loadCategories()
@@ -96,9 +112,10 @@ export default function TemplatesPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await api.templates.list(
-        selectedCategory !== 'all' ? selectedCategory : undefined
-      )
+      const res = await api.templates.list({
+        category: selectedCategory !== 'all' ? selectedCategory : undefined,
+        source: sourceFilter,
+      })
       if (res.success) {
         setTemplates(res.data)
       } else {
@@ -109,7 +126,7 @@ export default function TemplatesPage() {
     } finally {
       setLoading(false)
     }
-  }, [selectedCategory])
+  }, [selectedCategory, sourceFilter])
 
   useEffect(() => {
     load()
@@ -136,10 +153,11 @@ export default function TemplatesPage() {
         category: form.category,
         messageType: form.messageType,
         messageContent: form.messageContent,
+        source: form.source,
       })
       if (res.success) {
         setShowCreate(false)
-        setForm({ name: '', category: '', messageType: 'text', messageContent: '' })
+        setForm({ name: '', category: '', messageType: 'text', messageContent: '', source: form.source })
         load()
         loadCategories()
       } else {
@@ -150,6 +168,14 @@ export default function TemplatesPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  // タブが変わるとカテゴリの集合ごと変わる。前のタブで選んでいたカテゴリを持ち越すと
+  // 「チップは選択済みなのに 0 件」になるので、カテゴリ選択は都度リセットする。
+  const handleSourceTab = (key: 'all' | TemplateSource) => {
+    if (key === sourceTab) return
+    setSourceTab(key)
+    setSelectedCategory('all')
   }
 
   const handleDelete = async (id: string) => {
@@ -325,7 +351,8 @@ export default function TemplatesPage() {
       setReorderSaving(true)
       try {
         if (catOrderChanged) {
-          const res = await api.templateCategories.reorder(newCatOrder)
+          // タブで絞っている間 newCatOrder は全カテゴリの部分集合。worker が全体順へ差し込む。
+          const res = await api.templateCategories.reorder(newCatOrder, sourceFilter)
           if (!res.success) throw new Error(res.error)
           setCategories(res.data) // チップバーの順序も更新
         }
@@ -351,7 +378,11 @@ export default function TemplatesPage() {
         title="テンプレート管理"
         action={
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => {
+              // 開いているタブを既定の区分にする（出品者タブで作れば出品者向け）。
+              if (sourceTab !== 'all') setForm((f) => ({ ...f, source: sourceTab }))
+              setShowCreate(true)
+            }}
             className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
             style={{ backgroundColor: '#0f172a' }}
           >
@@ -366,6 +397,28 @@ export default function TemplatesPage() {
           {error}
         </div>
       )}
+
+      {/* 出品者向け / 購入者向け / 共通のタブ。カテゴリチップより上位の絞り込み。 */}
+      <div className="mb-3" role="tablist" aria-label="テンプレートの区分">
+        <div className="inline-flex gap-1 bg-gray-100 rounded-lg p-1">
+          {TEMPLATE_SOURCE_TABS.map((tab) => {
+            const active = sourceTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                role="tab"
+                aria-selected={active}
+                onClick={() => handleSourceTab(tab.key)}
+                className={`px-4 py-1.5 min-h-[36px] rounded-md text-xs font-medium transition-colors ${
+                  active ? 'bg-white text-slate-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                {tab.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
       {/* Category filter */}
       {categories.length > 0 && (
@@ -453,6 +506,21 @@ export default function TemplatesPage() {
                 />
               </div>
               <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">区分</label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                  value={form.source}
+                  onChange={(e) => setForm({ ...form, source: e.target.value as TemplateSource })}
+                >
+                  <option value="seller">{TEMPLATE_SOURCE_LABELS.seller}</option>
+                  <option value="buyer">{TEMPLATE_SOURCE_LABELS.buyer}</option>
+                  <option value="common">{TEMPLATE_SOURCE_LABELS.common}</option>
+                </select>
+                <p className="mt-1 text-[11px] text-gray-400">
+                  チャットのテンプレ選択で、相手（出品者/購入者）に合わせて絞り込まれます。どちらにも送るものは「共通」。
+                </p>
+              </div>
+              <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">メッセージタイプ</label>
                 <select
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
@@ -525,7 +593,11 @@ export default function TemplatesPage() {
         </div>
       ) : templates.length === 0 && !showCreate ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-          <p className="text-gray-500">テンプレートがありません。「新規テンプレート」から作成してください。</p>
+          <p className="text-gray-500">
+            {sourceTab === 'all'
+              ? 'テンプレートがありません。「新規テンプレート」から作成してください。'
+              : `${TEMPLATE_SOURCE_LABELS[sourceTab]}のテンプレートがありません。「新規テンプレート」から作成するか、既存テンプレートの区分を変更してください。`}
+          </p>
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
@@ -614,7 +686,18 @@ export default function TemplatesPage() {
                       {/* Name */}
                       <td className="px-4 py-3">
                         <div>
-                          <p className="text-sm font-medium text-gray-900">{template.name}</p>
+                          <p className="text-sm font-medium text-gray-900 flex items-center gap-1.5">
+                            {template.name}
+                            {sourceTab === 'all' && (
+                              <span
+                                className={`inline-flex items-center px-1.5 rounded text-[10px] font-medium leading-4 ${
+                                  TEMPLATE_SOURCE_BADGE_CLASS[normalizeTemplateSource(template.source)]
+                                }`}
+                              >
+                                {TEMPLATE_SOURCE_LABELS[normalizeTemplateSource(template.source)]}
+                              </span>
+                            )}
+                          </p>
                           <p className="text-xs text-gray-400 mt-0.5 truncate max-w-xs">
                             {template.messageContent.slice(0, 50)}
                             {template.messageContent.length > 50 ? '...' : ''}
@@ -681,7 +764,7 @@ export default function TemplatesPage() {
         items={categories.map((c) => ({ key: c.name, label: c.name }))}
         onClose={() => setReordering(null)}
         onSave={async (names) => {
-          const res = await api.templateCategories.reorder(names)
+          const res = await api.templateCategories.reorder(names, sourceFilter)
           if (!res.success) throw new Error(res.error)
           setCategories(res.data)
           setReordering(null)
