@@ -392,11 +392,16 @@ CREATE TABLE IF NOT EXISTS templates (
   message_type    TEXT NOT NULL CHECK (message_type IN ('text', 'image', 'flex', 'carousel')),
   message_content TEXT NOT NULL,
   sort_order      INTEGER NOT NULL DEFAULT 0, -- migration 913: カテゴリ内の表示順（0=未並び替え）
+  -- migration 922: 'seller'（出品者向け）/ 'buyer'（購入者向け）/ 'common'（どちらにも使う）。
+  -- 友だち側の分類（source-tag.boxiv.ts / friend-source.ts）と同じ語彙。CHECK は付けない
+  -- （ALTER で足せず、migration を積んだ DB とスキーマが食い違うため。検証は worker 側）。
+  source          TEXT NOT NULL DEFAULT 'common',
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_templates_category ON templates (category);
+CREATE INDEX IF NOT EXISTS idx_templates_source ON templates (source);
 
 -- migration 913: カテゴリ（templates.category の自由文字列）の表示順マスタ。
 -- 行は並び替え保存時にだけ作られる（未登録カテゴリは 999999 相当で名前順の末尾）。

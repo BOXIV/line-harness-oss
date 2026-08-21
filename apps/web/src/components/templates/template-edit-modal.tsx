@@ -3,6 +3,11 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import FlexPreviewPane from './flex-preview-pane'
+import {
+  TEMPLATE_SOURCE_LABELS,
+  normalizeTemplateSource,
+  type TemplateSource,
+} from '@/lib/template-source'
 
 export interface EditingTemplate {
   id: string
@@ -10,6 +15,8 @@ export interface EditingTemplate {
   category: string
   messageType: string
   messageContent: string
+  /** 出品者向け / 購入者向け / 共通（migration 922）。 */
+  source: TemplateSource
 }
 
 interface TemplateEditModalProps {
@@ -24,6 +31,7 @@ export default function TemplateEditModal({ isOpen, template, onClose, onSaved }
   const [category, setCategory] = useState('')
   const [messageType, setMessageType] = useState('text')
   const [messageContent, setMessageContent] = useState('')
+  const [source, setSource] = useState<TemplateSource>('common')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -33,6 +41,7 @@ export default function TemplateEditModal({ isOpen, template, onClose, onSaved }
       setCategory(template.category)
       setMessageType(template.messageType)
       setMessageContent(template.messageContent)
+      setSource(normalizeTemplateSource(template.source))
       setError('')
     }
   }, [template])
@@ -68,6 +77,7 @@ export default function TemplateEditModal({ isOpen, template, onClose, onSaved }
         category: category.trim(),
         messageType,
         messageContent,
+        source,
       })
       if (res.success) {
         onSaved()
@@ -126,6 +136,18 @@ export default function TemplateEditModal({ isOpen, template, onClose, onSaved }
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">区分</label>
+                <select
+                  value={source}
+                  onChange={(e) => setSource(e.target.value as TemplateSource)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                >
+                  <option value="seller">{TEMPLATE_SOURCE_LABELS.seller}</option>
+                  <option value="buyer">{TEMPLATE_SOURCE_LABELS.buyer}</option>
+                  <option value="common">{TEMPLATE_SOURCE_LABELS.common}</option>
+                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">メッセージタイプ</label>

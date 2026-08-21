@@ -3,6 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/api'
 import FlexPreviewPane from '@/components/templates/flex-preview-pane'
+import type { FriendSource } from '@/lib/friend-source'
+import {
+  TEMPLATE_SOURCE_TABS,
+  TEMPLATE_SOURCE_LABELS,
+  TEMPLATE_SOURCE_BADGE_CLASS,
+  normalizeTemplateSource,
+  initialTemplateTab,
+  type TemplateSource,
+} from '@/lib/template-source'
 
 interface Template {
   id: string
@@ -10,6 +19,7 @@ interface Template {
   category: string
   messageType: string
   messageContent: string
+  source: TemplateSource
 }
 
 interface TemplatePickerModalProps {
@@ -18,6 +28,12 @@ interface TemplatePickerModalProps {
   onSubmit: (payload: { content: string; messageType: string }) => void
   /** 確定ボタンの文言。即時送信なら「この内容で送信」(既定)、予約フォームへ反映する用途なら「この内容を反映」等。 */
   submitLabel?: string
+  /**
+   * 送信相手の分類（出品者 / 購入者）。開いたときにその区分のタブを初期選択する。
+   * 未分類（null / 省略）なら「全て」から選ばせる。絞り込みは変更できるので、
+   * 相手と違う区分のテンプレを送りたいときはタブを切り替えればよい。
+   */
+  friendSource?: FriendSource
 }
 
 const messageTypeLabels: Record<string, string> = {
@@ -27,12 +43,13 @@ const messageTypeLabels: Record<string, string> = {
   carousel: 'カルーセル',
 }
 
-export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitLabel = 'この内容で送信' }: TemplatePickerModalProps) {
+export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitLabel = 'この内容で送信', friendSource }: TemplatePickerModalProps) {
   const [templates, setTemplates] = useState<Template[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
+  const [sourceTab, setSourceTab] = useState<'all' | TemplateSource>(initialTemplateTab(friendSource))
   const [selected, setSelected] = useState<Template | null>(null)
   const [editedContent, setEditedContent] = useState('')
 
@@ -59,6 +76,13 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
     }
   }, [isOpen, templates.length, loading, load])
 
+  // 開いた時点の相手に合わせてタブを初期化する（開いたまま別チャットに切り替わっても追従）。
+  useEffect(() => {
+    if (!isOpen) return
+    setSourceTab(initialTemplateTab(friendSource))
+    setSelectedCategory('all')
+  }, [isOpen, friendSource])
+
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent) => {
@@ -74,14 +98,22 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
     return () => window.removeEventListener('keydown', onKey)
   }, [isOpen, selected, onClose])
 
+  // 区分タブ → カテゴリチップ → 検索 の順に絞る。取得は全件なのでタブ切替は即時。
+  const sourceFiltered = useMemo(
+    () => (sourceTab === 'all'
+      ? templates
+      : templates.filter((t) => normalizeTemplateSource(t.source) === sourceTab)),
+    [templates, sourceTab],
+  )
+
   const categories = useMemo(
-    () => Array.from(new Set(templates.map((t) => t.category).filter(Boolean))),
-    [templates],
+    () => Array.from(new Set(sourceFiltered.map((t) => t.category).filter(Boolean))),
+    [sourceFiltered],
   )
 
   const filtered = useMemo(() => {
     const q = searchInput.trim().toLowerCase()
-    return templates.filter((t) => {
+    return sourceFiltered.filter((t) => {
       if (selectedCategory !== 'all' && t.category !== selectedCategory) return false
       if (!q) return true
       return (
@@ -89,7 +121,7 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
         t.messageContent.toLowerCase().includes(q)
       )
     })
-  }, [templates, searchInput, selectedCategory])
+  }, [sourceFiltered, searchInput, selectedCategory])
 
   const handlePick = (t: Template) => {
     setSelected(t)
@@ -111,6 +143,7 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
     setEditedContent('')
     setSearchInput('')
     setSelectedCategory('all')
+    setSourceTab(initialTemplateTab(friendSource))
     onClose()
   }
 
@@ -149,6 +182,25 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
         {!selected ? (
           <>
             <div className="px-5 py-3 border-b border-gray-100 space-y-2">
+              {/* 出品者向け / 購入者向け / 共通。相手の区分が分かっていれば初期選択される。 */}
+              <div className="flex gap-1 bg-gray-100 rounded-lg p-1" role="tablist" aria-label="テンプレートの区分">
+                {TEMPLATE_SOURCE_TABS.map((tab) => {
+                  const active = sourceTab === tab.key
+                  return (
+                    <button
+                      key={tab.key}
+                      role="tab"
+                      aria-selected={active}
+                      onClick={() => { setSourceTab(tab.key); setSelectedCategory('all') }}
+                      className={`flex-1 px-2 py-1.5 min-h-[32px] rounded-md text-xs font-medium transition-colors ${
+                        active ? 'bg-white text-slate-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  )
+                })}
+              </div>
               <input
                 type="text"
                 value={searchInput}
@@ -195,7 +247,11 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
                 </div>
               ) : filtered.length === 0 ? (
                 <p className="text-center text-sm text-gray-400 py-8">
-                  {templates.length === 0 ? 'テンプレートがありません' : '一致するテンプレートがありません'}
+                  {templates.length === 0
+                    ? 'テンプレートがありません'
+                    : sourceTab !== 'all' && sourceFiltered.length === 0
+                      ? `${TEMPLATE_SOURCE_LABELS[sourceTab]}のテンプレートがありません（「全て」で探せます）`
+                      : '一致するテンプレートがありません'}
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -215,8 +271,13 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
                           <div className="flex items-start justify-between gap-2 mb-1">
                             <p className="text-sm font-medium text-gray-900">{t.name}</p>
                             <div className="flex items-center gap-1 shrink-0">
+                              {sourceTab === 'all' && (
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${TEMPLATE_SOURCE_BADGE_CLASS[normalizeTemplateSource(t.source)]}`}>
+                                  {TEMPLATE_SOURCE_LABELS[normalizeTemplateSource(t.source)]}
+                                </span>
+                              )}
                               {t.category && (
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
                                   {t.category}
                                 </span>
                               )}

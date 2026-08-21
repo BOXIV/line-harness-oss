@@ -506,14 +506,31 @@ export interface FriendScore {
 // テンプレート (Template)
 // -----------------------------------------------------------------------------
 
+/**
+ * BOXIV: テンプレの送り先分類（migration 922）。'common' はどちらにも使うテンプレ。
+ * 友だち側の分類（出品者/購入者タグ）と語彙を揃えてあるので、チャット相手の分類から
+ * そのまま絞り込める。DB 側の定義は packages/db/src/templates.ts の TEMPLATE_SOURCES。
+ */
+export type TemplateSource = "seller" | "buyer" | "common";
+
 export interface Template {
   id: string;
   name: string;
   category: string;
   messageType: string;
   messageContent: string;
+  /** カテゴリ内の表示順（migration 913）。0 = 未並び替え。 */
+  sortOrder?: number;
+  source: TemplateSource;
   createdAt: string;
   updatedAt: string;
+}
+
+/** テンプレのカテゴリ（表示順マスタ）。順序行が未生成のカテゴリは id が null。 */
+export interface TemplateCategory {
+  id: string | null;
+  name: string;
+  sortOrder: number;
 }
 
 // -----------------------------------------------------------------------------
