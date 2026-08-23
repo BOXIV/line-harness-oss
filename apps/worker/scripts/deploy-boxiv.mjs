@@ -30,7 +30,10 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
 
-loadDotenv();
+// ⚠️ env を**明示**する。省略すると BOXIV_ENV / WITH_SECRETS_PROFILE 次第で test に倒れ、
+//    test の LIFF ID が本番ビルドに焼かれる。requireEnv は「値がある」ので素通りし、
+//    壊れ方は「本番の LIFF ページだけが test を指す」になる（ログを読み返すまで気づけない）。
+loadDotenv({ env: 'prod' });
 requireEnv('VITE_LIFF_ID');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

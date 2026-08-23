@@ -35,9 +35,11 @@ import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDotenv, requireEnv, testOnlyLayer } from '../../../../../scripts/dotenv.mjs';
+import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
 
-loadDotenv();
+// env を明示する。VITE_LIFF_ID は env 固有キーなので、test 解決では prod 層へ
+// フォールバックしない＝test 用の値が無ければ下の requireEnv が**止める**。
+loadDotenv({ env: 'test' });
 requireEnv('VITE_LIFF_ID', 'LINE_CONNECT_TEST_D1_ID');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -69,18 +71,12 @@ const TEST_CONFIG = {
 // 優先して読む。prod 層の VITE_LIFF_ID は本番 LIFF（prod デプロイ用）なので、
 // これを test ビルドに焼くと test が壊れる。
 //
-// ⚠️ フォールバックは残すが**黙って落ちない**。上の requireEnv は process.env（= prod 層）を
-//    見るので、test 用の値が欠けていても素通りする。そのまま本番 LIFF が test ビルドに
-//    焼かれると、壊れ方が「test の LIFF ページだけが本番の顧客導線を指す」になり、
-//    デプロイログを読み返すまで誰も気づけない。
-const devEnv = testOnlyLayer();
-const VITE_LIFF_ID = devEnv.VITE_LIFF_ID || process.env.VITE_LIFF_ID;
-if (!devEnv.VITE_LIFF_ID) {
-  console.warn('');
-  console.warn('⚠️  test 用の VITE_LIFF_ID がありません。**本番 LIFF ID** を test ビルドに焼きます。');
-  console.warn('    意図していないなら中断して config/public.test.env に test 用の値を入れてください。');
-  console.warn('');
-}
+// ⚠️ **prod へフォールバックさせない。** 以前はここで
+//    `parseEnvFile('.env.dev').VITE_LIFF_ID || process.env.VITE_LIFF_ID` としており、
+//    .env.dev を持たないクローンでは本番 LIFF が test ビルドに黙って焼かれた。
+//    今は loadDotenv({ env: 'test' }) が env 固有キーの prod フォールバックを切るので、
+//    test 用の値が無ければ上の requireEnv で止まる。
+const VITE_LIFF_ID = process.env.VITE_LIFF_ID;
 
 if (!existsSync(wranglerBoxiv)) {
   console.error('✗ wrangler.boxiv.toml not found at ' + wranglerBoxiv);
