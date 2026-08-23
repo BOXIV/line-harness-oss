@@ -13,7 +13,8 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
 
-loadDotenv();
+// ⚠️ env を明示する（worker 側 deploy-boxiv.mjs と同じ理由）。
+loadDotenv({ env: 'prod' });
 requireEnv('LINE_HARNESS_API_URL');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

@@ -35,9 +35,11 @@ import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDotenv, requireEnv, parseEnvFile, REPO_ROOT } from '../../../../../scripts/dotenv.mjs';
+import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
 
-loadDotenv();
+// env を明示する。VITE_LIFF_ID は env 固有キーなので、test 解決では prod 層へ
+// フォールバックしない＝test 用の値が無ければ下の requireEnv が**止める**。
+loadDotenv({ env: 'test' });
 requireEnv('VITE_LIFF_ID', 'LINE_CONNECT_TEST_D1_ID');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,11 +67,16 @@ const TEST_CONFIG = {
   }],
 };
 
-// テスト用 LIFF は .env.dev を優先して読む。.env の VITE_LIFF_ID は本番 LIFF
-// （prod デプロイ用）なので、これを test ビルドに焼くと test が壊れる。
-// .env.dev に無ければ process.env / .env へフォールバック。
-const devEnv = parseEnvFile(resolve(REPO_ROOT, '.env.dev'));
-const VITE_LIFF_ID = devEnv.VITE_LIFF_ID || process.env.VITE_LIFF_ID;
+// テスト用 LIFF は test 層（config/public.test.env、ローカルに .env.dev があればそれも）を
+// 優先して読む。prod 層の VITE_LIFF_ID は本番 LIFF（prod デプロイ用）なので、
+// これを test ビルドに焼くと test が壊れる。
+//
+// ⚠️ **prod へフォールバックさせない。** 以前はここで
+//    `parseEnvFile('.env.dev').VITE_LIFF_ID || process.env.VITE_LIFF_ID` としており、
+//    .env.dev を持たないクローンでは本番 LIFF が test ビルドに黙って焼かれた。
+//    今は loadDotenv({ env: 'test' }) が env 固有キーの prod フォールバックを切るので、
+//    test 用の値が無ければ上の requireEnv で止まる。
+const VITE_LIFF_ID = process.env.VITE_LIFF_ID;
 
 if (!existsSync(wranglerBoxiv)) {
   console.error('✗ wrangler.boxiv.toml not found at ' + wranglerBoxiv);
