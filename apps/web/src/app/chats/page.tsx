@@ -10,7 +10,8 @@ import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
 import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import NotionLinkPicker from '@/components/chats/notion-link-picker'
-import { detectFriendSource, friendSourceRank, SOURCE_LABELS, type FriendSource } from '@/lib/friend-source'
+import { detectFriendSource, SOURCE_LABELS, type FriendSource } from '@/lib/friend-source'
+import { sortChatsByRecency, filterUnreadChats } from '@/lib/chat-list'
 import { notionPillClass } from '@/lib/notion-color'
 import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 
@@ -253,8 +254,11 @@ export default function ChatsPage() {
   const [messageContent, setMessageContent] = useState('')
   const [sending, setSending] = useState(false)
   const [nameQuery, setNameQuery] = useState('')
-  // 出品者/購入者タブ。判定は分類タグ（chat.source）。'all' は出品者→購入者→未分類の順に並べる。
+  // 出品者/購入者タブ。判定は分類タグ（chat.source）。'all' は未分類も含めた全員。
+  // 並びはどのタブでも「最後にメッセージがあった順」だけ（連携の有無で沈めない）。
   const [sourceTab, setSourceTab] = useState<'all' | 'seller' | 'buyer'>('all')
+  // 「未読」チェックボックス。ON で未読メッセージがあるチャットだけに絞る。
+  const [unreadOnly, setUnreadOnly] = useState(false)
   // 表示名編集モーダル（管理名 managedName を「表示中の文字列」としてフル編集）
   const [editOpen, setEditOpen] = useState(false)
   const [editName, setEditName] = useState('')
@@ -608,12 +612,13 @@ export default function ChatsPage() {
     )
   }, [chatDetail, chats, allFriends])
 
-  // 表示するチャット。タブ選択時はそのグループだけ、「全て」は出品者→購入者→未分類の順。
-  // Array#sort は安定なので、グループ内は元の並び（最終メッセージ日時の降順）が保たれる。
+  // 表示するチャット。タブ選択時はそのグループだけ、「全て」は未分類（Notion 未連携）も含む。
+  // 並びは常に最終メッセージの新しい順 — 連携の有無で下に沈めない。
+  // 「未読」ON のときは未読があるものだけ（開いているチャットは既読にしても残す）。
   const visibleChats = useMemo(() => {
-    if (sourceTab !== 'all') return searchedChats.filter((c) => c.source === sourceTab)
-    return [...searchedChats].sort((a, b) => friendSourceRank(a.source) - friendSourceRank(b.source))
-  }, [searchedChats, sourceTab])
+    const inTab = sourceTab === 'all' ? searchedChats : searchedChats.filter((c) => c.source === sourceTab)
+    return filterUnreadChats(sortChatsByRecency(inTab), { enabled: unreadOnly, keepId: selectedChatId })
+  }, [searchedChats, sourceTab, unreadOnly, selectedChatId])
 
   return (
     <div>
@@ -676,7 +681,7 @@ export default function ChatsPage() {
             </select>
           </div>
 
-          {/* 出品者 / 購入者タブ（分類タグで判別。未分類は「全て」の末尾） */}
+          {/* 出品者 / 購入者タブ（分類タグで判別。未分類は「全て」に混在して出る） */}
           <div className="px-3 py-2 border-b border-gray-200" role="tablist" aria-label="友だちの区分">
             <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
               {([
@@ -712,15 +717,27 @@ export default function ChatsPage() {
             </div>
           </div>
 
-          {/* 名前で検索 */}
-          <div className="px-3 py-2 border-b border-gray-200">
+          {/* 名前で検索 ＋ 未読だけに絞るチェックボックス */}
+          <div className="px-3 py-2 border-b border-gray-200 flex items-center gap-2">
             <input
               type="text"
               value={nameQuery}
               onChange={(e) => setNameQuery(e.target.value)}
               placeholder="名前で検索..."
-              className="w-full text-xs border border-gray-300 rounded-lg px-2 py-2 min-h-[36px] bg-white focus:outline-none focus:border-slate-900"
+              className="flex-1 min-w-0 text-xs border border-gray-300 rounded-lg px-2 py-2 min-h-[36px] bg-white focus:outline-none focus:border-slate-900"
             />
+            <label
+              className="flex-shrink-0 inline-flex items-center gap-1.5 px-1 min-h-[36px] text-xs text-gray-700 whitespace-nowrap cursor-pointer select-none"
+              title="未読メッセージがあるチャットだけを表示"
+            >
+              <input
+                type="checkbox"
+                checked={unreadOnly}
+                onChange={(e) => setUnreadOnly(e.target.checked)}
+                className="w-4 h-4 accent-red-500 cursor-pointer"
+              />
+              未読
+            </label>
           </div>
 
           {/* Chat List */}

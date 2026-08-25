@@ -26,13 +26,3 @@ export function detectFriendSource(tags: { name: string }[] | null | undefined):
   if (names.includes(SOURCE_TAG_NAMES.buyer)) return 'buyer'
   return null
 }
-
-/**
- * 一覧の並び順（出品者 → 購入者 → 未分類）。
- * 安定ソートと組み合わせて使い、グループ内の元の並び順は保つ。
- */
-export function friendSourceRank(source: FriendSource): number {
-  if (source === 'seller') return 0
-  if (source === 'buyer') return 1
-  return 2
-}

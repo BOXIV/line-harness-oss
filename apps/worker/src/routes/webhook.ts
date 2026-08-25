@@ -359,14 +359,12 @@ async function handleEvent(
     // BOXIV: Slack 通知の対象に記録（webhook 側で塊にまとめて1通に）
     onIncoming?.(friend.id, logId);
 
-    // チャットを作成/更新（ユーザーの自発的メッセージのみ unread にする）
-    // ボタンタップ等の自動応答キーワードは除外
-    const autoKeywords = ['料金', '機能', 'API', 'フォーム', 'ヘルプ', 'UUID', 'UUID連携について教えて', 'UUID連携を確認', '配信時間', '導入支援を希望します', 'アカウント連携を見る', '体験を完了する', 'BAN対策を見る', '連携確認'];
-    const isAutoKeyword = autoKeywords.some(k => incomingText === k);
-    const isTimeCommand = /(?:配信時間|配信|届けて|通知)[はを]?\s*\d{1,2}\s*時/.test(incomingText);
-    if (!isAutoKeyword && !isTimeCommand) {
-      await upsertChatOnMessage(db, friend.id);
-    }
+    // チャットを作成/更新。BOXIV: 受信テキストは中身に関わらず必ず対象にする。
+    // 以前は OSS デモの自動応答キーワード（「ヘルプ」「フォーム」「料金」等）と配信時間
+    // コマンドを除外していたが、友だちがその語をそのまま打つと chats 行が作られず／
+    // last_message_at が更新されず、オペレーターチャットの一覧に上がってこなかった。
+    // 未読バッジは messages_log から数えるので付いてしまい、並びと食い違って見落とす。
+    await upsertChatOnMessage(db, friend.id);
 
     // 配信時間設定: 「配信時間は○時」「○時に届けて」等のパターンを検出
     const timeMatch = incomingText.match(/(?:配信時間|配信|届けて|通知)[はを]?\s*(\d{1,2})\s*時/);
