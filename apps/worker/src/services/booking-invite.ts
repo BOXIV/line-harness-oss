@@ -15,7 +15,7 @@ import {
 import { LineClient } from '@line-crm/line-sdk';
 import { prefectureToArea, generateInviteToken } from '../utils/area.js';
 import { queryCustomerByLineUserId, getCustomerByPageId } from './notion.js';
-import { logFailedOutgoing } from './message-log.boxiv.js';
+import { logFailedOutgoing, type OutgoingActor } from './message-log.boxiv.js';
 import type { Env } from '../index.js';
 import { firstSentMessageId } from '../utils/quote.js';
 
@@ -31,6 +31,13 @@ export interface BookingInviteInput {
   sendLineMessage?: boolean;
   /** route からの origin フォールバック（BOOKING_BASE_URL / WORKER_URL が未設定時） */
   requestOrigin?: string;
+  /**
+   * 誰の操作で送ったか（migration 923 / オペレーターチャットの送信者表示）。
+   * ⚠️ **route が認証済み context から入れる**。リクエストボディの値は使わない
+   * （クライアントに名乗らせると、送信者名がなりすませる）。
+   * automation（event-bus）からの自動送信では未設定＝名前を出さない。
+   */
+  actor?: OutgoingActor | null;
 }
 
 export interface BookingInviteData {
@@ -191,7 +198,7 @@ export async function createAndSendBookingInvite(
     const flex = buildBookingInviteFlex(record.customer_name, url);
     // 未フォロー（友だち未追加/ブロック中）には届かないため、送信失敗として記録してスキップ。
     if (!friend.is_following) {
-      await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex));
+      await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), input.actor);
       console.warn(`booking-invite service: friend ${friend.id} is not following — skip push, recorded as failed`);
     } else {
       try {
@@ -201,14 +208,14 @@ export async function createAndSendBookingInvite(
         ]));
         // 個別チャット画面に反映するため messages_log にも残す。line_message_id=友だちの引用解決用。
         await env.DB.prepare(
-          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, created_at)
-           VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, ?, 'push', ?)`,
+          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, delivery_type, sent_by_id, sent_by_name, created_at)
+           VALUES (?, ?, 'outgoing', 'flex', ?, NULL, NULL, ?, 'push', ?, ?, ?)`,
         )
-          .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), sentLineId, jstNow())
+          .bind(crypto.randomUUID(), friend.id, JSON.stringify(flex), sentLineId, input.actor?.id ?? null, input.actor?.name ?? null, jstNow())
           .run();
       } catch (err) {
         // 失敗を握りつぶさず messages_log に記録（個別チャットに「送信失敗」として表示）
-        await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex));
+        await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), input.actor);
         console.error('booking-invite service: LINE push failed (non-blocking):', err);
       }
     }

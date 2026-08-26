@@ -30,6 +30,9 @@ bookingInvites.post('/api/booking-invites', async (c) => {
     const result = await createAndSendBookingInvite(c.env, {
       ...body,
       requestOrigin: new URL(c.req.url).origin,
+      // 送信者は認証済み context から。body より後に置いて、クライアント指定の
+      // actor を必ず上書きする（送信者名のなりすまし防止）。
+      actor: c.get('staff') ?? null,
     });
     if (!result.ok) {
       return c.json({ success: false, error: result.error }, result.status);

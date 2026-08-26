@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS messages_log (
   --   quoted_message_id = この受信メッセージが引用した元メッセージの line_message_id（非引用時は NULL）
   line_message_id   TEXT,
   quoted_message_id TEXT,
+  -- 送信者。migration 923。オペレーターチャットで日時の左に名前を出すために使う（顧客には出さない）。
+  --   sent_by_id   = staff_members.id（env API_KEY 経由は 'env-owner'）
+  --   sent_by_name = 送信時点の表示名。改名・退職後も当時の記録を変えないため非正規化して持つ
+  -- 自動送信（シナリオ / 一斉配信 / 自動応答 / automation）は両方 NULL のまま。
+  sent_by_id       TEXT,
+  sent_by_name     TEXT,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 

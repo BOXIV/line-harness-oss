@@ -18,6 +18,12 @@ export interface ChatMessageRow {
   content: string
   /** 'failed'=送信失敗（未フォロー宛/LINE APIエラーで不達）。null/'sent'=成功。 */
   status?: string | null
+  /**
+   * 送信したオペレーターの表示名（送信メッセージのみ / migration 923）。
+   * 自動送信（シナリオ・一斉配信・自動応答・automation）は null＝名前を出さない。
+   * 管理画面だけの表示で、顧客の LINE トークには一切出ない。
+   */
+  sentByName?: string | null
   createdAt: string
   /** 引用返信のとき、引用元の LINE メッセージID（非NULL = 引用あり）。 */
   quotedMessageId?: string | null
@@ -216,6 +222,9 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
   const isOutgoing = message.direction === 'outgoing'
   const isRich = RICH_TYPES.has(message.messageType)
   const isFailed = isOutgoing && message.status === 'failed'
+  // 「誰が送ったか」を日時の左に出す（送信側のみ・管理画面だけの表示）。
+  // 名前が無いのは自動送信 or migration 923 より前の記録なので、その場合は何も出さない。
+  const senderLabel = isOutgoing ? message.sentByName?.trim() || null : null
 
   if (variant === 'compact') {
     // Tailwind-light variant for the DM panel that doesn't share the LINE-style background.
@@ -236,6 +245,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
           </div>
           <p className={`text-xs mt-1 ${isRich ? 'text-gray-500' : isOutgoing ? 'text-green-200' : 'text-gray-400'}`}>
             {isFailed && <span className="text-red-500 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
+            {senderLabel && <span className="mr-1 font-medium">{senderLabel}</span>}
             {formatStamp(message.createdAt)}
           </p>
         </div>
@@ -276,6 +286,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
         )}
         <span className="text-xs text-white/50 mt-0.5 px-1">
           {isFailed && <span className="text-red-400 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
+          {senderLabel && <span className="mr-1 font-medium text-white/70">{senderLabel}</span>}
           {formatStamp(message.createdAt)}
         </span>
       </div>

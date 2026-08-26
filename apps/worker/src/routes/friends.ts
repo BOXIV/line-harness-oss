@@ -372,11 +372,11 @@ friends.get('/api/friends/:id/messages', requireRole('owner','admin','manager'),
     const friendId = c.req.param('id');
     const result = await c.env.DB
       .prepare(
-        `SELECT id, direction, message_type, content, status, line_message_id, quoted_message_id, created_at
+        `SELECT id, direction, message_type, content, status, line_message_id, quoted_message_id, sent_by_name, created_at
          FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`,
       )
       .bind(friendId)
-      .all<QuotableRow & { status: string | null; created_at: string }>();
+      .all<QuotableRow & { status: string | null; sent_by_name: string | null; created_at: string }>();
 
     // 引用返信の引用元を解決して quotedMessage として返す
     const rows = result.results;
@@ -387,6 +387,8 @@ friends.get('/api/friends/:id/messages', requireRole('owner','admin','manager'),
       messageType: m.message_type,
       content: m.content,
       status: m.status,
+      // 送信者名（migration 923）。自動送信は NULL。管理画面だけの表示で顧客には出ない。
+      sentByName: m.sent_by_name ?? null,
       createdAt: m.created_at,
       quotedMessageId: m.quoted_message_id ?? null,
       quotedMessage: m.quoted_message_id ? quoteIndex.get(m.quoted_message_id) ?? null : null,
@@ -412,6 +414,9 @@ friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager')
       return c.json({ success: false, error: 'content is required' }, 400);
     }
 
+    // BOXIV: 「誰が送ったか」を messages_log に残す（migration 923）。requireRole 済みなので必ずある。
+    const actor = c.get('staff');
+
     const db = c.env.DB;
     const friend = await getFriendById(db, friendId);
     if (!friend) {
@@ -423,7 +428,7 @@ friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager')
     // 未フォロー（友だち未追加/ブロック中）には送れない。LINE は push に 200 を返すが届かないため、
     // 失敗を即時通知し、送信失敗として記録する（黙って成功扱いにしない）。
     if (!friend.is_following) {
-      await logFailedOutgoing(db, friend.id, messageType, body.content);
+      await logFailedOutgoing(db, friend.id, messageType, body.content, actor);
       return c.json({ success: false, error: 'この友だちは未フォロー（友だち未追加・ブロック中）のため送信できません。友だち追加を依頼してください。' }, 422);
     }
 
@@ -450,7 +455,7 @@ friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager')
     try {
       sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [message]));
     } catch (err) {
-      await logFailedOutgoing(db, friend.id, messageType, body.content);
+      await logFailedOutgoing(db, friend.id, messageType, body.content, actor);
       console.error('POST /api/friends/:id/messages: LINE push failed', err);
       return c.json({ success: false, error: 'LINE への送信に失敗しました。時間をおいて再度お試しください。' }, 502);
     }
@@ -459,10 +464,10 @@ friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager')
     const logId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, created_at)
-         VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, line_message_id, sent_by_id, sent_by_name, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, ?, ?, ?, ?)`,
       )
-      .bind(logId, friend.id, messageType, body.content, sentLineId, jstNow())
+      .bind(logId, friend.id, messageType, body.content, sentLineId, actor.id, actor.name, jstNow())
       .run();
 
     // オペレーターチャットに表示されるよう、送信時にもチャットを作成/更新する

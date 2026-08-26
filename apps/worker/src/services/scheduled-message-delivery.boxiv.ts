@@ -15,6 +15,7 @@ interface ScheduledMessageRow {
   content: string;
   status: string;
   created_by: string | null;
+  created_by_name: string | null;
 }
 
 function buildMessage(messageType: string, content: string): Message {
@@ -48,10 +49,14 @@ export async function processScheduledMessages(
   const now = jstNow();
   const due = await db
     .prepare(
-      `SELECT id, friend_id, scheduled_at, message_type, content, status, created_by
-       FROM scheduled_messages
-       WHERE status = 'scheduled' AND scheduled_at <= ?
-       ORDER BY scheduled_at ASC
+      // created_by_name: 予約したオペレーターの表示名（migration 923）。実際に送るのは
+      // cron だが、オペレーターチャットには「予約した人が送った」ものとして出す。
+      `SELECT sm.id, sm.friend_id, sm.scheduled_at, sm.message_type, sm.content, sm.status,
+              sm.created_by, s.name AS created_by_name
+       FROM scheduled_messages sm
+       LEFT JOIN staff_members s ON s.id = sm.created_by
+       WHERE sm.status = 'scheduled' AND sm.scheduled_at <= ?
+       ORDER BY sm.scheduled_at ASC
        LIMIT 100`,
     )
     .bind(now)
@@ -88,10 +93,13 @@ export async function processScheduledMessages(
       await db.batch([
         db
           .prepare(
-            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, created_at)
-             VALUES (?, ?, 'outgoing', ?, ?, ?, ?)`,
+            `INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, sent_by_id, sent_by_name, created_at)
+             VALUES (?, ?, 'outgoing', ?, ?, ?, ?, ?, ?)`,
           )
-          .bind(crypto.randomUUID(), friend.id, sm.message_type, sm.content, sentLineId, sentAt),
+          .bind(
+            crypto.randomUUID(), friend.id, sm.message_type, sm.content, sentLineId,
+            sm.created_by, sm.created_by_name, sentAt,
+          ),
         db
           .prepare(
             `UPDATE scheduled_messages SET status='sent', sent_at=?, updated_at=? WHERE id=?`,

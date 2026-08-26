@@ -229,12 +229,12 @@ chats.get('/api/chats/:id', async (c) => {
 
     // チャットに関連するメッセージログも取得
     const messages = await c.env.DB
-      .prepare(`SELECT id, friend_id, direction, message_type, content, status, line_message_id, quoted_message_id, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
+      .prepare(`SELECT id, friend_id, direction, message_type, content, status, line_message_id, quoted_message_id, sent_by_name, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
       .bind(item.friend_id)
       .all();
 
     // 引用返信の引用元を解決（quoted_message_id → 引用元メッセージのプレビュー）
-    const rows = messages.results as unknown as Array<QuotableRow & { status: string | null; created_at: string }>;
+    const rows = messages.results as unknown as Array<QuotableRow & { status: string | null; sent_by_name: string | null; created_at: string }>;
     const quoteIndex = await buildQuoteIndex(c.env.DB, item.friend_id, rows);
 
     return c.json({
@@ -260,6 +260,8 @@ chats.get('/api/chats/:id', async (c) => {
           messageType: m.message_type,
           content: m.content,
           status: m.status,
+          // 送信者名（migration 923）。自動送信は NULL。管理画面だけの表示で顧客には出ない。
+          sentByName: m.sent_by_name ?? null,
           createdAt: m.created_at,
           // 引用返信: quotedMessageId が非NULL = 引用元あり。解決できた場合のみ quotedMessage を返す。
           quotedMessageId: m.quoted_message_id ?? null,
@@ -384,6 +386,10 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     const body = await c.req.json<{ messageType?: string; content: string }>();
     if (!body.content) return c.json({ success: false, error: 'content is required' }, 400);
 
+    // BOXIV: 「誰が送ったか」を messages_log に残す（migration 923）。オペレーターチャットの
+    // 送信バブルに日時と並べて出す。requireRole を通っているので staff は必ずある。
+    const actor = c.get('staff');
+
     const friend = await c.env.DB
       .prepare(`SELECT id, line_user_id, is_following, metadata FROM friends WHERE id = ?`)
       .bind(chat.friend_id)
@@ -395,7 +401,7 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     // 未フォロー（友だち未追加/ブロック中）には送れない。LINE は push に 200 を返すが届かないため、
     // オペレーターに失敗を即時通知し、送信失敗として記録する（黙って成功扱いにしない）。
     if (!friend.is_following) {
-      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content);
+      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content, actor);
       return c.json({ success: false, error: 'この友だちは未フォロー（友だち未追加・ブロック中）のため送信できません。友だち追加を依頼してください。' }, 422);
     }
 
@@ -409,7 +415,7 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     try {
       sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [lineMessage]));
     } catch (err) {
-      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content);
+      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content, actor);
       console.error('POST /api/chats/:id/send: LINE push failed', err);
       return c.json({ success: false, error: 'LINE への送信に失敗しました。時間をおいて再度お試しください。' }, 502);
     }
@@ -417,8 +423,8 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     // メッセージログに記録
     const logId = crypto.randomUUID();
     await c.env.DB
-      .prepare(`INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, created_at) VALUES (?, ?, 'outgoing', ?, ?, ?, ?)`)
-      .bind(logId, friend.id, messageType, body.content, sentLineId, jstNow())
+      .prepare(`INSERT INTO messages_log (id, friend_id, direction, message_type, content, line_message_id, sent_by_id, sent_by_name, created_at) VALUES (?, ?, 'outgoing', ?, ?, ?, ?, ?, ?)`)
+      .bind(logId, friend.id, messageType, body.content, sentLineId, actor.id, actor.name, jstNow())
       .run();
 
     // チャットの最終メッセージ日時を更新。返信＝既読とみなし last_read_at も now にして未読数を 0 に戻す。
