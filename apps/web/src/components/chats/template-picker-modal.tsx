@@ -163,7 +163,22 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
 
-      <div className={`relative bg-white rounded-xl shadow-2xl w-full max-h-[85vh] flex flex-col ${selected?.messageType === 'flex' ? 'max-w-5xl' : 'max-w-2xl'}`}>
+      {/* サイズは 2 段階で変える。
+          一覧: 従来どおり（max-w-2xl / 5xl・高さは中身なり、最大 85vh）。
+          編集（最後の文字確認）: 本文を見ながら直すので **高さは画面の 80%固定**、
+          幅は従来比 +20%（テキスト 42rem→50.4rem / Flex 64rem→76.8rem）。
+          w-full と組み合わせているので、狭い画面では画面幅までで頭打ちになる。 */}
+      <div
+        className={`relative bg-white rounded-xl shadow-2xl w-full flex flex-col ${
+          selected ? 'h-[80vh]' : 'max-h-[85vh]'
+        } ${
+          selected
+            ? isFlex
+              ? 'max-w-[calc(64rem*1.2)]'
+              : 'max-w-[calc(42rem*1.2)]'
+            : 'max-w-2xl'
+        }`}
+      >
         <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-900">
             {selected ? `${selected.name} を編集して送信` : 'テンプレートを選択'}
@@ -301,8 +316,9 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
           </>
         ) : (
           <>
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+            {/* 高さを固定した分、余白ではなく本文欄に配る（min-h-0 が無いと flex-1 が縮まない）。 */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">
+              <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
                 <span className="px-1.5 py-0.5 rounded bg-gray-100">
                   {messageTypeLabels[selected.messageType] || selected.messageType}
                 </span>
@@ -312,12 +328,12 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
               </div>
 
               {isFlex ? (
-                <div className="grid gap-3 lg:grid-cols-2">
+                <div className="grid gap-3 lg:grid-cols-2 flex-1 min-h-0">
                   <textarea
                     value={editedContent}
                     onChange={(e) => setEditedContent(e.target.value)}
                     rows={14}
-                    className="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-slate-900 resize-y font-mono"
+                    className="w-full h-full min-h-[16rem] text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-slate-900 resize-y font-mono"
                     placeholder="Flex JSON を編集"
                   />
                   <div className="flex justify-center">
@@ -329,7 +345,7 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
                   value={editedContent}
                   onChange={(e) => setEditedContent(e.target.value)}
                   rows={10}
-                  className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-slate-900 resize-y font-mono"
+                  className="w-full flex-1 min-h-[12rem] text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-slate-900 resize-y font-mono"
                   placeholder="本文を編集"
                 />
               ) : (
