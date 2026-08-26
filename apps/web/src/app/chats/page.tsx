@@ -79,6 +79,8 @@ interface ChatMessage {
   messageType: string
   content: string
   status?: string | null
+  /** 送信したオペレーター名（送信のみ / 自動送信は null）。顧客側には出ない。 */
+  sentByName?: string | null
   createdAt: string
   quotedMessageId?: string | null
   quotedMessage?: QuotedMessagePreview | null
@@ -126,6 +128,8 @@ interface MessageLog {
   messageType: string
   content: string
   status?: string | null
+  /** 送信したオペレーター名（送信のみ / 自動送信は null）。顧客側には出ない。 */
+  sentByName?: string | null
   createdAt: string
   quotedMessageId?: string | null
   quotedMessage?: QuotedMessagePreview | null
