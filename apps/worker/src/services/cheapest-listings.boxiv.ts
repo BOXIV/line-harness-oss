@@ -16,8 +16,20 @@
 import type { Env } from '../index.js';
 
 const SITE = 'https://lightning.boxiv.co.jp';
-const SITEMAP = `${SITE}/sitemap-dynamic/sitemap-dynamic-car-s-detail-s--c-slug.xml`;
-const MAX_PAGES = 120;
+// 動的 sitemap のファイル名は STUDIO 側の実装詳細で、予告なく変わる。
+//   旧: sitemap-dynamic-car-s-detail-s--c-slug.xml   （ルートをスラグ化した名前）
+//   新: sitemap-dynamic-<base64url("car/detail/:slug")>.xml
+// 2026-08-24 にこの改名で 404 になり、最安EV更新が3日間止まった。二度と名前を焼き込まず、
+// 必ず sitemap index（robots.txt が指す唯一の安定した入口）から引き当てる。
+const SITEMAP_INDEX = `${SITE}/sitemap.xml`;
+// 欲しいのは公開用の /car/detail/{掲載ID} だけ。同じCMSコレクションが
+// /garage/detail/{ID} と /car/detail/test/{ID} でも配信されているので取り違えない。
+const DETAIL_ROUTE = 'car/detail/:slug';
+const DETAIL_URL_RE = /^https:\/\/lightning\.boxiv\.co\.jp\/car\/detail\/[^/]+$/;
+// 掲載総数（2026-08-27 時点で 126）を上回る値にする。ここが実数を下回ると
+// 末尾が黙って切り捨てられ「最安」が最安でなくなる。BATCH 単位の分割巡回なので
+// 上げてもサブリクエスト上限には当たらない（1 tick あたりの負荷は BATCH で決まる）。
+const MAX_PAGES = 200;
 const CONCURRENCY = 5;
 const MIN_PRICE = 300000; // これ未満の数値文字列は価格とみなさない
 
@@ -184,6 +196,57 @@ async function saveState(env: Env['Bindings'], s: CrawlState | null): Promise<vo
   );
 }
 
+const UA = { 'User-Agent': 'boxiv-line-connect-cron/1.0' };
+
+function locs(xml: string): string[] {
+  return [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+}
+
+/** `sitemap-dynamic-<base64url>.xml` のファイル名から元のルート（例 "car/detail/:slug"）を復元する。 */
+function routeOfSitemap(url: string): string | null {
+  const m = url.match(/sitemap-dynamic-([A-Za-z0-9_-]+)\.xml$/);
+  if (!m) return null;
+  let b64 = m[1].replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4 !== 0) b64 += '=';
+  try {
+    return atob(b64);
+  } catch {
+    return null; // 命名規則がまた変わっただけ。下の実URL照合にフォールバックする
+  }
+}
+
+/**
+ * sitemap index から /car/detail/{掲載ID} を列挙する。
+ *
+ * 名前（base64url ルート）での一致を第一候補にしつつ、命名規則がまた変わっても死なないよう
+ * 「中身の URL が /car/detail/{slug} か」で最終判定する。どちらでも決まらなければ
+ * **index に何があったかを添えて throw する**（呼び出し側が Slack に出す。黙って0件にしない）。
+ */
+export async function fetchDetailUrls(): Promise<string[]> {
+  const idxRes = await fetch(SITEMAP_INDEX, { headers: UA });
+  if (!idxRes.ok) throw new Error(`sitemap index fetch failed: ${idxRes.status} (${SITEMAP_INDEX})`);
+  const children = locs(await idxRes.text());
+  if (children.length === 0) throw new Error(`sitemap index empty (${SITEMAP_INDEX})`);
+
+  // 名前で当たりを付けた順に見る。静的 sitemap は掲載詳細を含まないので最初から除く。
+  const dynamic = children.filter((u) => u.includes('/sitemap-dynamic/'));
+  const ordered = [
+    ...dynamic.filter((u) => routeOfSitemap(u) === DETAIL_ROUTE),
+    ...dynamic.filter((u) => routeOfSitemap(u) !== DETAIL_ROUTE),
+  ];
+
+  for (const url of ordered) {
+    const res = await fetch(url, { headers: UA });
+    if (!res.ok) continue;
+    // 中身で確定する。/garage/detail/... や /car/detail/test/... は DETAIL_URL_RE に一致しない。
+    const urls = locs(await res.text()).filter((u) => DETAIL_URL_RE.test(u));
+    if (urls.length > 0) return urls;
+  }
+
+  const seen = children.map((u) => `${u.split('/').pop()}=${routeOfSitemap(u) ?? '?'}`).join(', ');
+  throw new Error(`car/detail の sitemap が見つからない（index の中身: ${seen}）`);
+}
+
 // 1バッチ分（サブリクエスト上限50の内側に収める）だけ巡回して state を進める。
 // queue が空になったら結果を返す（それまでは null）。
 const BATCH = 40;
@@ -192,11 +255,12 @@ async function crawlStep(env: Env['Bindings'], init: boolean): Promise<Listing[]
   let state = await loadState(env);
   if (!state) {
     if (!init) return 'noop';
-    const res = await fetch(SITEMAP, { headers: { 'User-Agent': 'boxiv-line-connect-cron/1.0' } });
-    if (!res.ok) throw new Error(`sitemap fetch failed: ${res.status}`);
-    const xml = await res.text();
-    const urls = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]).slice(0, MAX_PAGES);
-    if (urls.length === 0) throw new Error('sitemap empty');
+    const all = await fetchDetailUrls();
+    // 切り捨てが起きたら黙らせない（MAX_PAGES を上げる合図）。
+    if (all.length > MAX_PAGES) {
+      console.warn(`cheapest-listings: 掲載 ${all.length}件 > MAX_PAGES ${MAX_PAGES} — 末尾を切り捨てて巡回する`);
+    }
+    const urls = all.slice(0, MAX_PAGES);
     state = { queue: urls, results: [], startedAt: new Date().toISOString() };
   }
 
@@ -207,7 +271,7 @@ async function crawlStep(env: Env['Bindings'], init: boolean): Promise<Listing[]
     const results = await Promise.all(
       chunk.map(async (u) => {
         try {
-          const r = await fetch(u, { headers: { 'User-Agent': 'boxiv-line-connect-cron/1.0' } });
+          const r = await fetch(u, { headers: UA });
           if (!r.ok) return null;
           return parseListing(u, await r.text());
         } catch {
@@ -304,15 +368,35 @@ function buildBubble2(env: Env['Bindings'], picks: Listing[], teslaUnder3m: numb
   };
 }
 
+/**
+ * 今 LINE の友だち追加あいさつに載っているデータが何日前のものか。
+ * 「前回データを維持します」だけだと 1日目 も 3日目 も同じ文面になり、放置が見えない。
+ */
+async function staleness(env: Env['Bindings']): Promise<string> {
+  try {
+    const row = await env.DB.prepare('SELECT MAX(fetched_at) AS at FROM cheapest_listings').first<{ at: string | null }>();
+    if (!row?.at) return '（現在テンプレに載っているデータ: なし）';
+    const days = Math.floor((Date.now() - new Date(row.at).getTime()) / 86_400_000);
+    return `（表示中のデータは ${row.at} 時点 = ${days}日前）`;
+  } catch {
+    return ''; // 経過日数が取れないことで警告そのものを落とさない
+  }
+}
+
 async function slackWarn(env: Env['Bindings'], text: string): Promise<void> {
   const token = env.DIAGNOSIS_SLACK_BOT_TOKEN || env.SELLENTRY_SLACK_BOT_TOKEN;
   const channel = env.DIAGNOSIS_SLACK_CHANNEL_ID;
-  if (!token || !channel) return;
+  if (!token || !channel) {
+    // 設定漏れで警告が消えるのが一番まずい。せめてログには必ず残す。
+    console.error(`cheapest-listings: ${text}（Slack 未設定のため通知できず）`);
+    return;
+  }
+  const age = await staleness(env);
   try {
     await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ channel, text: `⚠️ 最安EV日次更新: ${text}` }),
+      body: JSON.stringify({ channel, text: `⚠️ 最安EV日次更新: ${text}${age}` }),
     });
   } catch (e) {
     console.error('cheapest-listings: slack warn failed', e);
@@ -402,6 +486,9 @@ export async function refreshCheapestListings(
       await slackWarn(env, 'テンプレJSONの更新に失敗（パースエラー）。D1のみ更新済み。');
       console.error('cheapest-listings: template update failed', e);
     }
+  } else {
+    // ここを黙って抜けると D1 だけ新しく、友だち追加あいさつは永久に古いままになる。
+    await slackWarn(env, "テンプレ 'friend-add-greeting' が見つからずあいさつを更新できず。D1のみ更新済み。");
   }
 
   return {
