@@ -18,7 +18,7 @@ import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import { enqueueBurstNotify } from '../services/slack-burst-notify.boxiv.js';
-import { getLinkedEntryByLineUserId, hasLinkCompletedNotified, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
+import { getLinkedEntryByLineUserId, claimLinkCompletedNotified, unmarkLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { firstSentMessageId } from '../utils/quote.js';
 import type { Env } from '../index.js';
@@ -196,24 +196,31 @@ async function handleEvent(
     }
     if (linkedEntry) {
       const entrySource = linkedEntry.source === 'buyer' ? 'buyer' : 'seller';
-      if (!(await hasLinkCompletedNotified(db, friend.id, entrySource))) {
+      // 送信権を先に原子的に確保する（check→fire→mark だとコールバック側と数秒差で
+      // 両方が送信に進み、価格お知らせが 2 通届く: 既知 H3）。取れなければ送信済み扱い。
+      if (await claimLinkCompletedNotified(db, friend.id, entrySource)) {
         // 分類タグ（出品者/購入者）を先に付ける（automation の条件がタグを見ても間に合うように）。
         // 台帳の source が確定している連携済み行なので誤タグにならない。
         await ensureSourceTag(db, friend.id, entrySource).catch((err) =>
           console.error(`follow: ensureSourceTag(${entrySource}) failed (friend=${friend.id})`, err),
         );
         const eventType = entrySource === 'buyer' ? 'buyer_link_completed' : 'listing_link_completed';
-        await fireEvent(
-          db,
-          eventType,
-          {
-            friendId: friend.id,
-            eventData: { formId: linkedEntry.match_key, displayName: friend.display_name, formInputName: linkedEntry.name ?? null },
-          },
-          lineAccessToken,
-          lineAccountId,
-        );
-        await markLinkCompletedNotified(db, friend.id, entrySource);
+        try {
+          await fireEvent(
+            db,
+            eventType,
+            {
+              friendId: friend.id,
+              eventData: { formId: linkedEntry.match_key, displayName: friend.display_name, formInputName: linkedEntry.name ?? null },
+            },
+            lineAccessToken,
+            lineAccountId,
+          );
+        } catch (err) {
+          // 送れなかったらフラグを戻す（次の機会＝再フォロー/コールバックで送れるように）
+          await unmarkLinkCompletedNotified(db, friend.id, entrySource).catch(() => undefined);
+          throw err;
+        }
         console.log(`follow: 連携済みユーザへ ${eventType} を送信 friend=${friend.id} match_key=${linkedEntry.match_key}`);
       } else if (isReFollow) {
         // ブロック解除/再追加: 価格お知らせは送信済みなので、挨拶で再開を迎える。
@@ -250,7 +257,12 @@ async function handleEvent(
             const firstStep = steps[0];
             if (firstStep && firstStep.delay_minutes === 0 && friendScenario.status === 'active') {
               try {
-                const expandedContent = expandVariables(firstStep.message_content, friend as { id: string; display_name: string | null; user_id: string | null });
+                const expandedContent = expandVariables(
+                  firstStep.message_content,
+                  friend as { id: string; display_name: string | null; user_id: string | null },
+                  undefined,
+                  { json: firstStep.message_type === 'flex' },
+                );
                 const message = buildMessage(firstStep.message_type, expandedContent);
                 const sentLineId = firstSentMessageId(await lineClient.replyMessage(event.replyToken, [message]));
                 console.log(`Immediate delivery: sent step ${firstStep.id} to ${userId}`);
@@ -483,7 +495,12 @@ async function handleEvent(
       if (isMatch) {
         try {
           // Expand template variables ({{name}}, {{uid}}, {{auth_url:CHANNEL_ID}})
-          const expandedContent = expandVariables(rule.response_content, friend as { id: string; display_name: string | null; user_id: string | null }, workerUrl);
+          const expandedContent = expandVariables(
+            rule.response_content,
+            friend as { id: string; display_name: string | null; user_id: string | null },
+            workerUrl,
+            { json: rule.response_type === 'flex' },
+          );
           const replyMsg = buildMessage(rule.response_type, expandedContent);
           const sentLineId = firstSentMessageId(await lineClient.replyMessage(event.replyToken, [replyMsg]));
           replyTokenConsumed = true;

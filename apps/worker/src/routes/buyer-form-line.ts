@@ -25,7 +25,8 @@ import {
   insertOrphanLink,
   setNotionPageId,
   setSlackThreadTs,
-  markLinkCompletedNotified,
+  claimLinkCompletedNotified,
+  unmarkLinkCompletedNotified,
 } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateBuyerRow, linkBuyerRow, ENTRY_TYPE_LABEL } from '../services/buyer-notion.boxiv.js';
 import type { BuyerEntryType } from '../services/buyer-notion.boxiv.js';
@@ -648,24 +649,31 @@ async function fireBuyerLinkCompleted(
     return;
   }
 
-  await fireEvent(
-    env.DB,
-    'buyer_link_completed',
-    {
-      friendId: friend.id,
-      eventData: {
-        formId: ctx.form_id,
-        listingId: ctx.listing_id || null,
-        displayName: profile.displayName,
-        formInputName: ctx.display_name || null,
+  // 二重送信防止: 送信権を **先に** 原子的に確保する（follow webhook 側と数秒差で競合すると、
+  // fire→mark の順では両方が送信に進む: 既知 H3）。取れなければ相手が送っている。
+  if (!(await claimLinkCompletedNotified(env.DB, friend.id, 'buyer'))) {
+    console.log(`buyer-form callback: buyer_link_completed は送信済み（follow 側が先行）friend=${friend.id}`);
+    return;
+  }
+  try {
+    await fireEvent(
+      env.DB,
+      'buyer_link_completed',
+      {
+        friendId: friend.id,
+        eventData: {
+          formId: ctx.form_id,
+          listingId: ctx.listing_id || null,
+          displayName: profile.displayName,
+          formInputName: ctx.display_name || null,
+        },
       },
-    },
-    env.LINE_CHANNEL_ACCESS_TOKEN,
-  );
-  // 二重送信防止: 送信済みフラグを立てる（follow webhook 側はこれを見て再送しない）。
-  await markLinkCompletedNotified(env.DB, friend.id, 'buyer').catch((err) =>
-    console.error('buyer-form callback: markLinkCompletedNotified failed', err),
-  );
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+  } catch (err) {
+    await unmarkLinkCompletedNotified(env.DB, friend.id, 'buyer').catch(() => undefined);
+    throw err;
+  }
 }
 
 export { buyerFormLine };

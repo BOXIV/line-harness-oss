@@ -173,3 +173,19 @@ export async function updateBroadcastStatus(
     .bind(...values)
     .run();
 }
+
+/**
+ * 送信権を原子的に確保する（draft / scheduled → sending）。
+ *
+ * 手動 /send の二重クリックと cron（processScheduledBroadcasts）が同じ行を同時に掴むと、
+ * 「status を読んで sending にする」だけでは両方が送信に進み、全フォロワーへ二重配信になる
+ * （2026-08-29 監査）。条件付き UPDATE の changes で勝者を 1 つに決める。
+ * 戻り値 false = 既に他方が送信中/送信済み。呼び出し側は何もしないこと。
+ */
+export async function claimBroadcastForSending(db: D1Database, id: string): Promise<boolean> {
+  const res = await db
+    .prepare(`UPDATE broadcasts SET status = 'sending' WHERE id = ? AND status IN ('draft', 'scheduled')`)
+    .bind(id)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}

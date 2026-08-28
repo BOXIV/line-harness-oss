@@ -27,7 +27,7 @@
 import { Hono } from 'hono';
 import type { Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, markLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, claimLinkCompletedNotified, unmarkLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
@@ -495,23 +495,30 @@ async function fireListingLinkCompleted(
     return;
   }
 
-  await fireEvent(
-    env.DB,
-    'listing_link_completed',
-    {
-      friendId: friend.id,
-      eventData: {
-        formId: ctx.form_id,
-        displayName: profile.displayName,
-        formInputName: ctx.display_name || null,
+  // 二重送信防止: 送信権を **先に** 原子的に確保する（follow webhook 側と数秒差で競合すると、
+  // fire→mark の順では両方が送信に進む: 既知 H3）。取れなければ相手が送っている。
+  if (!(await claimLinkCompletedNotified(env.DB, friend.id, 'seller'))) {
+    console.log(`listing-form callback: listing_link_completed は送信済み（follow 側が先行）friend=${friend.id}`);
+    return;
+  }
+  try {
+    await fireEvent(
+      env.DB,
+      'listing_link_completed',
+      {
+        friendId: friend.id,
+        eventData: {
+          formId: ctx.form_id,
+          displayName: profile.displayName,
+          formInputName: ctx.display_name || null,
+        },
       },
-    },
-    env.LINE_CHANNEL_ACCESS_TOKEN,
-  );
-  // 二重送信防止: 送信済みフラグを立てる（follow webhook 側はこれを見て再送しない）。
-  await markLinkCompletedNotified(env.DB, friend.id, 'seller').catch((err) =>
-    console.error('listing-form callback: markLinkCompletedNotified failed', err),
-  );
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+  } catch (err) {
+    await unmarkLinkCompletedNotified(env.DB, friend.id, 'seller').catch(() => undefined);
+    throw err;
+  }
 }
 
 async function postSlackLinkNotification(
