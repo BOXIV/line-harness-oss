@@ -90,9 +90,15 @@ images.get('/images/:key', async (c) => {
 });
 
 // DELETE /api/images/:key — delete image
+// POST /api/images が発行するキーは `<uuid>.<ext>` の平坦な 1 セグメント。`%2F` を復号すると
+// 同じ R2 バケットの `media/<messageId>`（チャット受信メディア・車検証等）まで任意に消せたので
+// （2026-08-29 監査）、区切り文字を含むキーは受け付けない。
 images.delete('/api/images/:key', async (c) => {
   try {
     const key = c.req.param('key');
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(key) || key.includes('..')) {
+      return c.json({ success: false, error: 'invalid key' }, 400);
+    }
     await c.env.IMAGES.delete(key);
     return c.json({ success: true, data: null });
   } catch (err) {

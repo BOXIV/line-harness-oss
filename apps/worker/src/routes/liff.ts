@@ -484,6 +484,7 @@ liffRoutes.get('/auth/callback', async (c) => {
                 firstStep.message_content,
                 friend as { id: string; display_name: string | null; user_id: string | null },
                 c.env.WORKER_URL,
+                { json: firstStep.message_type === 'flex' },
               );
               await lineClient.pushMessage(lineUserId, [buildMessage(firstStep.message_type, expandedContent)]);
             }
@@ -503,7 +504,14 @@ liffRoutes.get('/auth/callback', async (c) => {
     }
 
     // 撮影予約ページへのリダイレクトの場合はセッションCookieを発行
-    if (redirect && (redirect.startsWith('/booking') || redirect.includes('/booking?'))) {
+    // ⚠️ この分岐は下の safeRedirect を通らずに Location を返すので、ここでも必ず検証する。
+    //    `redirect.includes('/booking?')` だけだと `https://evil.example/x/booking?` が
+    //    通り、state を細工した OAuth 開始 URL 1 つで外部サイトへ飛ばせた（2026-08-29 監査）。
+    const bookingRedirect =
+      redirect && (redirect.startsWith('/booking') || redirect.includes('/booking?'))
+        ? safeRedirect(redirect, new URL(c.req.url).hostname)
+        : null;
+    if (bookingRedirect) {
       try {
         const { createSessionToken, buildSessionCookie } = await import('../utils/session.js');
         if (c.env.SESSION_SECRET) {
@@ -515,7 +523,7 @@ liffRoutes.get('/auth/callback', async (c) => {
           return new Response(null, {
             status: 302,
             headers: {
-              Location: redirect,
+              Location: bookingRedirect,
               'Set-Cookie': cookie,
             },
           });
