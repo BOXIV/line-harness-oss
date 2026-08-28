@@ -82,6 +82,12 @@ function NewRichMenuInner() {
   const [sourceLoading, setSourceLoading] = useState(Boolean(sourceId))
   // 編集対象がアカウント既定メニューか（menu.selected ではなく LINE の実値で判定）
   const [sourceWasDefault, setSourceWasDefault] = useState(false)
+  // 「アカウントの既定メニューにする」（= LINE の setDefaultRichMenu、全友だちに即時反映）。
+  // ⚠️ LINE の `selected`（チャットを開いたときメニューが展開表示されるか）とは別物。
+  //    以前は selected のチェックを既定化の合図に使っていて、新規作成の初期値が selected=true
+  //    だったため、**メニューを作るたびに全友だちの既定メニューが差し替わっていた**（2026-08-29 監査）。
+  //    新規/複製は必ず OFF。編集は「元が既定だったか」を LINE の実値から引き継ぐ。
+  const [setAsDefault, setSetAsDefault] = useState(false)
 
   // 複製 / 編集モード: 既存メニューのメタ情報・エリア・画像を初期値として読み込む
   useEffect(() => {
@@ -108,7 +114,11 @@ function NewRichMenuInner() {
         if (isEdit) {
           try {
             const def = await api.richMenus.getDefault()
-            if (!cancelled && def.success) setSourceWasDefault(def.data.richMenuId === sourceId)
+            if (!cancelled && def.success) {
+              const wasDefault = def.data.richMenuId === sourceId
+              setSourceWasDefault(wasDefault)
+              setSetAsDefault(wasDefault)
+            }
           } catch {
             // 取得失敗時は selected を控えめなフォールバックにする（喪失より誤再設定の方が軽微）
           }
@@ -178,8 +188,9 @@ function NewRichMenuInner() {
     setSubmitError('')
     setSubmitStatus(isEdit ? '新しいメニューを作成中...' : 'リッチメニューを作成中...')
 
-    // 既定への再設定が必要か: ユーザーが selected を ON にした or 編集対象が元々アカウント既定だった
-    const shouldSetDefault = draft.selected || (isEdit && sourceWasDefault)
+    // 既定への設定は「アカウントの既定メニューにする」チェックだけで決める（selected とは無関係）。
+    // 編集で元が既定だった場合は初期値 ON（差し替え後に既定が消えないように）。
+    const shouldSetDefault = setAsDefault
 
     let createdId: string | null = null
     try {
@@ -311,6 +322,27 @@ function NewRichMenuInner() {
         validation={validation}
         disabled={submitting}
       />
+
+      {/* 既定メニュー（LINE の setDefaultRichMenu）。selected（展開表示）とは別の操作。 */}
+      <div className="mt-4 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <label className="inline-flex items-start gap-2 text-sm text-gray-800">
+          <input
+            type="checkbox"
+            checked={setAsDefault}
+            onChange={(e) => setSetAsDefault(e.target.checked)}
+            disabled={submitting}
+            className="mt-0.5 rounded"
+          />
+          <span>
+            アカウントの既定メニューにする
+            <span className="block text-xs text-gray-500 mt-0.5">
+              ON にすると保存直後に <strong>全友だち</strong> の既定メニューがこのメニューに切り替わります。
+              個別に設定されたメニューやステータス連動は影響を受けません。
+              {isEdit && sourceWasDefault && ' 編集元は現在の既定メニューです（OFF にすると既定が外れます）。'}
+            </span>
+          </span>
+        </label>
+      </div>
 
       {imageError && (
         <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
