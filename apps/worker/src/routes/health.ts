@@ -8,6 +8,7 @@ import {
   updateAccountMigration,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { requireRole } from '../middleware/role-guard.js';
 
 const health = new Hono<Env>();
 
@@ -65,7 +66,7 @@ health.get('/api/accounts/migrations', async (c) => {
   }
 });
 
-health.post('/api/accounts/:id/migrate', async (c) => {
+health.post('/api/accounts/:id/migrate', requireRole('owner', 'admin'), async (c) => {
   try {
     const fromAccountId = c.req.param('id');
     const body = await c.req.json<{ toAccountId: string }>();

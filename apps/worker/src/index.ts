@@ -11,6 +11,8 @@ import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
 import { authMiddleware } from './middleware/auth.js';
 import { rateLimitMiddleware } from './middleware/rate-limit.js';
+import { staffScopeMiddleware } from './middleware/staff-scope.boxiv.js';
+import { requireRole } from './middleware/role-guard.js';
 import { webhook } from './routes/webhook.js';
 import { friends } from './routes/friends.js';
 import { tags } from './routes/tags.js';
@@ -229,6 +231,10 @@ app.use('*', rateLimitMiddleware);
 // Auth middleware — skips /webhook and /docs automatically
 app.use('*', authMiddleware);
 
+// BOXIV: 撮影スタッフ(role=staff)は許可リストの管理 API 以外を 403 にする（fail closed）。
+// 各ルートの requireRole は owner/admin/manager の細分に使い、staff の締め出しはここ 1 箇所に集約する。
+app.use('*', staffScopeMiddleware);
+
 // 監査ログ — 認証直後に挟む（c.get('staff') が解決済み）。成功した admin 変更のみ記録。
 app.use('*', auditLogMiddleware);
 
@@ -282,7 +288,7 @@ app.route('/', linkCallback);
 app.route('/', diagnosisForm);
 
 // 最安EVピックアップの手動更新（管理用・要Bearer）
-app.post('/api/admin/refresh-cheapest', async (c) => {
+app.post('/api/admin/refresh-cheapest', requireRole('owner', 'admin', 'manager'), async (c) => {
   const result = await refreshCheapestListings(c.env);
   return c.json({ success: result.ok, data: result });
 });
