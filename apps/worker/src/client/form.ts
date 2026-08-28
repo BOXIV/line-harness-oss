@@ -54,9 +54,15 @@ const state: FormState = {
 };
 
 function escapeHtml(str: string): string {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  // textContent → innerHTML は `<` `>` `&` しかエスケープしない。この関数の戻り値は
+  // 属性値（placeholder / value / name 等）にも埋め込まれるため、`"` `'` を通すと
+  // 管理者が編集するフォーム定義から属性インジェクション（保存型 XSS）になる（2026-08-29 監査）。
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function apiCall(path: string, options?: RequestInit): Promise<Response> {

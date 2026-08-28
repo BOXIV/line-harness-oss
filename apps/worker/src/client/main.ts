@@ -64,9 +64,35 @@ function getPage(): string | null {
   return params.get('page');
 }
 
+/**
+ * `?redirect=` の検証。以前は無検証で `location.href` に代入していたため、
+ * `?redirect=javascript:...` で LIFF ページ上の DOM XSS（LINE ID トークン・プロフィールの
+ * 窃取）と、任意の外部サイトへのオープンリダイレクトが成立した（2026-08-29 監査）。
+ * 通すのは「同一オリジンの相対パス」か「https の自オリジン / BOXIV / LINE のホスト」だけ。
+ */
+const REDIRECT_ALLOWED_HOST_SUFFIXES = ['.boxiv.co.jp', 'line.me', '.line.me'];
+
+function safeRedirectUrl(raw: string | null): string | null {
+  if (!raw) return null;
+  const value = raw.trim();
+  // 相対パス: "/" 始まりで、"//"（プロトコル相対）や "/\"（バックスラッシュ）でない
+  if (value.startsWith('/') && !value.startsWith('//') && !value.startsWith('/\\')) return value;
+  try {
+    const u = new URL(value, window.location.origin);
+    if (u.protocol !== 'https:') return null;
+    const host = u.hostname.toLowerCase();
+    const ok =
+      host === window.location.hostname.toLowerCase() ||
+      REDIRECT_ALLOWED_HOST_SUFFIXES.some((s) => (s.startsWith('.') ? host.endsWith(s) : host === s));
+    return ok ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function getRedirectUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return params.get('redirect');
+  return safeRedirectUrl(params.get('redirect'));
 }
 
 function getRef(): string | null {
