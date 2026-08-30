@@ -25,12 +25,22 @@ export function expandVariables(
   content: string,
   friend: { id: string; display_name: string | null; user_id: string | null; ref_code?: string | null },
   apiOrigin?: string,
+  opts?: {
+    /**
+     * content が Flex(JSON 文字列) のとき true にする。表示名に `"` や `\` を含む友だちへ
+     * 生の値を差し込むと JSON が壊れ、buildMessage のフォールバックで **Flex の JSON 本文が
+     * テキストとして顧客に届く**（2026-08-29 監査）。JSON 文字列リテラルとして安全な形に
+     * エスケープして差し込む。
+     */
+    json?: boolean;
+  },
 ): string {
+  const esc = (v: string): string => (opts?.json ? JSON.stringify(v).slice(1, -1) : v);
   let result = content;
-  result = result.replace(/\{\{name\}\}/g, friend.display_name || '');
-  result = result.replace(/\{\{uid\}\}/g, friend.user_id || '');
-  result = result.replace(/\{\{friend_id\}\}/g, friend.id);
-  result = result.replace(/\{\{ref\}\}/g, friend.ref_code || '');
+  result = result.replace(/\{\{name\}\}/g, esc(friend.display_name || ''));
+  result = result.replace(/\{\{uid\}\}/g, esc(friend.user_id || ''));
+  result = result.replace(/\{\{friend_id\}\}/g, esc(friend.id));
+  result = result.replace(/\{\{ref\}\}/g, esc(friend.ref_code || ''));
   // Conditional block: {{#if_ref}}...{{/if_ref}} — only shown if ref_code exists
   if (friend.ref_code) {
     result = result.replace(/\{\{#if_ref\}\}([\s\S]*?)\{\{\/if_ref\}\}/g, '$1');
@@ -164,7 +174,9 @@ async function processSingleDelivery(
   }
 
   // Expand template variables ({{name}}, {{uid}}, {{auth_url:CHANNEL_ID}}, etc.)
-  const expandedContent = expandVariables(currentStep.message_content, friend, workerUrl);
+  const expandedContent = expandVariables(currentStep.message_content, friend, workerUrl, {
+    json: currentStep.message_type === 'flex',
+  });
   // Auto-wrap URLs with tracking links (text with URLs → Flex with button)
   let trackedType: string = currentStep.message_type;
   let trackedContent = expandedContent;

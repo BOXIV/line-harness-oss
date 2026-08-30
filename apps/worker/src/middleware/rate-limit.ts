@@ -62,10 +62,48 @@ function check(key: string, max: number, windowMs: number): { ok: boolean; remai
 // Paths that are unauthenticated (lower limit, keyed by IP)
 // ---------------------------------------------------------------------------
 
+// ⚠️ ここに無い公開パスは「Authorization ヘッダの有無」で枠が決まる（下の else 分岐）。
+//    偽の `Bearer x` を付けるだけで IP 枠(100/分)が鍵枠(1000/分)に化け、鍵を変えれば
+//    バケットが無限に増える＝実質バイパスだった（2026-08-29 監査）。認証をスキップする
+//    公開パスは必ずここに載せ、IP でしか数えないようにする（middleware/auth.ts の
+//    スキップ一覧と対応させること）。
 const UNAUTHENTICATED_PATTERNS: Array<string | RegExp> = [
   '/webhook',
   /^\/api\/forms\/[^/]+\/submit$/,
+  /^\/api\/webhooks\/incoming\/[^/]+\/receive$/,
+  // BOXIV: 出品/購入フォーム・リード・診断フォーム（STUDIO 公開ページから叩く）
+  '/listing-form/submit',
+  '/buyer-form/submit',
+  '/buyer-form/lead',
+  '/diagnosis-form/submit',
+  // BOXIV: 管理画面ログイン（メールコード発行 / 検証 / パスワード）。専用スロットルは別途あるが、
+  // 外枠としても IP で数える
+  '/api/auth/email/start',
+  '/api/auth/email/verify',
+  '/api/auth/password',
+  // LINE ログイン / LIFF / 予約 / 連携フローの公開面
+  /^\/auth\//,
+  /^\/api\/liff\//,
+  /^\/booking/,
+  /^\/listing-form\//,
+  /^\/buyer-form\//,
+  /^\/app-listing\//,
+  '/link/callback',
+  /^\/diagnosis-form/,
+  /^\/t\//,
+  /^\/rb\//,
+  '/api/affiliates/click',
+  '/api/notion/automation',
+  '/api/integrations/stripe/webhook',
 ];
+
+/**
+ * 認証付きリクエストにも IP 単位の上限を併用する。鍵ごとの枠(1000/分)は「正規の鍵を持つ
+ * クライアント同士が互いを潰さない」ためのもので、鍵を偽装・ローテーションする攻撃者の
+ * 総量を抑える役目は IP 側が持つ。正規の管理画面利用（社内 NAT）で 1 分に 1000 回を
+ * 超えることは無い。
+ */
+const AUTHENTICATED_IP_MAX = 1000;
 
 function isUnauthenticatedPath(path: string): boolean {
   return UNAUTHENTICATED_PATTERNS.some((p) =>
@@ -118,6 +156,17 @@ export async function rateLimitMiddleware(c: Context<Env>, next: Next): Promise<
       key = `key:${token.slice(0, 16)}`;
       max = AUTHENTICATED_MAX;
       windowMs = AUTHENTICATED_WINDOW;
+      // 鍵を変えながら叩かれても IP 単位で頭打ちにする（鍵枠だけだとバケットが無限に増える）。
+      // ⚠️ 無認証の `ip:` バケットとは **別のキー**にする。同じキーにすると、同一 NAT からの
+      //    正規の管理画面利用（Bearer 付き・毎分数百回）が無認証枠(100/分)を食い潰し、
+      //    同じ拠点からのログイン（メールコード発行）が 429 になる。
+      const ipResult = check(`ipauth:${getClientIp(c)}`, AUTHENTICATED_IP_MAX, AUTHENTICATED_WINDOW);
+      if (!ipResult.ok) {
+        return c.json(
+          { success: false, error: 'Too many requests. Please try again later.' },
+          { status: 429, headers: { 'Retry-After': String(ipResult.retryAfter) } },
+        );
+      }
     } else {
       // No auth header — key by IP with the lower limit
       key = `ip:${getClientIp(c)}`;

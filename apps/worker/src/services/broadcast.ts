@@ -3,6 +3,7 @@ import {
   getBroadcastById,
   getBroadcasts,
   updateBroadcastStatus,
+  claimBroadcastForSending,
   getFriendsByTag,
   jstNow,
 } from '@line-crm/db';
@@ -19,8 +20,15 @@ export async function processBroadcastSend(
   broadcastId: string,
   workerUrl?: string,
 ): Promise<Broadcast> {
-  // Mark as sending
-  await updateBroadcastStatus(db, broadcastId, 'sending');
+  // 送信権を原子的に確保（draft/scheduled → sending）。手動 /send の二重クリックや
+  // cron との同時実行で両方が送信に進む TOCTOU を、条件付き UPDATE の勝者 1 つに絞る。
+  const claimed = await claimBroadcastForSending(db, broadcastId);
+  if (!claimed) {
+    const current = await getBroadcastById(db, broadcastId);
+    if (!current) throw new Error(`Broadcast ${broadcastId} not found`);
+    // 既に sending / sent。何もしないで現状を返す（送り直さない）。
+    return current;
+  }
 
   const broadcast = await getBroadcastById(db, broadcastId);
   if (!broadcast) {

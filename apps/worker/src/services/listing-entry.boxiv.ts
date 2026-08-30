@@ -187,6 +187,91 @@ export async function markStepSent(
     .run();
 }
 
+/**
+ * 催促ステップの送信権を **送る前に** 原子的に確保する（reminder_count を expected → expected+1）。
+ *
+ * 従来は「送信 → markStepSent」の順で、送信後の UPDATE が D1 の一時エラーで落ちると
+ * 次 tick が同じ行を同じ reminder_count で再取得し、同じ顧客へ同じ催促メール+SMS を
+ * 再送していた（2026-08-29 監査。同 tick の D1 競合は cheapest-listings で実測済み）。
+ * 先に count を進めておけば、最悪でも「1 ステップ分の催促が届かない」側に倒れる
+ * （次ステップは通常どおり進む）。二重送信より欠落の方が軽い。
+ *
+ * 戻り値 false = 他 tick が先に進めた／行が消えた。呼び出し側は送らない。
+ */
+export async function claimReminderStep(
+  db: D1Database,
+  matchKey: string,
+  expectedCount: number,
+): Promise<boolean> {
+  const res = await db
+    .prepare(
+      `UPDATE listing_entries
+         SET reminder_count = reminder_count + 1, updated_at = ${NOW}
+       WHERE match_key = ? AND status = 'form_only' AND reminder_count = ?`,
+    )
+    .bind(matchKey, expectedCount)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}
+
+/** claim 後、実際に送れたチャネルの時刻だけを記録する（count は claim 済みなので触らない）。 */
+export async function recordReminderSent(
+  db: D1Database,
+  matchKey: string,
+  sent: { email: boolean; sms: boolean },
+): Promise<void> {
+  if (!sent.email && !sent.sms) return;
+  await db
+    .prepare(
+      `UPDATE listing_entries
+         SET email_sent_at = CASE WHEN ? THEN ${NOW} ELSE email_sent_at END,
+             sms_sent_at   = CASE WHEN ? THEN ${NOW} ELSE sms_sent_at END,
+             updated_at = ${NOW}
+       WHERE match_key = ?`,
+    )
+    .bind(sent.email ? 1 : 0, sent.sms ? 1 : 0, matchKey)
+    .run();
+}
+
+/**
+ * 同じ連絡先（メール or 電話）へ、別の match_key から直近 `withinHours` 時間以内に
+ * 催促を送っていたら true。
+ *
+ * /listing-form/submit・/buyer-form/submit は公開エンドポイントなので、他人のメール/電話を
+ * 入れた偽エントリーを大量に投げると、催促 cron が BOXIV 名義のメール+SMS を
+ * その宛先へ最大 3 通ずつ送る「送信リレー」になっていた（2026-08-29 監査）。
+ * 1 連絡先あたり 24h に 1 連鎖までに絞る。正規の再送信（同じ人が同じ日にもう一度
+ * フォームを出す）でも 2 本目の催促連鎖は不要なので実害は無い。
+ */
+export async function hasRecentReminderToContact(
+  db: D1Database,
+  opts: { email: string | null; phone: string | null; excludeMatchKey: string; withinHours: number },
+): Promise<boolean> {
+  if (!opts.email && !opts.phone) return false;
+  // 時間幅は整数に丸めて SQL リテラルに埋める（値バインドではなくコード由来の数値）
+  const hours = Math.max(1, Math.floor(opts.withinHours));
+  const since = `strftime('%Y-%m-%dT%H:%M:%SZ','now','-${hours} hours')`;
+  const conds: string[] = [];
+  const binds: unknown[] = [opts.excludeMatchKey];
+  if (opts.email) {
+    conds.push(`(email = ? AND email_sent_at IS NOT NULL AND email_sent_at >= ${since})`);
+    binds.push(opts.email);
+  }
+  if (opts.phone) {
+    conds.push(`(phone = ? AND sms_sent_at IS NOT NULL AND sms_sent_at >= ${since})`);
+    binds.push(opts.phone);
+  }
+  const row = await db
+    .prepare(
+      `SELECT 1 AS hit FROM listing_entries
+        WHERE match_key != ? AND (${conds.join(' OR ')})
+        LIMIT 1`,
+    )
+    .bind(...binds)
+    .first<{ hit: number }>();
+  return !!row;
+}
+
 /** 72h 未連携エスカレ通知の送信記録（重複防止）。 */
 export async function markEscalated(db: D1Database, matchKey: string): Promise<void> {
   await db
@@ -237,6 +322,46 @@ export async function hasLinkCompletedNotified(
     .bind(friendId)
     .first<{ f: unknown }>();
   return !!(row && row.f);
+}
+
+/**
+ * 連携完了通知の送信権を **送る前に** 原子的に確保する。
+ *
+ * 従来は「hasLinkCompletedNotified で読む → fireEvent → markLinkCompletedNotified」の
+ * check→fire→mark で、OAuth コールバック（listing-form-line / buyer-form-line）と
+ * follow webhook が数秒差で同じ friend に到達すると両方が送信に進み、価格お知らせが
+ * 2 通届いていた（既知 H3・2026-08-29 時点で未修正）。
+ * フラグが未設定の行にだけ立てる条件付き UPDATE にし、changes で勝者を 1 つに決める。
+ * 送信に失敗したら unmarkLinkCompletedNotified で戻す（次の機会に送れるように）。
+ */
+export async function claimLinkCompletedNotified(
+  db: D1Database,
+  friendId: string,
+  source: EntrySource = 'seller',
+): Promise<boolean> {
+  const path = LINK_NOTIFIED_PATH[source];
+  const res = await db
+    .prepare(
+      `UPDATE friends
+         SET metadata = json_set(COALESCE(metadata, '{}'), '${path}', json('true'))
+       WHERE id = ?
+         AND COALESCE(json_extract(metadata, '${path}'), 0) = 0`,
+    )
+    .bind(friendId)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}
+
+/** claim 後に送信できなかったとき、フラグを戻す（follow 時の救済フローが再送できるように）。 */
+export async function unmarkLinkCompletedNotified(
+  db: D1Database,
+  friendId: string,
+  source: EntrySource = 'seller',
+): Promise<void> {
+  await db
+    .prepare(`UPDATE friends SET metadata = json_remove(COALESCE(metadata, '{}'), '${LINK_NOTIFIED_PATH[source]}') WHERE id = ?`)
+    .bind(friendId)
+    .run();
 }
 
 /** 連携完了通知の送信済みフラグを friend.metadata に立てる。 */

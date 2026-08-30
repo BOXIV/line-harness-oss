@@ -14,7 +14,13 @@
 //                                    / SLACK_BUYER_LINK_CHANNEL_ID（購入者）
 // 夜間(JST 既定21-9時)は催促メール/SMSを保留（72hエスカレは内部Slackなので常時送る）。
 
-import { listFormOnlyForReminder, markStepSent, markEscalated } from './listing-entry.boxiv.js';
+import {
+  listFormOnlyForReminder,
+  claimReminderStep,
+  recordReminderSent,
+  hasRecentReminderToContact,
+  markEscalated,
+} from './listing-entry.boxiv.js';
 import { sendEmail } from './sendgrid.boxiv.js';
 import { sendSms, twilioConfigured } from './sms-twilio.boxiv.js';
 import { slackPost, buildSlackCard, escapeSlackText, slackChannelFor } from './slack.boxiv.js';
@@ -198,27 +204,47 @@ export async function processListingFormReminders(env: ReminderEnv): Promise<voi
         if (inQuiet) continue;          // 夜間は催促を保留（日中の次tickで送る）
         if (sends >= perTick) continue; // 1tick上限
         if (!e.email && !e.phone) continue; // 連絡先なし＝送れない
-        let sentEmail = false, sentSms = false;
-        if (haveEmail && e.email) {
-          // メールはLIFFラップ(ボタン裏)。文面は source で切り替える（出品/購入で導線が違う）。
-          const link = buildLink(env, e);
-          const { subject, text, html } = source === 'buyer' ? buildBuyerReminderEmail(link) : buildReminderEmail(link);
-          const r = await sendEmail(env, e.email, subject, { text, html });
-          sentEmail = r.ok;
-          if (r.ok) await mirror(env, 'メール', e.email, `件名: ${subject}\n\n${text}`, e, e.reminder_count, steps);
-          else console.error(`listing reminder: email failed ${e.match_key} ${r.error}`);
-        }
-        if (haveSms && e.phone) {
-          const smsLink = buildSmsLink(env, e); // SMSは短縮リンク
-          const smsBody = source === 'buyer' ? buildBuyerReminderSms(smsLink) : buildReminderSms(smsLink);
-          const r = await sendSms(env, e.phone, smsBody);
-          sentSms = r.ok;
-          if (r.ok) await mirror(env, 'SMS', e.phone, smsBody, e, e.reminder_count, steps);
-          else if (!r.skipped) console.error(`listing reminder: sms failed ${e.match_key} ${r.error}`);
-        }
-        if (sentEmail || sentSms) {
-          await markStepSent(env.DB, e.match_key, { email: sentEmail, sms: sentSms });
-          sends++;
+        // 候補 1 件の失敗で残りの候補まで止めない（従来は throw がループ全体を殺し、
+        // Promise.allSettled に飲まれて無音だった）。
+        try {
+          // 送信リレー対策: 同じ連絡先へ別エントリーから 24h 以内に催促済みなら送らない。
+          // count は進めて（この行の催促連鎖は消化扱い）、連絡先 1 つあたりの通数を抑える。
+          const relayed = await hasRecentReminderToContact(env.DB, {
+            email: e.email, phone: e.phone, excludeMatchKey: e.match_key, withinHours: 24,
+          });
+          // 先に送信権を確保（reminder_count を +1）。取れなければ他 tick が処理済み。
+          const claimed = await claimReminderStep(env.DB, e.match_key, e.reminder_count);
+          if (!claimed) continue;
+          if (relayed) {
+            console.warn(`listing reminder: 同じ連絡先へ 24h 以内に催促済みのため送信を抑止 ${e.match_key}`);
+            continue;
+          }
+          let sentEmail = false, sentSms = false;
+          if (haveEmail && e.email) {
+            // メールはLIFFラップ(ボタン裏)。文面は source で切り替える（出品/購入で導線が違う）。
+            const link = buildLink(env, e);
+            const { subject, text, html } = source === 'buyer' ? buildBuyerReminderEmail(link) : buildReminderEmail(link);
+            const r = await sendEmail(env, e.email, subject, { text, html });
+            sentEmail = r.ok;
+            if (r.ok) await mirror(env, 'メール', e.email, `件名: ${subject}\n\n${text}`, e, e.reminder_count, steps);
+            else console.error(`listing reminder: email failed ${e.match_key} ${r.error}`);
+          }
+          if (haveSms && e.phone) {
+            const smsLink = buildSmsLink(env, e); // SMSは短縮リンク
+            const smsBody = source === 'buyer' ? buildBuyerReminderSms(smsLink) : buildReminderSms(smsLink);
+            const r = await sendSms(env, e.phone, smsBody);
+            sentSms = r.ok;
+            if (r.ok) await mirror(env, 'SMS', e.phone, smsBody, e, e.reminder_count, steps);
+            else if (!r.skipped) console.error(`listing reminder: sms failed ${e.match_key} ${r.error}`);
+          }
+          if (sentEmail || sentSms) {
+            // 時刻の記録は best-effort（失敗しても count は claim 済みなので再送にはならない）
+            await recordReminderSent(env.DB, e.match_key, { email: sentEmail, sms: sentSms })
+              .catch((err) => console.error(`listing reminder: recordReminderSent failed ${e.match_key}`, err));
+            sends++;
+          }
+        } catch (err) {
+          console.error(`listing reminder: candidate failed ${e.match_key}`, err);
         }
       }
     }

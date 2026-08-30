@@ -64,24 +64,33 @@ const MATRIX: Case[] = [
     expect: ALL(200),
     why: 'サイドバーの承認待ちバッジ。staff は自分担当のみカウント',
   },
-  { path: '/api/tags', expect: ALL(200), why: 'GET はガード無し（POST/DELETE のみ owner/admin/manager）' },
-  { path: '/api/templates', expect: ALL(200), why: 'ルート全体にガードが1件も無い（Phase 6 の対象）' },
-  { path: '/api/scenarios', expect: ALL(200), why: '同上' },
-  { path: '/api/forms', expect: ALL(200), why: '同上' },
-  { path: '/api/scoring-rules', expect: ALL(200), why: '同上' },
-  { path: '/api/reminders', expect: ALL(200), why: '同上' },
-  { path: '/api/notifications/rules', expect: ALL(200), why: '同上' },
-  { path: '/api/webhooks/incoming', expect: ALL(200), why: 'GET はガード無し（変更系のみ owner/admin/manager）' },
-  { path: '/api/conversions/points', expect: ALL(200), why: 'ルート全体にガードが1件も無い' },
-  { path: '/api/affiliates', expect: ALL(200), why: '同上' },
-  { path: '/api/tracked-links', expect: ALL(200), why: '同上' },
-  { path: '/api/ad-platforms', expect: ALL(200), why: '同上' },
-  { path: '/api/status-options', expect: ALL(200), why: '同上' },
-  { path: '/api/broadcasts', expect: ALL(200), why: 'GET はガード無し（変更系のみ owner/admin/manager）' },
-  { path: '/api/users', expect: ALL(200), why: '同上' },
-  { path: '/api/line-accounts', expect: ALL(200), why: 'GET はガード無し（変更系のみ owner）' },
-  { path: '/api/chats', expect: ALL(200), why: 'GET はガード無し（変更系のみ owner/admin/manager）' },
-  { path: '/api/operators', expect: ALL(200), why: '同上（POST/PUT/DELETE のみ owner/admin）' },
+  {
+    path: '/api/line-accounts',
+    expect: ALL(200),
+    why: '全画面共通の AccountSwitcher が叩く。staff 許可リスト（middleware/staff-scope.boxiv.ts）に載せている',
+  },
+
+  // ── staff 許可リスト外（middleware/staff-scope.boxiv.ts で staff だけ 403）──────
+  // 2026-08-29 の再監査で「Phase 6 の対象」のまま 60 本超がガード無しだったため、
+  // 個別 requireRole ではなく **staff の許可リスト方式（fail closed）** に切り替えた。
+  // owner/admin/manager は従来どおり到達できる。
+  { path: '/api/tags', expect: NOT_STAFF, why: 'staff 許可リスト外（撮影スタッフはタグを扱わない）' },
+  { path: '/api/templates', expect: NOT_STAFF, why: 'staff 許可リスト外（自動配信の本文。staff から改変できてはいけない）' },
+  { path: '/api/scenarios', expect: NOT_STAFF, why: 'staff 許可リスト外（enroll で任意顧客へ配信できてはいけない）' },
+  { path: '/api/forms', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/scoring-rules', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/reminders', expect: NOT_STAFF, why: 'staff 許可リスト外（enroll で任意顧客へ配信できてはいけない）' },
+  { path: '/api/notifications/rules', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/webhooks/incoming', expect: NOT_STAFF, why: 'staff 許可リスト外（受信 secret が平文で返る口）' },
+  { path: '/api/conversions/points', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/affiliates', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/tracked-links', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/ad-platforms', expect: NOT_STAFF, why: 'staff 許可リスト外（広告プラットフォームの資格情報が返る口）' },
+  { path: '/api/status-options', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/broadcasts', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/users', expect: NOT_STAFF, why: 'staff 許可リスト外' },
+  { path: '/api/chats', expect: NOT_STAFF, why: 'staff 許可リスト外（全顧客のチャット履歴・LINE userId・Notion 連携情報）' },
+  { path: '/api/operators', expect: NOT_STAFF, why: 'staff 許可リスト外' },
 
   // ── requireRole('owner','admin','manager') ────────────────────────────────
   {

@@ -123,7 +123,8 @@ export default function RichMenuEditor({ value, onChange, imageUrl, onImageSelec
             disabled={disabled}
             className="rounded"
           />
-          メニューを開いた状態で表示する (selected=true)
+          チャットを開いたときメニューを展開した状態で表示する (LINE の selected)
+          <span className="text-gray-400">— 既定メニューにするかどうかとは別です</span>
         </label>
       </div>
 
