@@ -155,6 +155,8 @@ export type FriendListParams = {
   accountId?: string
   statusOptionId?: string
   search?: string
+  /** 'unlinked' = 顧客レコード（分類タグ / Notion 連携）に紐づいていない友だちだけ。 */
+  linkState?: 'unlinked'
 }
 
 export type FriendWithTags = Friend & { tags: Tag[] }
@@ -169,6 +171,7 @@ export const api = {
       if (params?.accountId) query.lineAccountId = params.accountId
       if (params?.statusOptionId) query.statusOptionId = params.statusOptionId
       if (params?.search) query.search = params.search
+      if (params?.linkState) query.linkState = params.linkState
       return fetchApi<ApiResponse<PaginatedResponse<FriendWithTags>>>(
         '/api/friends?' + new URLSearchParams(query)
       )

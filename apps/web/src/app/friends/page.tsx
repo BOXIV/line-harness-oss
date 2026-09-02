@@ -3,11 +3,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api } from '@/lib/api'
-import type { FriendWithTags } from '@/lib/api'
+import type { FriendListParams, FriendWithTags } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FriendTable from '@/components/friends/friend-table'
 import { useAccount } from '@/contexts/account-context'
-import { SOURCE_LABELS, SOURCE_TAG_NAMES } from '@/lib/friend-source'
+import { SOURCE_LABELS, SOURCE_TAG_NAMES, UNLINKED_LABEL } from '@/lib/friend-source'
 
 const PAGE_SIZE = 20
 
@@ -19,6 +19,9 @@ export default function FriendsPage() {
   const [page, setPage] = useState(1)
   const [hasNextPage, setHasNextPage] = useState(false)
   const [selectedTagId, setSelectedTagId] = useState('')
+  // 「未連携」タブ。タグでは表せない（手動 Notion 連携はタグを付けない）ので、
+  // worker の linkState=unlinked に委譲する。
+  const [unlinkedOnly, setUnlinkedOnly] = useState(false)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedStatusId, setSelectedStatusId] = useState('')
@@ -39,11 +42,12 @@ export default function FriendsPage() {
     setLoading(true)
     setError('')
     try {
-      const params: Record<string, string> = {
+      const params: FriendListParams = {
         offset: String((page - 1) * PAGE_SIZE),
         limit: String(PAGE_SIZE),
       }
       if (selectedTagId) params.tagId = selectedTagId
+      if (unlinkedOnly) params.linkState = 'unlinked'
       if (selectedAccountId) params.accountId = selectedAccountId
       if (selectedStatusId) params.statusOptionId = selectedStatusId
       if (searchQuery) params.search = searchQuery
@@ -61,7 +65,7 @@ export default function FriendsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, selectedTagId, selectedAccountId, selectedStatusId, searchQuery])
+  }, [page, selectedTagId, unlinkedOnly, selectedAccountId, selectedStatusId, searchQuery])
 
   useEffect(() => {
     loadTags()
@@ -75,7 +79,7 @@ export default function FriendsPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [selectedTagId, selectedAccountId, selectedStatusId, searchQuery])
+  }, [selectedTagId, unlinkedOnly, selectedAccountId, selectedStatusId, searchQuery])
 
   // 検索 debounce（300ms）
   useEffect(() => {
@@ -89,10 +93,15 @@ export default function FriendsPage() {
 
   const handleTagFilter = (tagId: string) => {
     setSelectedTagId(tagId)
+    // タグ絞り込みと「未連携」は別軸なので、タグを選んだら未連携は解除する
+    // （タブの見た目とサーバ側の絞り込みが食い違わないように）。
+    setUnlinkedOnly(false)
   }
 
   // 出品者/購入者タブ。判別の実体は分類タグなので、タブはタグ絞り込みへ委譲する
   // （= サーバ側で絞る＝ページングと件数がそのまま正しい）。タグ未作成なら押せない。
+  // 「未連携」だけはタグで表せない（分類タグが無く Notion 連携も無い＝2条件）ので、
+  // worker の linkState=unlinked に委譲する。
   const sourceTabs = useMemo(
     () => {
       const idOf = (name: string) => allTags.find((t) => t.name === name)?.id ?? ''
@@ -100,6 +109,7 @@ export default function FriendsPage() {
         { key: 'all' as const, label: '全て', tagId: '' },
         { key: 'seller' as const, label: SOURCE_LABELS.seller, tagId: idOf(SOURCE_TAG_NAMES.seller) },
         { key: 'buyer' as const, label: SOURCE_LABELS.buyer, tagId: idOf(SOURCE_TAG_NAMES.buyer) },
+        { key: 'unlinked' as const, label: UNLINKED_LABEL, tagId: '' },
       ]
     },
     [allTags],
@@ -109,12 +119,14 @@ export default function FriendsPage() {
     <div>
       <Header title="友だち管理" />
 
-      {/* 出品者 / 購入者タブ。分類タグでの絞り込み（= タグ絞り込みのショートカット）なので
-          タグ選択と同じ state を動かす。タグがまだ無い環境では押せない。 */}
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 max-w-sm" role="tablist" aria-label="友だちの区分">
+      {/* 出品者 / 購入者 / 未連携タブ。出品者・購入者は分類タグでの絞り込み
+          （= タグ絞り込みのショートカット）なのでタグ選択と同じ state を動かす。
+          タグがまだ無い環境では押せない。未連携だけは linkState=unlinked に委譲する。 */}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 mb-4 max-w-md" role="tablist" aria-label="友だちの区分">
         {sourceTabs.map((tab) => {
-          const disabled = tab.key !== 'all' && !tab.tagId
-          const active = !disabled && selectedTagId === tab.tagId
+          const disabled = tab.key !== 'all' && tab.key !== 'unlinked' && !tab.tagId
+          const active =
+            tab.key === 'unlinked' ? unlinkedOnly : !disabled && !unlinkedOnly && selectedTagId === tab.tagId
           return (
             <button
               key={tab.key}
@@ -122,7 +134,14 @@ export default function FriendsPage() {
               aria-selected={active}
               disabled={disabled}
               title={disabled ? `タグ「${tab.label}」がまだありません` : undefined}
-              onClick={() => handleTagFilter(tab.tagId)}
+              onClick={() => {
+                if (tab.key === 'unlinked') {
+                  setSelectedTagId('')
+                  setUnlinkedOnly(true)
+                } else {
+                  handleTagFilter(tab.tagId)
+                }
+              }}
               className={`flex-1 px-3 py-1.5 min-h-[36px] rounded-md text-sm font-medium transition-colors ${
                 active ? 'bg-white text-slate-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
               } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}

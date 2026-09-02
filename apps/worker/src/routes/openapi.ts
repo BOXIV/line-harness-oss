@@ -175,6 +175,12 @@ const spec = {
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 50 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
           { name: 'tagId', in: 'query', schema: { type: 'string' } },
+          {
+            name: 'linkState',
+            in: 'query',
+            description: 'unlinked = 分類タグ（出品者/購入者）も Notion 連携も無い友だちだけ',
+            schema: { type: 'string', enum: ['unlinked'] },
+          },
         ],
         responses: { '200': { description: 'Paginated friends list' } },
       },

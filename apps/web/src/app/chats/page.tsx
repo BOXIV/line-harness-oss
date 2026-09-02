@@ -10,7 +10,14 @@ import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
 import StatusPicker from '@/components/friends/status-picker'
 import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import NotionLinkPicker from '@/components/chats/notion-link-picker'
-import { detectFriendSource, SOURCE_LABELS, type FriendSource } from '@/lib/friend-source'
+import {
+  detectFriendSource,
+  isUnlinkedFriend,
+  SOURCE_LABELS,
+  UNLINKED_LABEL,
+  type FriendSource,
+  type FriendTabKey,
+} from '@/lib/friend-source'
 import { sortChatsByRecency, filterUnreadChats } from '@/lib/chat-list'
 import { notionPillClass } from '@/lib/notion-color'
 import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
@@ -258,9 +265,10 @@ export default function ChatsPage() {
   const [messageContent, setMessageContent] = useState('')
   const [sending, setSending] = useState(false)
   const [nameQuery, setNameQuery] = useState('')
-  // 出品者/購入者タブ。判定は分類タグ（chat.source）。'all' は未分類も含めた全員。
+  // 出品者/購入者/未連携タブ。判定は分類タグ（chat.source）と Notion 連携（chat.notion）。
+  // 'all' は未連携も含めた全員。
   // 並びはどのタブでも「最後にメッセージがあった順」だけ（連携の有無で沈めない）。
-  const [sourceTab, setSourceTab] = useState<'all' | 'seller' | 'buyer'>('all')
+  const [sourceTab, setSourceTab] = useState<FriendTabKey>('all')
   // 「未読」チェックボックス。ON で未読メッセージがあるチャットだけに絞る。
   const [unreadOnly, setUnreadOnly] = useState(false)
   // 表示名編集モーダル（管理名 managedName を「表示中の文字列」としてフル編集）
@@ -602,6 +610,7 @@ export default function ChatsPage() {
       all: sum(searchedChats),
       seller: sum(searchedChats.filter((c) => c.source === 'seller')),
       buyer: sum(searchedChats.filter((c) => c.source === 'buyer')),
+      unlinked: sum(searchedChats.filter(isUnlinkedFriend)),
     }
   }, [searchedChats])
 
@@ -616,11 +625,14 @@ export default function ChatsPage() {
     )
   }, [chatDetail, chats, allFriends])
 
-  // 表示するチャット。タブ選択時はそのグループだけ、「全て」は未分類（Notion 未連携）も含む。
+  // 表示するチャット。タブ選択時はそのグループだけ、「全て」は未連携も含む。
   // 並びは常に最終メッセージの新しい順 — 連携の有無で下に沈めない。
   // 「未読」ON のときは未読があるものだけ（開いているチャットは既読にしても残す）。
   const visibleChats = useMemo(() => {
-    const inTab = sourceTab === 'all' ? searchedChats : searchedChats.filter((c) => c.source === sourceTab)
+    const inTab =
+      sourceTab === 'all' ? searchedChats
+      : sourceTab === 'unlinked' ? searchedChats.filter(isUnlinkedFriend)
+      : searchedChats.filter((c) => c.source === sourceTab)
     return filterUnreadChats(sortChatsByRecency(inTab), { enabled: unreadOnly, keepId: selectedChatId })
   }, [searchedChats, sourceTab, unreadOnly, selectedChatId])
 
@@ -685,13 +697,14 @@ export default function ChatsPage() {
             </select>
           </div>
 
-          {/* 出品者 / 購入者タブ（分類タグで判別。未分類は「全て」に混在して出る） */}
+          {/* 出品者 / 購入者 / 未連携タブ（分類タグ＋Notion 連携で判別。「全て」は全部混ぜて出す） */}
           <div className="px-3 py-2 border-b border-gray-200" role="tablist" aria-label="友だちの区分">
             <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
               {([
                 { key: 'all', label: '全て' },
                 { key: 'seller', label: SOURCE_LABELS.seller },
                 { key: 'buyer', label: SOURCE_LABELS.buyer },
+                { key: 'unlinked', label: UNLINKED_LABEL },
               ] as const).map((tab) => {
                 const active = sourceTab === tab.key
                 const unread = unreadCounts[tab.key]
@@ -789,8 +802,8 @@ export default function ChatsPage() {
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
                           <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5">
-                            {/* 出品者/購入者は「全て」タブでも一目で分かるよう行内にも出す */}
-                            {chat.source && (
+                            {/* 出品者/購入者/未連携は「全て」タブでも一目で分かるよう行内にも出す */}
+                            {chat.source ? (
                               <span
                                 className={`inline-flex items-center px-1.5 rounded text-[10px] font-medium leading-4 ${
                                   chat.source === 'seller'
@@ -800,7 +813,11 @@ export default function ChatsPage() {
                               >
                                 {SOURCE_LABELS[chat.source]}
                               </span>
-                            )}
+                            ) : isUnlinkedFriend(chat) ? (
+                              <span className="inline-flex items-center px-1.5 rounded text-[10px] font-medium leading-4 bg-gray-100 text-gray-600">
+                                {UNLINKED_LABEL}
+                              </span>
+                            ) : null}
                             {formatDatetime(chat.lastMessageAt)}
                           </p>
                         </div>
