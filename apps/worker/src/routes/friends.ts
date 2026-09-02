@@ -19,6 +19,7 @@ import { logFailedOutgoing } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
 import type { Env } from '../index.js';
 import { requireRole } from '../middleware/role-guard.js';
+import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
 
 const friends = new Hono<Env>();
 
@@ -79,6 +80,7 @@ friends.get('/api/friends', requireRole('owner','admin','manager'), async (c) =>
     const lineAccountId = c.req.query('lineAccountId');
     const statusOptionId = c.req.query('statusOptionId');
     const search = c.req.query('search');
+    const linkState = c.req.query('linkState');
 
     const db = c.env.DB;
 
@@ -98,6 +100,23 @@ friends.get('/api/friends', requireRole('owner','admin','manager'), async (c) =>
         'EXISTS (SELECT 1 FROM friend_status_assignments fsa WHERE fsa.friend_id = f.id AND fsa.status_option_id = ?)',
       );
       binds.push(statusOptionId);
+    }
+    // BOXIV: 「未連携」タブ = 顧客レコード（出品者/購入者）に紐づいていない友だち。
+    // 連携の根拠は 2 つあり、**どちらも無い**ものだけを未連携とする:
+    //   - 分類タグ（出品者/購入者）… 連携確定時にコードが付ける（source-tag.boxiv.ts）
+    //   - Notion 連携（出品者DB/購入者DB）… オペレーターの手動連携はタグを付けないので、
+    //     タグだけで判定すると手動連携済みの友だちまで未連携に出てしまう
+    // web 側 friend-source.ts の isUnlinkedFriend と同じ意味にすること。
+    if (linkState === 'unlinked') {
+      conditions.push(
+        'NOT EXISTS (SELECT 1 FROM friend_tags ft JOIN tags t ON t.id = ft.tag_id'
+        + ' WHERE ft.friend_id = f.id AND t.name IN (?, ?))'
+        // metadata.notion は notionLinks の写し（片方しか持たない古い行のため両方見る）。
+        + " AND json_extract(f.metadata, '$.notionLinks.seller.pageId') IS NULL"
+        + " AND json_extract(f.metadata, '$.notionLinks.buyer.pageId') IS NULL"
+        + " AND json_extract(f.metadata, '$.notion.pageId') IS NULL",
+      );
+      binds.push(SOURCE_TAG_NAMES.seller, SOURCE_TAG_NAMES.buyer);
     }
     if (search) {
       // 友だち管理の表示ラベルは formatFriendLabel で managed_name か Notion 合成名
