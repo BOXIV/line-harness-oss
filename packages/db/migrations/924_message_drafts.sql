@@ -1,8 +1,11 @@
 -- 924_message_drafts.sql
 -- BOXIV: 送信相手（友だち）ごとに貯めておける下書き。
--- チャット入力欄の ✏️ から挿入する。書き手は 2 通り:
---   - 管理画面のオペレーター（authVia=session → created_via='admin'）
---   - Claude の MCP / API キー経由の自動生成（authVia=api_key|env_key → created_via='api'）
+-- チャット入力欄の ✏️ から挿入する。書き手は 2 通り（created_via）:
+--   - 管理画面のオペレーター（'admin'）
+--   - Claude の MCP / API キー経由の自動生成（'api'）
+-- ⚠️ この区別は呼び出し側の申告で決まる。管理画面は旧 API キー（env API_KEY を含む）でも
+--    ログインできるので、worker 側の authVia では人と機械を見分けられない。
+--    **誰が置いたかの正本は created_by_id / created_by_name と audit_log** の方。
 -- 予約送信（scheduled_messages）と違い **自動では絶対に送らない**。
 -- 人が挿入して送信するまで LINE には出ない。
 

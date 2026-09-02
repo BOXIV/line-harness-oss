@@ -936,7 +936,10 @@ export const api = {
     create: (friendId: string, data: { content: string; title?: string | null }) =>
       fetchApi<ApiResponse<MessageDraft>>(`/api/friends/${friendId}/drafts`, {
         method: 'POST',
-        body: JSON.stringify(data),
+        // createdVia は「どこから置いたか」の申告。管理画面は旧 API キーでもログインできて
+        // worker 側の authVia では人と機械を見分けられないので、ここで明示する
+        // （申告しないと MCP / API 扱いになり、手入力した下書きが「MCP / API」と表示される）。
+        body: JSON.stringify({ ...data, createdVia: 'admin' }),
       }),
     update: (id: string, data: { content?: string; title?: string | null }) =>
       fetchApi<ApiResponse<MessageDraft>>(`/api/drafts/${id}`, {

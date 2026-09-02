@@ -27,7 +27,7 @@ async function seedFriend(id: string): Promise<void> {
     .run();
 }
 
-async function createDraft(friendId: string, body: unknown): Promise<Response> {
+async function createDraft(friendId: string, body: Record<string, unknown>): Promise<Response> {
   return requestAs('owner', `/api/friends/${friendId}/drafts`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -122,12 +122,33 @@ describe('送れない下書きは作らせない', () => {
   });
 });
 
-describe('作成元は認証コンテキストで決まる', () => {
-  it('API キー（MCP / スクリプト）経由は created_via=api で、本文の自己申告では偽れない', async () => {
-    // createdVia を body で送っても無視されること（人が書いたように見せかけられない）
-    await createDraft(FRIEND_A, { content: 'Claude が用意した返信案', createdVia: 'admin' } as unknown);
-    const drafts = await listDrafts(FRIEND_A);
-    expect(drafts[0].createdVia).toBe('api');
+describe('作成元（created_via）の決まり方', () => {
+  // ⚠️ authVia では人と機械を見分けられない。管理画面は新しいメールログイン（session）だけでなく
+  //    **旧 API キーでもログインできる**（apps/web の auth.ts が session → 旧キーへフォールバック）。
+  //    authVia≠session を機械扱いにしていたら、ダッシュボードで手入力した下書きが
+  //    「MCP / API」と表示された（test 環境で実測）。だから呼び出し側の申告を優先する。
+  it('申告が無ければ機械（MCP / API）扱い', async () => {
+    await createDraft(FRIEND_A, { content: 'Claude が用意した返信案' });
+    expect((await listDrafts(FRIEND_A))[0].createdVia).toBe('api');
+  });
+
+  it('管理画面からの申告（createdVia=admin）は API キー経由でも尊重される', async () => {
+    await createDraft(FRIEND_A, { content: '手で書いた文面', createdVia: 'admin' });
+    expect((await listDrafts(FRIEND_A))[0].createdVia).toBe('admin');
+  });
+
+  it('知らない値の申告は無視して既定に落とす（CHECK 制約違反で 500 にしない）', async () => {
+    const res = await createDraft(FRIEND_A, { content: 'x', createdVia: 'なりすまし' });
+    expect(res.status).toBe(201);
+    expect((await listDrafts(FRIEND_A))[0].createdVia).toBe('api');
+  });
+
+  it('「誰が」は認証コンテキストから記録する（申告では変えられない）', async () => {
+    await createDraft(FRIEND_A, { content: '記録の確認', createdVia: 'admin', createdByName: '別人' });
+    const draft = (await listDrafts(FRIEND_A))[0];
+    // fixtures の owner は staff_members の 'test-owner'
+    expect(draft.createdById).toBe('test-owner');
+    expect(draft.createdByName).toBe('テストオーナー');
   });
 });
 

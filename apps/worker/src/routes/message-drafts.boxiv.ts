@@ -1,8 +1,8 @@
 // BOXIV-only: 送信相手ごとの下書き (message_drafts) の CRUD。
 //
 // 「あらかじめ用意しておいた文面を、送る直前に人が確認して送る」ための箱。
-//   - 書き手は管理画面のオペレーター（authVia=session）と、Claude の MCP / API キー
-//     （authVia=api_key|env_key）の 2 通り。どちらで作られたかは created_via に残す
+//   - 書き手は管理画面のオペレーターと、Claude の MCP / API の 2 通り。
+//     どちらで置かれたかは created_via に残す（表示ラベルの出し分けに使う）
 //   - **自動送信は一切しない**。cron も持たない（予約送信 scheduled_messages との違い）
 //   - 送信は既存の POST /api/chats/:id/send。挿入した下書きの削除は管理画面が明示的に呼ぶ
 //
@@ -82,7 +82,7 @@ messageDrafts.get('/api/friends/:friendId/drafts', requireRole('owner','admin','
 messageDrafts.post('/api/friends/:friendId/drafts', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('friendId');
-    const body = await c.req.json<{ content?: unknown; title?: unknown }>();
+    const body = await c.req.json<{ content?: unknown; title?: unknown; createdVia?: unknown }>();
     const content = validateContent(body.content);
     if (!content.ok) return c.json({ success: false, error: content.error }, 400);
 
@@ -93,9 +93,19 @@ messageDrafts.post('/api/friends/:friendId/drafts', requireRole('owner','admin',
       .first<{ id: string }>();
     if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
 
-    // 「誰が置いたか」は認証コンテキストから取る（本文の自己申告は信用しない）。
+    // 「誰が」は認証コンテキストから取る（ここは自己申告を混ぜない）。
     const actor = c.get('staff');
-    const createdVia = c.get('authVia') === 'session' ? 'admin' : 'api';
+
+    // 「どこから」は呼び出し側の申告を優先する。
+    // ⚠️ authVia だけでは人と機械を見分けられない: 管理画面は新しいメールログイン
+    //    （authVia=session）だけでなく **旧 API キーでもログインできる**
+    //    （apps/web の auth.ts が session → 旧キーへフォールバックする。env API_KEY でも入れる）。
+    //    authVia≠session を機械扱いにしたところ、ダッシュボードで手入力した下書きが
+    //    「MCP / API」と表示された（test 環境で実測）。
+    //    created_via は表示ラベルであって権限判定には使わないので、申告を受け入れてよい。
+    //    **誰が置いたかの正本は created_by_id / created_by_name と audit_log** の方。
+    const declared = body.createdVia === 'admin' || body.createdVia === 'api' ? body.createdVia : null;
+    const createdVia = declared ?? (c.get('authVia') === 'session' ? 'admin' : 'api');
     const id = crypto.randomUUID();
     const now = jstNow();
     await c.env.DB

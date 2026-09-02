@@ -13,7 +13,10 @@ export interface MessageDraft {
   /** 一覧で見分ける見出し（任意） */
   title: string | null
   content: string
-  /** 'admin' = 管理画面のオペレーター / 'api' = API キー（MCP を含む）経由 */
+  /**
+   * 'admin' = 管理画面のオペレーター / 'api' = MCP・API 経由（既定）。
+   * 呼び出し側の申告で決まる表示ラベル。誰が置いたかは createdBy* を見ること。
+   */
   createdVia: 'admin' | 'api'
   createdById: string | null
   createdByName: string | null
