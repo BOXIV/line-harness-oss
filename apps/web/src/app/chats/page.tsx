@@ -7,6 +7,7 @@ import Header from '@/components/layout/header'
 import MessageBubble from '@/components/chats/message-bubble'
 import TemplatePickerModal from '@/components/chats/template-picker-modal'
 import ScheduledMessagePanel from '@/components/chats/scheduled-message-panel'
+import DraftPanel from '@/components/chats/draft-panel'
 import StatusPicker from '@/components/friends/status-picker'
 import RichMenuPicker from '@/components/rich-menus/rich-menu-picker'
 import NotionLinkPicker from '@/components/chats/notion-link-picker'
@@ -19,6 +20,7 @@ import {
   type FriendTabKey,
 } from '@/lib/friend-source'
 import { sortChatsByRecency, filterUnreadChats } from '@/lib/chat-list'
+import { trackUsedDraft } from '@/lib/chat-draft'
 import { notionPillClass } from '@/lib/notion-color'
 import { formatFriendLabel, composeDisplayLabel } from '@/lib/friend-name'
 
@@ -69,6 +71,8 @@ interface Chat {
   notes: string | null
   lastMessageAt: string | null
   unreadCount?: number
+  /** 未送信の下書き件数（message_drafts）。✏️ バッジに出す。 */
+  draftCount?: number
   createdAt: string
   updatedAt: string
 }
@@ -259,6 +263,10 @@ export default function ChatsPage() {
   const [statusOptions, setStatusOptions] = useState<Array<{ id: string; name: string; color: string | null; source: 'seller' | 'buyer' }>>([])
   const [notionMessage, setNotionMessage] = useState('')
   const [sendingSchedule, setSendingSchedule] = useState(false)
+  // 下書きパネル（✏️）と、入力欄に挿入した下書き。
+  // 送信できたら挿入元を消すので「どの下書きから書き始めたか」を覚えておく。
+  const [showDraftPanel, setShowDraftPanel] = useState(false)
+  const [usedDraftId, setUsedDraftId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [error, setError] = useState('')
@@ -449,6 +457,8 @@ export default function ChatsPage() {
   const handleSelectChat = (chatId: string) => {
     setSelectedChatId(chatId)
     setMessageContent('')
+    // 相手が変われば下書きの追跡もリセットする（別の相手の下書きを消さない）。
+    setUsedDraftId(null)
   }
 
   const triggerLoadingAnimation = useCallback(async (chatId: string) => {
@@ -478,6 +488,12 @@ export default function ChatsPage() {
         content: messageContent.trim(),
       })
       setMessageContent('')
+      // 送れた下書きは役目を終えたので消す（残すと「未送信の下書き」と見分けが付かない）。
+      // 消せなくても送信は成立しているので、失敗はログだけにして操作は止めない。
+      if (usedDraftId) {
+        await api.drafts.delete(usedDraftId).catch((err) => console.error('draft delete failed', err))
+        setUsedDraftId(null)
+      }
       loadChatDetail(selectedChatId)
       loadChats()
     } catch {
@@ -624,6 +640,12 @@ export default function ChatsPage() {
       ?? detectFriendSource(allFriends.find((f) => f.id === chatDetail.friendId)?.tags)
     )
   }, [chatDetail, chats, allFriends])
+
+  // 開いているチャットの未送信の下書き件数（✏️ のバッジ）。一覧の値をそのまま使う。
+  const selectedChatDraftCount = useMemo(
+    () => chats.find((c) => c.id === selectedChatId)?.draftCount ?? 0,
+    [chats, selectedChatId],
+  )
 
   // 表示するチャット。タブ選択時はそのグループだけ、「全て」は未連携も含む。
   // 並びは常に最終メッセージの新しい順 — 連携の有無で下に沈めない。
@@ -818,6 +840,14 @@ export default function ChatsPage() {
                                 {UNLINKED_LABEL}
                               </span>
                             ) : null}
+                            {(chat.draftCount ?? 0) > 0 && (
+                              <span
+                                className="inline-flex items-center px-1.5 rounded text-[10px] font-medium leading-4 bg-amber-100 text-amber-700"
+                                title={`未送信の下書き ${chat.draftCount} 件`}
+                              >
+                                ✏️{chat.draftCount}
+                              </span>
+                            )}
                             {formatDatetime(chat.lastMessageAt)}
                           </p>
                         </div>
@@ -1081,11 +1111,30 @@ export default function ChatsPage() {
                   >
                     📋
                   </button>
+                  {/* 下書き。テンプレート（全員共通の定型文）と違い、この相手のために
+                      あらかじめ用意しておいた文面を出す。件数は未送信の下書き数。 */}
+                  <button
+                    type="button"
+                    onClick={() => setShowDraftPanel(true)}
+                    disabled={sending}
+                    className="relative px-3 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    aria-label={selectedChatDraftCount > 0 ? `下書き（${selectedChatDraftCount} 件）` : '下書き'}
+                    title="この相手の下書き（Claude の MCP / API からも置ける）"
+                  >
+                    ✏️
+                    {selectedChatDraftCount > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-none">
+                        {selectedChatDraftCount > 9 ? '9+' : selectedChatDraftCount}
+                      </span>
+                    )}
+                  </button>
                   <textarea
                     value={messageContent}
                     onChange={(e) => {
                       const value = e.target.value
                       setMessageContent(value)
+                      // 入力欄を空にしたら「下書きから書き始めた」扱いをやめる。
+                      setUsedDraftId((prev) => trackUsedDraft(prev, value))
                       if (selectedChatId && isMessageInputFocused && value.trim()) {
                         void triggerLoadingAnimation(selectedChatId)
                       }
@@ -1123,6 +1172,22 @@ export default function ChatsPage() {
         onSubmit={handleSendTemplate}
         friendSource={detailSource}
       />
+
+      {chatDetail && (
+        <DraftPanel
+          isOpen={showDraftPanel}
+          onClose={() => setShowDraftPanel(false)}
+          friendId={chatDetail.friendId}
+          friendName={chatDetail.friendName}
+          currentInput={messageContent}
+          onInsert={(draft) => {
+            setMessageContent(draft.content)
+            setUsedDraftId(draft.id)
+            setShowDraftPanel(false)
+          }}
+          onChanged={loadChats}
+        />
+      )}
 
       {chatDetail && (
         <ScheduledMessagePanel

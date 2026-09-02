@@ -196,6 +196,36 @@ const spec = {
         responses: { '200': { description: 'Friend with tags' }, '404': { description: 'Not found' } },
       },
     },
+    '/api/friends/{id}/drafts': {
+      get: {
+        tags: ['Friends'],
+        summary: '下書き一覧取得（送信相手ごと）',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Drafts for the friend (newest first)' } },
+      },
+      post: {
+        tags: ['Friends'],
+        summary: '下書き作成（自動送信はされない）',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string', maxLength: 5000 }, title: { type: 'string', nullable: true } }, required: ['content'] } } } },
+        responses: { '201': { description: 'Draft created' }, '400': { description: 'Invalid content' }, '404': { description: 'Friend not found' } },
+      },
+    },
+    '/api/drafts/{id}': {
+      put: {
+        tags: ['Friends'],
+        summary: '下書き更新',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { content: { type: 'string', maxLength: 5000 }, title: { type: 'string', nullable: true } } } } } },
+        responses: { '200': { description: 'Draft updated' }, '404': { description: 'Not found' } },
+      },
+      delete: {
+        tags: ['Friends'],
+        summary: '下書き削除',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: 'Draft deleted' }, '404': { description: 'Not found' } },
+      },
+    },
     '/api/friends/{id}/tags': {
       post: {
         tags: ['Friends'],

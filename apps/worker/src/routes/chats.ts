@@ -147,6 +147,9 @@ chats.get('/api/chats', async (c) => {
                          FROM friend_tags ft
                          JOIN tags t ON t.id = ft.tag_id
                         WHERE ft.friend_id = c.friend_id) AS friend_source,
+                      -- BOXIV: 未送信の下書き件数。一覧に ✏️n を出して「用意されているのに
+                      -- 送られていない」チャットに気づけるようにする（送信は必ず人が行う）。
+                      (SELECT COUNT(*) FROM message_drafts d WHERE d.friend_id = c.friend_id) AS draft_count,
                       (SELECT COUNT(*) FROM messages_log m
                          WHERE m.friend_id = c.friend_id AND m.direction = 'incoming'
                            AND (c.last_read_at IS NULL OR m.created_at > c.last_read_at)) AS unread_count
@@ -206,6 +209,7 @@ chats.get('/api/chats', async (c) => {
         notes: ch.notes,
         lastMessageAt: ch.last_message_at,
         unreadCount: Number(ch.unread_count) || 0,
+        draftCount: Number(ch.draft_count) || 0,
         createdAt: ch.created_at,
         updatedAt: ch.updated_at,
       })),

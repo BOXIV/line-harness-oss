@@ -62,6 +62,7 @@ import { backfillDiagnosisSpecs } from './services/diagnosis-spec-backfill.boxiv
 import { friendStatus } from './routes/friend-status.boxiv.js';
 // 個別チャット送信予約 (BOXIV)
 import { scheduledMessages } from './routes/scheduled-messages.boxiv.js';
+import { messageDrafts } from './routes/message-drafts.boxiv.js';
 // チャット用メディア (画像 / 動画 / PDF, BOXIV)
 import { media } from './routes/media.boxiv.js';
 // 友だち↔Notion 連携 (BOXIV)
@@ -298,6 +299,7 @@ app.route('/', friendStatus);
 
 // 個別チャット送信予約 (BOXIV)
 app.route('/', scheduledMessages);
+app.route('/', messageDrafts);
 
 // チャット用メディア (BOXIV)
 app.route('/', media);
