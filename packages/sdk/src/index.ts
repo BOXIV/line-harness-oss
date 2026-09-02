@@ -13,6 +13,7 @@ export { FormsResource } from './resources/forms.js'
 export { AdPlatformsResource } from './resources/ad-platforms.js'
 export { StaffResource } from './resources/staff.js'
 export { ImagesResource } from './resources/images.js'
+export { DraftsResource } from './resources/drafts.js'
 
 // All types
 export type {
@@ -63,6 +64,12 @@ export type {
   UploadedImage,
   UploadImageInput,
 } from './types.js'
+
+export type {
+  MessageDraft,
+  CreateDraftInput,
+  UpdateDraftInput,
+} from './resources/drafts.js'
 
 export type {
   AdPlatform,

@@ -94,6 +94,7 @@ const RESOURCE_JA: Record<string, string> = {
   operators: '対応担当者',
   chats: 'チャット',
   'scheduled-messages': '送信予約',
+  drafts: '下書き',
   'tracked-links': '計測リンク',
   'ad-platforms': '広告プラットフォーム',
   'status-options': '顧客ステータス定義',
@@ -198,6 +199,10 @@ export function resolveAuditAction(method: string, path: string, body: unknown):
   // ─── キュレート（汎用では不自然/重要なもの） ───
   if (resource === 'friends' && actionWord === 'messages' && m === 'POST') {
     return { ...base, action: 'friend.message_send', summary: '友だちにメッセージを送信', targetType: 'friend', targetId, targetLabel: labelFromBody(body) };
+  }
+  // 下書き（送信相手ごとに貯めておく文面。作成は POST /api/friends/:id/drafts）
+  if (resource === 'friends' && actionWord === 'drafts' && m === 'POST') {
+    return { ...base, action: 'friend.draft_create', summary: '友だちの下書きを作成', targetType: 'friend', targetId, targetLabel: labelFromBody(body) };
   }
   if (resource === 'chats' && actionWord === 'send' && m === 'POST') {
     return { ...base, action: 'chat.message_send', summary: 'チャットでメッセージを送信', targetType: 'chat', targetId, targetLabel: labelFromBody(body) };

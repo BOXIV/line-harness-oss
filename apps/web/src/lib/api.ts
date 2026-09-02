@@ -161,6 +161,20 @@ export type FriendListParams = {
 
 export type FriendWithTags = Friend & { tags: Tag[] }
 
+/** 送信相手ごとの下書き（message_drafts）。自動送信はされず、人が挿入して送る。 */
+export interface MessageDraft {
+  id: string
+  friendId: string
+  title: string | null
+  content: string
+  /** 'admin' = 管理画面のオペレーター / 'api' = Claude の MCP・API キー経由 */
+  createdVia: 'admin' | 'api'
+  createdById: string | null
+  createdByName: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export const api = {
   friends: {
     list: (params?: FriendListParams) => {
@@ -914,6 +928,26 @@ export const api = {
       }),
     cancel: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/scheduled-messages/${id}`, { method: 'DELETE' }),
+  },
+  // 送信相手ごとの下書き (BOXIV)。Claude の MCP / API からも同じ口で置ける。
+  drafts: {
+    list: (friendId: string) =>
+      fetchApi<ApiResponse<MessageDraft[]>>(`/api/friends/${friendId}/drafts`),
+    create: (friendId: string, data: { content: string; title?: string | null }) =>
+      fetchApi<ApiResponse<MessageDraft>>(`/api/friends/${friendId}/drafts`, {
+        method: 'POST',
+        // createdVia は「どこから置いたか」の申告。管理画面は旧 API キーでもログインできて
+        // worker 側の authVia では人と機械を見分けられないので、ここで明示する
+        // （申告しないと MCP / API 扱いになり、手入力した下書きが「MCP / API」と表示される）。
+        body: JSON.stringify({ ...data, createdVia: 'admin' }),
+      }),
+    update: (id: string, data: { content?: string; title?: string | null }) =>
+      fetchApi<ApiResponse<MessageDraft>>(`/api/drafts/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/drafts/${id}`, { method: 'DELETE' }),
   },
   // リッチメニュー (LINE Platform 管理 — D1 永続化なし)
   richMenus: {
