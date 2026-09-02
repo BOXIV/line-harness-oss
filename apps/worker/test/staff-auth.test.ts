@@ -28,6 +28,8 @@ const STAFF_EMAIL = `${STAFF_FIXTURES.staff.id}@example.test`;
 
 beforeEach(async () => {
   await testDb.prepare('DELETE FROM staff_login_challenges').run();
+  // このファイルは HTTP を叩かない（db 層の直接テスト）ので、
+  // fixtures のロール別セッションは発行し直さない — 件数の検証が狂うため。
   await testDb.prepare('DELETE FROM staff_sessions').run();
   await testDb.prepare('DELETE FROM auth_throttle').run();
 });

@@ -4,7 +4,7 @@
  * 「誰が入れるか」を決める経路なので、通る条件より **通らない条件** を厚く固定する。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { STAFF_FIXTURES, ENV_API_KEY, INACTIVE_STAFF, TEST_IP, request, requestAs, testDb } from './support/fixtures.js';
+import { STAFF_FIXTURES, ENV_API_KEY, INACTIVE_STAFF, TEST_IP, request, requestAs, testDb, issueSessions } from './support/fixtures.js';
 
 const STAFF = STAFF_FIXTURES.staff;
 const MANAGER = STAFF_FIXTURES.manager;
@@ -13,6 +13,8 @@ const emailOf = (id: string) => `${id}@example.test`;
 beforeEach(async () => {
   await testDb.prepare('DELETE FROM staff_login_challenges').run();
   await testDb.prepare('DELETE FROM staff_sessions').run();
+  // 掃除でロール別のセッションごと消えるので、requestAs 用に発行し直す。
+  await issueSessions(testDb);
   // 試行元スロットル（migration 920）はテスト間で持ち越さない。
   // 消さないと、前のテストの失敗回数で後のテストが 401 に落ちる。
   await testDb.prepare('DELETE FROM auth_throttle').run();
@@ -297,10 +299,12 @@ describe('セッションの失効が次のリクエストで効く', () => {
     expect((await request('/api/staff/me', b)).status).toBe(200);
   });
 
-  it('API キーでのログアウトは何も壊さない（旧経路の互換）', async () => {
-    const out = await requestAs('manager', '/api/auth/logout', { method: 'POST', body: '{}' });
-    expect(out.status).toBe(200);
-    expect((await requestAs('manager', '/api/staff/me')).status).toBe(200);
+  it('API キーでのログアウトは何も壊さない（オーナーの機械経路）', async () => {
+    // ログアウトはセッションを失効させる操作なので、セッションを持たない
+    // API キー経路では何も起きない（= 次のリクエストも通る）ことを固定する。
+    const key = STAFF_FIXTURES.owner.apiKey;
+    expect((await request('/api/auth/logout', key, { method: 'POST', body: '{}' })).status).toBe(200);
+    expect((await request('/api/staff/me', key)).status).toBe(200);
   });
 });
 
@@ -325,7 +329,12 @@ describe('GET /api/auth/session', () => {
   });
 
   it('API キーで叩くと authVia = api_key・セッション一覧は空', async () => {
-    const res = await requestAs('manager', '/api/auth/session');
+    // API キーで入れるのは owner だけ（2026-09-02 以降）。
+    // fixtures は全ロールにセッションを 1 本発行するので、この確認の前に owner の分を消す。
+    await testDb.prepare('DELETE FROM staff_sessions WHERE staff_id = ?')
+      .bind(STAFF_FIXTURES.owner.id)
+      .run();
+    const res = await request('/api/auth/session', STAFF_FIXTURES.owner.apiKey);
     const body = await res.json<{ data: { authVia: string; sessions: unknown[] } }>();
     expect(body.data.authVia).toBe('api_key');
     expect(body.data.sessions).toEqual([]);
@@ -863,8 +872,10 @@ describe('失敗の加算は「生存中の全チャレンジ」に効く（挙�
 });
 
 describe('POST /api/auth/password — メールアドレス + パスワード', () => {
-  const KEY = STAFF_FIXTURES.manager.apiKey;
-  const MAIL = emailOf(STAFF_FIXTURES.manager.id);
+  // API キーで入れるのは owner だけ（2026-09-02 に移行期間を終了）。
+  // 非オーナーが弾かれることは「オーナー以外のキーは…」のテストで固定する。
+  const KEY = STAFF_FIXTURES.owner.apiKey;
+  const MAIL = emailOf(STAFF_FIXTURES.owner.id);
 
   function login(email: string, password: string, ip = TEST_IP) {
     return request('/api/auth/password', null, {
@@ -878,7 +889,16 @@ describe('POST /api/auth/password — メールアドレス + パスワード', 
     const res = await login(MAIL, KEY);
     expect(res.status).toBe(200);
     const body = await res.json<{ data: { staff: { id: string; role: string } } }>();
-    expect(body.data.staff).toMatchObject({ id: STAFF_FIXTURES.manager.id, role: 'manager' });
+    expect(body.data.staff).toMatchObject({ id: STAFF_FIXTURES.owner.id, role: 'owner' });
+  });
+
+  it('オーナー以外のキーは、正しい組でも 401（メールログインへ誘導する文言）', async () => {
+    const res = await login(emailOf(STAFF_FIXTURES.manager.id), STAFF_FIXTURES.manager.apiKey);
+    expect(res.status).toBe(401);
+    const body = await res.json<{ error: string }>();
+    // 「入れない」だけだと問い合わせになるので、次の行動を必ず書く。
+    expect(body.error).toContain('メールアドレス');
+    expect(body.error).toContain('6桁コード');
   });
 
   it('パスワードが正しくてもメールアドレスが別人なら 401', async () => {
@@ -989,7 +1009,7 @@ describe('POST /api/auth/password — メールアドレス + パスワード', 
     const row = await testDb
       .prepare("SELECT actor_id, actor_via FROM audit_log WHERE action = 'auth.login' ORDER BY created_at DESC LIMIT 1")
       .first<{ actor_id: string; actor_via: string }>();
-    expect(row).toMatchObject({ actor_id: STAFF_FIXTURES.manager.id, actor_via: 'api_key' });
+    expect(row).toMatchObject({ actor_id: STAFF_FIXTURES.owner.id, actor_via: 'api_key' });
   });
 
   it('認証スキップは完全一致（/api/auth/password 以外は素通りしない）', async () => {

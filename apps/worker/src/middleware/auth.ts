@@ -6,6 +6,7 @@ import {
   SESSION_TOKEN_PREFIX,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { API_KEY_AUTH_DISABLED_MESSAGE, isApiKeyAuthAllowed } from '../lib/api-key-login.boxiv.js';
 
 export async function authMiddleware(c: Context<Env>, next: Next): Promise<Response | void> {
   // Skip auth for the LINE webhook endpoint — it uses signature verification instead
@@ -87,6 +88,11 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
   // Check staff_members table first
   const staff = await getStaffByApiKey(c.env.DB, token);
   if (staff) {
+    // 移行期間の終了（2026-09-02）。人間の入口はメールログインのセッションだけにする。
+    // 判定は lib/api-key-login.boxiv.ts の 1 箇所（/api/auth/password と同じ定義を使う）。
+    if (!isApiKeyAuthAllowed(staff.role)) {
+      return c.json({ success: false, error: API_KEY_AUTH_DISABLED_MESSAGE }, 401);
+    }
     c.set('staff', { id: staff.id, name: staff.name, role: staff.role });
     c.set('authVia', 'api_key');
     return next();

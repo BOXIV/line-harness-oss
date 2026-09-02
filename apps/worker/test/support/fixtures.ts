@@ -5,6 +5,7 @@
  * 4 ロール + 無効化済みスタッフの合計 5 行。
  */
 import { SELF, env } from 'cloudflare:test';
+import { createStaffSession } from '@line-crm/db';
 
 export type Role = 'owner' | 'admin' | 'manager' | 'staff';
 
@@ -37,6 +38,21 @@ export const INACTIVE_STAFF = {
 /** vitest.config.ts の bindings.API_KEY と同じ値。env-owner 経路の確認用。 */
 export const ENV_API_KEY = 'test-env-owner-key';
 
+/**
+ * ロールごとのログイン済みセッション（`lhs_<id>.<secret>`）。
+ *
+ * 2026-09-02 に **オーナー以外の API キー認証を禁止**したので、人間の入口は
+ * メールログインのセッションだけになった。テストも同じ経路で叩く
+ * （API キーの可否そのものは api-key-login.test.ts が固定する）。
+ */
+const sessionTokens = new Map<Role, string>();
+
+export function sessionTokenFor(role: Role): string {
+  const token = sessionTokens.get(role);
+  if (!token) throw new Error(`session for ${role} is not seeded (seedStaff を先に呼ぶこと)`);
+  return token;
+}
+
 export async function seedStaff(db: D1Database): Promise<void> {
   const rows = [
     ...ROLES.map((role) => ({ ...STAFF_FIXTURES[role], role, isActive: 1 })),
@@ -52,6 +68,26 @@ export async function seedStaff(db: D1Database): Promise<void> {
       )
       .bind(row.id, row.name, `${row.id}@example.test`, row.role, row.apiKey, row.isActive)
       .run();
+  }
+
+  await issueSessions(db);
+}
+
+/**
+ * 各ロールのセッションを 1 本ずつ発行し直す。
+ *
+ * `DELETE FROM staff_sessions` で掃除するテスト（auth-email / staff-auth）は、
+ * 掃除のあとにこれを呼ぶこと。呼ばないと requestAs のトークンごと消えて、
+ * 本題と関係ない 401 で落ちる。
+ */
+export async function issueSessions(db: D1Database): Promise<void> {
+  sessionTokens.clear();
+  for (const role of ROLES) {
+    const session = await createStaffSession(db, {
+      staffId: STAFF_FIXTURES[role].id,
+      issuedVia: 'admin_issued',
+    });
+    sessionTokens.set(role, session.token);
   }
 }
 
@@ -75,7 +111,12 @@ export function request(path: string, token?: string | null, init: RequestInit =
   return SELF.fetch(`${ORIGIN}${path}`, { ...init, headers });
 }
 
-/** ロール名で叩く糖衣。 */
+/** ロール名で叩く糖衣。人間の入口＝メールログインのセッションで叩く。 */
 export function requestAs(role: Role, path: string, init: RequestInit = {}): Promise<Response> {
+  return request(path, sessionTokenFor(role), init);
+}
+
+/** API キーで叩く（キーの可否そのものを試すテスト用）。 */
+export function requestWithApiKey(role: Role, path: string, init: RequestInit = {}): Promise<Response> {
   return request(path, STAFF_FIXTURES[role].apiKey, init);
 }

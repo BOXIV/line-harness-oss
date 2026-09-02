@@ -12,10 +12,12 @@ import { safeNextPath, setLegacyApiKey, setSession, setStaffProfile } from '@/li
  * Microsoft SafeLinks 等のメールスキャナが URL を先読みして単回リンクを潰す事故を避けるため、
  * リンクは入力欄を埋めるだけで、送信は人が押したときだけ行う。
  *
- * APIキー入力は「管理者用」として畳んで残してある。理由:
+ * 2026-09-02 に移行期間を終了し、**オーナー以外の API キーでのログインを禁止**した。
+ * マネージャー・撮影スタッフは上のメール認証だけが入口になる。
+ *
+ * APIキー入力（パスワード欄）は「オーナー専用」として畳んで残してある。理由:
  *   env API_KEY の保持者にはメールアドレスが無く（合成の env-owner）、メール配信が
  *   止まったときの最後の入口がこれになる。ここを消すと復旧経路ごと消える。
- *   旧方式の遮断フェーズでこの欄ごと外す。
  */
 function LoginForm() {
   const router = useRouter()
@@ -121,7 +123,8 @@ function LoginForm() {
   /**
    * メールアドレス + パスワード（＝APIキー）でログインする。
    *
-   * メールが届かないときの管理者向け経路。旧方式の遮断フェーズで入口ごと外す。
+   * メールが届かないときのオーナー向け経路。オーナー以外のキーは Worker 側が
+   * 401 で拒否する（lib/api-key-login.boxiv.ts）ので、ここは通っても入れない。
    * ⚠️ メールアドレスの一致は **UI 上の確認**であって、セキュリティ上の 2 要素ではない
    *    （キー単体で API は通る。機械クライアントがその経路を使うため変えられない）。
    */
@@ -247,7 +250,7 @@ function LoginForm() {
             onClick={() => { setShowPassword((v) => !v); setError('') }}
             className="text-xs text-gray-400 hover:text-gray-600"
           >
-            {showPassword ? '閉じる' : 'パスワードでログイン（管理者用）'}
+            {showPassword ? '閉じる' : 'パスワードでログイン（オーナー専用）'}
           </button>
           {showPassword && (
             <form onSubmit={submitPassword} className="mt-3">
@@ -270,7 +273,8 @@ function LoginForm() {
                 {loading ? 'ログイン中...' : 'パスワードでログイン'}
               </button>
               <p className="mt-2 text-[11px] text-gray-400">
-                メールが届かないときの管理者向けの入口です。上のメールアドレスと組で使います。
+                メールが届かないときの<strong>オーナー専用</strong>の入口です。上のメールアドレスと組で使います。
+                マネージャー・撮影スタッフの APIキーでのログインは終了しました（上のメール認証をお使いください）。
               </p>
             </form>
           )}

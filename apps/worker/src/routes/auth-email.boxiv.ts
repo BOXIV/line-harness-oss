@@ -37,6 +37,7 @@ import {
   DEFAULT_VERIFY_FAIL_WINDOW_MINUTES,
 } from '@line-crm/db';
 import { requireRole } from '../middleware/role-guard.js';
+import { API_KEY_AUTH_DISABLED_MESSAGE, isApiKeyAuthAllowed } from '../lib/api-key-login.boxiv.js';
 import {
   alertAdminAuth,
   buildLoginPageUrl,
@@ -666,6 +667,9 @@ authEmail.post('/api/auth/password', async (c) => {
       // メール未登録のアカウントは、正しいパスコードを入れても構造上一致しない。
       // ここだけ理由を返す（この分岐に入るには**正しいパスワードが必要**なので、
       // 存在の漏洩にはならない。汎用文言のままだと本人が原因に辿り着けない）。
+      if (resolved.reason === 'api_key_ended') {
+        return c.json({ success: false, error: API_KEY_AUTH_DISABLED_MESSAGE }, 401);
+      }
       if (resolved.reason === 'no_email') {
         return c.json(
           {
@@ -715,9 +719,10 @@ type PasswordLoginResult =
       staff: { id: string; name: string; role: 'owner' | 'admin' | 'manager' | 'staff'; email: string | null; workArea: string | null };
       via: 'api_key' | 'env_key';
     }
-  // 'no_email' = パスワードは正しいが、そのアカウントにメールアドレスが無い。
-  //   この分岐に入るには正しいパスワードが必要なので、理由を返しても存在は漏れない。
-  | { ok: false; reason: 'mismatch' | 'no_email' };
+  // 'no_email'      = パスワードは正しいが、そのアカウントにメールアドレスが無い。
+  // 'api_key_ended' = パスワード（APIキー）は正しいが、そのロールではもう使えない。
+  //   どちらの分岐も**正しいパスワードが必要**なので、理由を返しても存在は漏れない。
+  | { ok: false; reason: 'mismatch' | 'no_email' | 'api_key_ended' };
 
 /**
  * メールアドレスとパスワード（＝APIキー）の組を検証する。
@@ -739,6 +744,12 @@ async function resolvePasswordLogin(
     // 理由を返して原因に辿り着けるようにする（#88 で作成時のメール必須化が入っているので
     // 新規では起きないが、既存行や直接 SQL で作られた行では起こりうる）。
     if (!staff.email || !staff.email.trim()) return { ok: false, reason: 'no_email' };
+    // 移行期間の終了（2026-09-02）。オーナー以外は API キーでは入れない。
+    // ここで止めないと「ログインは通ったのに、次のリクエストから全部 401」になり、
+    // 画面上は原因不明の不具合に見える（authMiddleware も同じ定義で拒否する）。
+    // ⚠️ メール未登録の判定より **後**。メールが無い人にはまず登録を依頼してもらう
+    //    必要があり、「メールでログインしてください」だけでは詰むため。
+    if (!isApiKeyAuthAllowed(staff.role)) return { ok: false, reason: 'api_key_ended' };
     if (normalizeEmail(staff.email) !== normalizeEmail(email)) return { ok: false, reason: 'mismatch' };
     return {
       ok: true,

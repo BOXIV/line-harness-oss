@@ -14,7 +14,7 @@ import {
   createStaffSession,
   listStaffSessions,
 } from '@line-crm/db';
-import { ENV_API_KEY, STAFF_FIXTURES, request, requestAs, testDb } from './support/fixtures.js';
+import { ENV_API_KEY, STAFF_FIXTURES, request, requestAs, requestWithApiKey, testDb } from './support/fixtures.js';
 
 /** テスト用スタッフを 1 人作って id を返す（後片付けはテスト側で DELETE する）。 */
 async function createStaff(
@@ -280,8 +280,9 @@ describe('監査ログに認証経路が残る（migration 919 の actor_via）'
   });
 
   it('スタッフの API キー経由の変更は api_key として残る', async () => {
+    // API キーで入れるのは owner だけ（2026-09-02 に移行期間を終了）。
     const id = await newStaff('phase2-via-key@example.test');
-    const res = await requestAs('manager', `/api/staff/${id}`, {
+    const res = await requestWithApiKey('owner', `/api/staff/${id}`, {
       method: 'PATCH',
       body: JSON.stringify({ name: '経路検証 apikey' }),
     });
