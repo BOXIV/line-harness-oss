@@ -6,6 +6,7 @@
  * 旧経路へフォールスルーしないこと」をここで先に固定しておく。
  */
 import { describe, expect, it } from 'vitest';
+import { createStaffSession } from '@line-crm/db';
 import { ENV_API_KEY, INACTIVE_STAFF, STAFF_FIXTURES, request, testDb } from './support/fixtures.js';
 
 const PROBE = '/api/staff/me';
@@ -31,12 +32,18 @@ describe('authMiddleware', () => {
     expect(res.status).toBe(401);
   });
 
-  it('既存 lh_ キーは staff_members として認証される', async () => {
-    const res = await request(PROBE, STAFF_FIXTURES.manager.apiKey);
+  it('owner ロールの lh_ キーは staff_members として認証される', async () => {
+    const res = await request(PROBE, STAFF_FIXTURES.owner.apiKey);
     expect(res.status).toBe(200);
     const body = await res.json<{ data: { id: string; role: string } }>();
-    expect(body.data.id).toBe(STAFF_FIXTURES.manager.id);
-    expect(body.data.role).toBe('manager');
+    expect(body.data.id).toBe(STAFF_FIXTURES.owner.id);
+    expect(body.data.role).toBe('owner');
+  });
+
+  it('オーナー以外の lh_ キーは 401（2026-09-02 に移行期間を終了）', async () => {
+    // 詳細と境界は api-key-login.test.ts。ここでは「認証の入口で落ちる」ことだけ固定する。
+    const res = await request(PROBE, STAFF_FIXTURES.manager.apiKey);
+    expect(res.status).toBe(401);
   });
 
   it('env API_KEY は env-owner として通る', async () => {
@@ -52,13 +59,19 @@ describe('authMiddleware', () => {
     expect(res.status).toBe(401);
   });
 
-  it('is_active を戻すと同じキーで再び通る（在籍状態を毎回引き直している）', async () => {
+  it('is_active を戻すとセッションで再び通る（在籍状態を毎回引き直している）', async () => {
+    // 退職者の API キーは在籍を戻しても通らない（owner 以外は禁止）。
+    // 「在籍状態を毎回引き直している」ことは、人間の入口＝セッションで確かめる。
     await testDb.prepare('UPDATE staff_members SET is_active = 1 WHERE id = ?')
       .bind(INACTIVE_STAFF.id)
       .run();
     try {
-      const res = await request(PROBE, INACTIVE_STAFF.apiKey);
-      expect(res.status).toBe(200);
+      const session = await createStaffSession(testDb, { staffId: INACTIVE_STAFF.id });
+      expect((await request(PROBE, session.token)).status).toBe(200);
+      await testDb.prepare('UPDATE staff_members SET is_active = 0 WHERE id = ?')
+        .bind(INACTIVE_STAFF.id)
+        .run();
+      expect((await request(PROBE, session.token)).status).toBe(401);
     } finally {
       await testDb.prepare('UPDATE staff_members SET is_active = 0 WHERE id = ?')
         .bind(INACTIVE_STAFF.id)

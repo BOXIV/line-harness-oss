@@ -12,7 +12,7 @@
  *     出ないと、用意した下書きは誰にも気づかれない。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { requestAs, testDb } from './support/fixtures.js';
+import { requestAs, requestWithApiKey, testDb } from './support/fixtures.js';
 
 const FRIEND_A = 'friend-draft-a';
 const FRIEND_B = 'friend-draft-b';
@@ -128,8 +128,17 @@ describe('作成元（created_via）の決まり方', () => {
   //    authVia≠session を機械扱いにしていたら、ダッシュボードで手入力した下書きが
   //    「MCP / API」と表示された（test 環境で実測）。だから呼び出し側の申告を優先する。
   it('申告が無ければ機械（MCP / API）扱い', async () => {
-    await createDraft(FRIEND_A, { content: 'Claude が用意した返信案' });
+    // MCP / スクリプトは API キーで叩き、createdVia を申告しない。
+    await requestWithApiKey('owner', `/api/friends/${FRIEND_A}/drafts`, {
+      method: 'POST',
+      body: JSON.stringify({ content: 'Claude が用意した返信案' }),
+    });
     expect((await listDrafts(FRIEND_A))[0].createdVia).toBe('api');
+  });
+
+  it('管理画面のセッションから申告が無ければ人（admin）扱い', async () => {
+    await createDraft(FRIEND_A, { content: 'セッションで書いた文面' });
+    expect((await listDrafts(FRIEND_A))[0].createdVia).toBe('admin');
   });
 
   it('管理画面からの申告（createdVia=admin）は API キー経由でも尊重される', async () => {
@@ -138,7 +147,10 @@ describe('作成元（created_via）の決まり方', () => {
   });
 
   it('知らない値の申告は無視して既定に落とす（CHECK 制約違反で 500 にしない）', async () => {
-    const res = await createDraft(FRIEND_A, { content: 'x', createdVia: 'なりすまし' });
+    const res = await requestWithApiKey('owner', `/api/friends/${FRIEND_A}/drafts`, {
+      method: 'POST',
+      body: JSON.stringify({ content: 'x', createdVia: 'なりすまし' }),
+    });
     expect(res.status).toBe(201);
     expect((await listDrafts(FRIEND_A))[0].createdVia).toBe('api');
   });
