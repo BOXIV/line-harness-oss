@@ -16,7 +16,8 @@ import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
-import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
+import { buildQuoteIndex, firstSentMessageId } from '../utils/quote.js';
+import { loadMessageWindow, parseMessageLimit } from '../utils/message-window.boxiv.js';
 import type { Env } from '../index.js';
 import { requireRole } from '../middleware/role-guard.js';
 import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
@@ -389,16 +390,13 @@ friends.put('/api/friends/:id/metadata', requireRole('owner','admin','manager'),
 friends.get('/api/friends/:id/messages', requireRole('owner','admin','manager'), async (c) => {
   try {
     const friendId = c.req.param('id');
-    const result = await c.env.DB
-      .prepare(
-        `SELECT id, direction, message_type, content, status, line_message_id, quoted_message_id, sent_by_name, created_at
-         FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`,
-      )
-      .bind(friendId)
-      .all<QuotableRow & { status: string | null; sent_by_name: string | null; created_at: string }>();
+    // 既定は直近ウィンドウ（新しい方から）。?before=<createdAt> でさかのぼる。
+    const { rows, hasMore } = await loadMessageWindow(c.env.DB, friendId, {
+      limit: parseMessageLimit(c.req.query('limit')),
+      before: c.req.query('before') ?? null,
+    });
 
     // 引用返信の引用元を解決して quotedMessage として返す
-    const rows = result.results;
     const quoteIndex = await buildQuoteIndex(c.env.DB, friendId, rows);
     const data = rows.map((m) => ({
       id: m.id,
@@ -412,7 +410,8 @@ friends.get('/api/friends/:id/messages', requireRole('owner','admin','manager'),
       quotedMessageId: m.quoted_message_id ?? null,
       quotedMessage: m.quoted_message_id ? quoteIndex.get(m.quoted_message_id) ?? null : null,
     }));
-    return c.json({ success: true, data });
+    // hasMore: data の先頭より前にまだメッセージがある（= さらにさかのぼれる）。
+    return c.json({ success: true, data, hasMore });
   } catch (err) {
     console.error('GET /api/friends/:id/messages error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);

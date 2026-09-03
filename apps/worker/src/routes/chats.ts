@@ -7,7 +7,8 @@ import {
   type NotionFriendLinks,
 } from '../services/notion-friend-link.boxiv.js';
 import { logFailedOutgoing } from '../services/message-log.boxiv.js';
-import { buildQuoteIndex, firstSentMessageId, type QuotableRow } from '../utils/quote.js';
+import { buildQuoteIndex, firstSentMessageId } from '../utils/quote.js';
+import { loadMessageWindow } from '../utils/message-window.boxiv.js';
 import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
 import {
   getOperators,
@@ -231,14 +232,11 @@ chats.get('/api/chats/:id', async (c) => {
       .bind(item.friend_id)
       .first<{ display_name: string | null; managed_name: string | null; picture_url: string | null; line_user_id: string; metadata: string | null }>();
 
-    // チャットに関連するメッセージログも取得
-    const messages = await c.env.DB
-      .prepare(`SELECT id, friend_id, direction, message_type, content, status, line_message_id, quoted_message_id, sent_by_name, created_at FROM messages_log WHERE friend_id = ? ORDER BY created_at ASC LIMIT 200`)
-      .bind(item.friend_id)
-      .all();
+    // チャットに関連するメッセージログも取得（直近ウィンドウ = 新しい方から）。
+    // さかのぼりは GET /api/friends/:id/messages?before=... が担当する。
+    const { rows, hasMore } = await loadMessageWindow(c.env.DB, item.friend_id);
 
     // 引用返信の引用元を解決（quoted_message_id → 引用元メッセージのプレビュー）
-    const rows = messages.results as unknown as Array<QuotableRow & { status: string | null; sent_by_name: string | null; created_at: string }>;
     const quoteIndex = await buildQuoteIndex(c.env.DB, item.friend_id, rows);
 
     return c.json({
@@ -258,6 +256,8 @@ chats.get('/api/chats/:id', async (c) => {
         notes: item.notes,
         lastMessageAt: item.last_message_at,
         createdAt: item.created_at,
+        // 直近ウィンドウより前にまだメッセージがある。管理画面は「以前のメッセージを読み込む」を出す。
+        hasMoreMessages: hasMore,
         messages: rows.map((m) => ({
           id: m.id,
           direction: m.direction,

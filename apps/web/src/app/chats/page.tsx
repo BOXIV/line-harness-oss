@@ -103,7 +103,10 @@ interface ChatDetail extends Chat {
   friendPictureUrl: string | null
   /** 出品者/購入者それぞれの連携。旧 worker と繋がったときは undefined。 */
   notionLinks?: NotionFriendLinks
+  /** 直近ウィンドウのメッセージ（古い順）。これより前は before= でさかのぼる。 */
   messages?: ChatMessage[]
+  /** ウィンドウより前にまだメッセージがある。旧 worker と繋がったときは undefined。 */
+  hasMoreMessages?: boolean
 }
 
 // BOXIV: shared formatter — friend管理 と 個別チャット を同じ表示に統一
@@ -302,6 +305,10 @@ export default function ChatsPage() {
     if (el) el.scrollTop = el.scrollHeight
   }, [])
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null)
+  // さかのぼり読み込み（直近ウィンドウより前）。チャットを切り替えたら捨てる。
+  const [olderMessages, setOlderMessages] = useState<ChatMessage[]>([])
+  const [hasMoreOlder, setHasMoreOlder] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
 
   useEffect(() => {
     try {
@@ -401,12 +408,20 @@ export default function ChatsPage() {
   }, [loadChats])
 
   useEffect(() => {
+    setOlderMessages([])
+    setHasMoreOlder(false)
     if (selectedChatId) {
       loadChatDetail(selectedChatId)
     } else {
       setChatDetail(null)
     }
   }, [selectedChatId, loadChatDetail])
+
+  // サーバが「まだ前がある」と言ったら遡りボタンを出す。
+  // 遡り済みのぶんは olderMessages 側の hasMore が正なので、そちらが false になったら畳む。
+  useEffect(() => {
+    if (olderMessages.length === 0) setHasMoreOlder(Boolean(chatDetail?.hasMoreMessages))
+  }, [chatDetail?.hasMoreMessages, chatDetail?.id, olderMessages.length])
 
   // BOXIV: 5s polling — auto-refresh the open chat detail so automation /
   // booking / auto-reply sends and incoming messages appear without manual reload.
@@ -440,6 +455,42 @@ export default function ChatsPage() {
     const t3 = window.setTimeout(scroll, 1000)
     return () => { window.clearTimeout(t1); window.clearTimeout(t2); window.clearTimeout(t3) }
   }, [chatDetail?.id, chatDetail?.messages?.length])
+
+  // 遡って読んだぶん + 直近ウィンドウ。表示は常に古い順。
+  const visibleMessages = useMemo(
+    () => [...olderMessages, ...(chatDetail?.messages ?? [])],
+    [olderMessages, chatDetail?.messages],
+  )
+
+  // 「以前のメッセージを読み込む」。直近ウィンドウの先頭より前を 1 ページ足す。
+  // 読み込み後もユーザーが見ている行が動かないよう、増えた高さぶんだけ scrollTop を戻す。
+  const loadOlderMessages = useCallback(async () => {
+    if (loadingOlder || !chatDetail?.friendId) return
+    const oldest = (olderMessages[0] ?? chatDetail.messages?.[0])?.createdAt
+    if (!oldest) return
+    setLoadingOlder(true)
+    const el = messagesContainerRef.current
+    const prevHeight = el?.scrollHeight ?? 0
+    const prevTop = el?.scrollTop ?? 0
+    try {
+      const res = await fetchApi<{ success: boolean; data: ChatMessage[]; hasMore?: boolean }>(
+        `/api/friends/${chatDetail.friendId}/messages?before=${encodeURIComponent(oldest)}`,
+      )
+      if (res.success) {
+        const seen = new Set(olderMessages.map((m) => m.id))
+        const fresh = (res.data ?? []).filter((m) => !seen.has(m.id))
+        setOlderMessages((prev) => [...fresh, ...prev])
+        setHasMoreOlder(Boolean(res.hasMore))
+        requestAnimationFrame(() => {
+          const node = messagesContainerRef.current
+          if (node) node.scrollTop = prevTop + (node.scrollHeight - prevHeight)
+        })
+      }
+    } catch {
+      // 失敗時はボタンを残して再試行できるようにするだけ
+    }
+    setLoadingOlder(false)
+  }, [chatDetail?.friendId, chatDetail?.messages, loadingOlder, olderMessages])
 
   // 引用プレビューのクリック → 引用元メッセージへスクロール＋一瞬ハイライト。
   // 引用元が読み込み済み（直近200件）にあれば DOM に存在しジャンプできる。範囲外なら何もしない。
@@ -1031,12 +1082,23 @@ export default function ChatsPage() {
 
               {/* Messages — LINE-style chat bubbles */}
               <div ref={attachMessagesContainer} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
-                {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
+                {hasMoreOlder && (
+                  <div className="text-center pb-2">
+                    <button
+                      onClick={loadOlderMessages}
+                      disabled={loadingOlder}
+                      className="px-3 py-1 text-xs font-medium text-white/90 bg-white/15 hover:bg-white/25 disabled:opacity-50 rounded-full transition-colors"
+                    >
+                      {loadingOlder ? '読み込み中…' : '以前のメッセージを読み込む'}
+                    </button>
+                  </div>
+                )}
+                {visibleMessages.length === 0 ? (
                   <div className="text-center py-8">
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>
                   </div>
                 ) : (
-                  (chatDetail.messages ?? []).map((msg) => (
+                  visibleMessages.map((msg) => (
                     <MessageBubble
                       key={msg.id}
                       message={msg}
