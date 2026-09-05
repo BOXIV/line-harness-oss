@@ -1203,6 +1203,44 @@ async function resolveXHarnessToken(
   }
 }
 
+// ─── LIFF IDトークン検証（共有ヘルパ） ──────────────────────────
+
+/**
+ * LIFF SDK の ID トークンを LINE の verify エンドポイントで検証し、ペイロードを返す。
+ * 検証失敗（改ざん・期限切れ・別チャネル発行）は null。
+ *
+ * LIFF IDトークンの client_id は LIFF Channel ID。LINE_CHANNEL_ID を利用。
+ * 既存実装と同様、複数アカウントをフォールバックで試す。
+ */
+export async function verifyLiffIdToken(
+  db: D1Database,
+  env: { LINE_CHANNEL_ID: string; LINE_LOGIN_CHANNEL_ID: string },
+  idToken: string,
+): Promise<{ sub: string; name?: string; email?: string } | null> {
+  const channelIds = [env.LINE_CHANNEL_ID, env.LINE_LOGIN_CHANNEL_ID].filter(Boolean);
+  const dbAccounts = await getLineAccounts(db);
+  for (const acct of dbAccounts) {
+    if (acct.channel_id && !channelIds.includes(acct.channel_id)) {
+      channelIds.push(acct.channel_id);
+    }
+    if (acct.login_channel_id && !channelIds.includes(acct.login_channel_id)) {
+      channelIds.push(acct.login_channel_id);
+    }
+  }
+
+  for (const channelId of channelIds) {
+    const verifyRes = await fetch('https://api.line.me/oauth2/v2.1/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ id_token: idToken, client_id: channelId }),
+    });
+    if (verifyRes.ok) {
+      return await verifyRes.json<{ sub: string; name?: string; email?: string }>();
+    }
+  }
+  return null;
+}
+
 // ─── 撮影予約 LIFF自動認証 ──────────────────────────────────────
 
 /**
@@ -1225,31 +1263,7 @@ liffRoutes.post('/api/liff/booking-auth', async (c) => {
       return c.json({ success: false, error: 'SESSION_SECRET is not configured' }, 500);
     }
 
-    // LIFF IDトークンの client_id は LIFF Channel ID。LINE_CHANNEL_ID を利用。
-    // 既存実装と同様、複数アカウントをフォールバックで試す。
-    const channelIds = [c.env.LINE_CHANNEL_ID, c.env.LINE_LOGIN_CHANNEL_ID].filter(Boolean);
-    const dbAccounts = await getLineAccounts(c.env.DB);
-    for (const acct of dbAccounts) {
-      if (acct.channel_id && !channelIds.includes(acct.channel_id)) {
-        channelIds.push(acct.channel_id);
-      }
-      if (acct.login_channel_id && !channelIds.includes(acct.login_channel_id)) {
-        channelIds.push(acct.login_channel_id);
-      }
-    }
-
-    let verified: { sub: string; name?: string; email?: string } | null = null;
-    for (const channelId of channelIds) {
-      const verifyRes = await fetch('https://api.line.me/oauth2/v2.1/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ id_token: body.idToken, client_id: channelId }),
-      });
-      if (verifyRes.ok) {
-        verified = await verifyRes.json<{ sub: string; name?: string; email?: string }>();
-        break;
-      }
-    }
+    const verified = await verifyLiffIdToken(c.env.DB, c.env, body.idToken);
     if (!verified) {
       return c.json({ success: false, error: 'Invalid ID token' }, 401);
     }
