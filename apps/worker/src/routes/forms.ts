@@ -12,9 +12,21 @@ import {
 import { getFriendByLineUserId, getFriendById } from '@line-crm/db';
 import { addTagToFriend, enrollFriendInScenario } from '@line-crm/db';
 import type { Form as DbForm, FormSubmission as DbFormSubmission } from '@line-crm/db';
+import { verifyLiffIdToken } from './liff.js';
 import type { Env } from '../index.js';
 
 const forms = new Hono<Env>();
+
+// friends.metadata のうち他機能が「正」として読むキー。フォームの field 名が
+// これと衝突しても submit 経由では書かない（公開エンドポイントからの連携破壊防止）。
+const RESERVED_METADATA_KEYS = new Set([
+  'notionLinks', // notion-friend-link.boxiv.ts の連携の正
+  'notion', // 同・後方互換の写し
+  'listing_price_notified', // listing-entry.boxiv.ts の二重通知抑止
+  'buyer_link_notified', // 同上
+  'preferred_hour', // step-delivery.ts の配信時刻
+  'x_username', // liff.ts X Harness 連携
+]);
 
 function serializeForm(row: DbForm) {
   return {
@@ -181,8 +193,7 @@ forms.post('/api/forms/:id/submit', async (c) => {
     }
 
     const body = await c.req.json<{
-      lineUserId?: string;
-      friendId?: string;
+      idToken?: string;
       data?: Record<string, unknown>;
     }>();
 
@@ -208,12 +219,19 @@ forms.post('/api/forms/:id/submit', async (c) => {
       }
     }
 
-    // Resolve friend by lineUserId or friendId
-    let friendId: string | null = body.friendId ?? null;
-    if (!friendId && body.lineUserId) {
-      const friend = await getFriendByLineUserId(c.env.DB, body.lineUserId);
-      if (friend) {
-        friendId = friend.id;
+    // 友だち解決は LIFF ID トークンの検証済み sub のみ。ここは無認証の公開
+    // エンドポイントなので、body 申告の friendId / lineUserId を信頼すると
+    // 任意の友だちへの metadata 上書き・タグ/シナリオ付与・push 送信ができてしまう
+    // （2026-09 監査）。トークン無し / 検証失敗でも提出は friend_id=null で保存する
+    // （匿名送信の互換維持）が、下の副作用ブロックには入らない。
+    let friendId: string | null = null;
+    if (body.idToken) {
+      const verified = await verifyLiffIdToken(c.env.DB, c.env, body.idToken);
+      if (verified) {
+        const friend = await getFriendByLineUserId(c.env.DB, verified.sub);
+        if (friend) {
+          friendId = friend.id;
+        }
       }
     }
 
@@ -233,12 +251,20 @@ forms.post('/api/forms/:id/submit', async (c) => {
 
       // Save response data to friend's metadata
       if (form.save_to_metadata) {
+        // 書いてよいのは form.fields に定義された name だけ（body.data の任意キー混入で
+        // 連携キーが上書きされるのを防ぐ）。予約キーは field 名が衝突しても書かない。
+        const allowedNames = new Set(fields.map((f) => f.name));
+        const metadataSafe = Object.fromEntries(
+          Object.entries(submissionData).filter(
+            ([key]) => allowedNames.has(key) && !RESERVED_METADATA_KEYS.has(key),
+          ),
+        );
         sideEffects.push(
           (async () => {
             const friend = await getFriendById(db, friendId!);
             if (!friend) return;
             const existing = JSON.parse(friend.metadata || '{}') as Record<string, unknown>;
-            const merged = { ...existing, ...submissionData };
+            const merged = { ...existing, ...metadataSafe };
             await db
               .prepare(`UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?`)
               .bind(JSON.stringify(merged), now, friendId)

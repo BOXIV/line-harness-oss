@@ -4,7 +4,7 @@
  * Flow:
  * 1. Fetch form definition from API using form ID from query params
  * 2. Render form fields dynamically (text, email, select, radio, etc.)
- * 3. On submit: POST to /api/forms/:id/submit with user's lineUserId
+ * 3. On submit: POST to /api/forms/:id/submit with LIFF ID token (server verifies identity)
  * 4. Show success message (auto-close in LINE app)
  *
  * URL format: https://liff.line.me/{LIFF_ID}?page=form&id={FORM_ID}
@@ -391,8 +391,9 @@ async function submitForm(): Promise<void> {
     const data = collectFormData();
     console.log('Form data collected:', JSON.stringify(data));
     const body: Record<string, unknown> = { data };
-    if (state.profile?.userId) body.lineUserId = state.profile.userId;
-    // Note: state.friendId is users.id (UUID), not friends.id — don't send as friendId
+    // 本人性はサーバ側が ID トークンの検証で確認する（lineUserId の自己申告は 2026-09 監査で廃止）。
+    // LIFF 外ブラウザ等でトークンが無ければ null のまま送る＝匿名提出（保存のみ・副作用なし）。
+    body.idToken = liff.getIDToken();
     console.log('Submitting to:', `/api/forms/${state.formDef.id}/submit`);
 
     const res = await apiCall(`/api/forms/${state.formDef.id}/submit`, {

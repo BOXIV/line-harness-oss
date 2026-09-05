@@ -2,6 +2,7 @@ import { extractFlexAltText } from '../utils/flex-alt-text.js';
 import {
   getBroadcastById,
   updateBroadcastStatus,
+  claimBroadcastForSending,
   jstNow,
 } from '@line-crm/db';
 import type { Broadcast } from '@line-crm/db';
@@ -24,8 +25,16 @@ export async function processSegmentSend(
   broadcastId: string,
   condition: SegmentCondition,
 ): Promise<Broadcast> {
-  // Mark as sending
-  await updateBroadcastStatus(db, broadcastId, 'sending');
+  // 送信権を原子的に確保（draft/scheduled → sending）。並行する send-segment 呼び出しが
+  // 両方 draft を観測して両方 multicast に進む TOCTOU を、条件付き UPDATE の勝者 1 つに絞る
+  // （processBroadcastSend と同型。ルート側の status チェックは読み取りのみで原子性が無い）。
+  const claimed = await claimBroadcastForSending(db, broadcastId);
+  if (!claimed) {
+    const current = await getBroadcastById(db, broadcastId);
+    if (!current) throw new Error(`Broadcast ${broadcastId} not found`);
+    // 既に sending / sent。何もしないで現状を返す（送り直さない）。
+    return current;
+  }
 
   const broadcast = await getBroadcastById(db, broadcastId);
   if (!broadcast) {
