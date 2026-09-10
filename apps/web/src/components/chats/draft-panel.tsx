@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type MessageDraft } from '@/lib/api'
 import { draftAuthorLabel } from '@/lib/chat-draft'
+import TemplatePickerModal from '@/components/chats/template-picker-modal'
+import type { FriendSource } from '@/lib/friend-source'
 
 interface DraftPanelProps {
   isOpen: boolean
@@ -15,6 +17,8 @@ interface DraftPanelProps {
   onInsert: (draft: MessageDraft) => void
   /** 件数が変わったとき（作成/削除）。チャット一覧の ✏️ バッジを更新するため。 */
   onChanged?: () => void
+  /** 送信相手の分類。テンプレ選択の初期タブ（出品者向け/購入者向け）に使う。 */
+  friendSource?: FriendSource
 }
 
 function formatDt(iso: string): string {
@@ -33,6 +37,7 @@ function formatDt(iso: string): string {
  *   一覧: 保存済みの下書きを選ぶ。高さは中身なり（最大 85vh）。
  *   編集: 本文を書く。**高さを 92vh に固定して余白を本文欄に配る**ので、
  *         入力欄はブラウザ縦幅の 7 割前後になる（rows 固定の小さい箱では書きにくかった）。
+ *         本文はテンプレートからも呼び出せる（下書きはテキストで送るので、テキストのテンプレだけ）。
  */
 export default function DraftPanel({
   isOpen,
@@ -42,6 +47,7 @@ export default function DraftPanel({
   currentInput,
   onInsert,
   onChanged,
+  friendSource,
 }: DraftPanelProps) {
   const [items, setItems] = useState<MessageDraft[]>([])
   const [loading, setLoading] = useState(false)
@@ -53,6 +59,7 @@ export default function DraftPanel({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [formTitle, setFormTitle] = useState('')
   const [formContent, setFormContent] = useState('')
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -75,6 +82,7 @@ export default function DraftPanel({
       setEditingId(null)
       setFormTitle('')
       setFormContent('')
+      setShowTemplatePicker(false)
     }
   }, [isOpen, load])
 
@@ -105,15 +113,16 @@ export default function DraftPanel({
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent) => {
-      // 編集中の Escape は一覧に戻すだけ（書きかけをモーダルごと閉じない）。
       if (e.key !== 'Escape') return
+      // テンプレ選択が前面にあるときは、そちらの Escape に任せる（後ろのパネルまで閉じない）。
+      if (showTemplatePicker) return
+      // 編集中の Escape は一覧に戻すだけ（書きかけをモーダルごと閉じない）。
       if (view === 'compose') backToList()
       else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, view, backToList, onClose])
-
+  }, [isOpen, view, showTemplatePicker, backToList, onClose])
 
   /** 新規作成なら draft を渡さない。 */
   const openCompose = (draft?: MessageDraft) => {
@@ -175,6 +184,7 @@ export default function DraftPanel({
   const composing = view === 'compose'
 
   return (
+    <>
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={requestClose} />
 
@@ -210,13 +220,23 @@ export default function DraftPanel({
               {error && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700 shrink-0">{error}</div>
               )}
-              <input
-                type="text"
-                value={formTitle}
-                onChange={(e) => setFormTitle(e.target.value)}
-                placeholder="見出し（任意。例: 価格交渉の返信案）"
-                className="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 shrink-0"
-              />
+              {/* 見出しとテンプレ選択は 1 行に畳む。行を増やすほど本文欄が痩せるため。 */}
+              <div className="flex items-center gap-2 shrink-0">
+                <input
+                  type="text"
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  placeholder="見出し（任意。例: 価格交渉の返信案）"
+                  className="flex-1 min-w-0 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowTemplatePicker(true)}
+                  className="shrink-0 px-3 min-h-[44px] text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  📋 テンプレートから選択
+                </button>
+              </div>
               <textarea
                 value={formContent}
                 onChange={(e) => setFormContent(e.target.value)}
@@ -332,5 +352,19 @@ export default function DraftPanel({
         )}
       </div>
     </div>
+
+    {/* 下書きは本文をテキストとして送るので、Flex テンプレは選ばせない（JSON がそのまま届く）。 */}
+    <TemplatePickerModal
+      isOpen={showTemplatePicker}
+      onClose={() => setShowTemplatePicker(false)}
+      onSubmit={({ content }) => {
+        setFormContent(content)
+        setShowTemplatePicker(false)
+      }}
+      submitLabel="この内容を下書きに反映"
+      friendSource={friendSource}
+      textOnly
+    />
+    </>
   )
 }
