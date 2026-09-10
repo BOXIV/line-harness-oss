@@ -78,13 +78,29 @@ export default function DraftPanel({
     }
   }, [isOpen, load])
 
+  /**
+   * 書きかけを捨てる操作の前に一度だけ聞く。
+   * 本文欄が画面の 7 割あるぶん長文を書くので、背景クリックや ✕ で
+   * 数百字が黙って消えると被害が大きい。
+   */
+  const confirmDiscard = useCallback(
+    () => view !== 'compose' || !formContent.trim() || confirm('書きかけの内容を破棄しますか？'),
+    [view, formContent],
+  )
+
   const backToList = useCallback(() => {
+    if (!confirmDiscard()) return
     setView('list')
     setEditingId(null)
     setFormTitle('')
     setFormContent('')
     setError('')
-  }, [])
+  }, [confirmDiscard])
+
+  const requestClose = useCallback(() => {
+    if (!confirmDiscard()) return
+    onClose()
+  }, [confirmDiscard, onClose])
 
   useEffect(() => {
     if (!isOpen) return
@@ -97,6 +113,7 @@ export default function DraftPanel({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [isOpen, view, backToList, onClose])
+
 
   /** 新規作成なら draft を渡さない。 */
   const openCompose = (draft?: MessageDraft) => {
@@ -119,7 +136,11 @@ export default function DraftPanel({
         : await api.drafts.create(friendId, { content, title })
       if (res.success) {
         const wasNew = editingId === null
-        backToList()
+        // 保存できているので破棄の確認は挟まない。
+        setView('list')
+        setEditingId(null)
+        setFormTitle('')
+        setFormContent('')
         await load()
         // 件数が変わるのは新規のときだけ（更新では ✏️ バッジは動かない）。
         if (wasNew) onChanged?.()
@@ -155,7 +176,7 @@ export default function DraftPanel({
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={requestClose} />
 
       {/* 編集中だけ高さを固定する。固定しないと本文欄が中身なりに縮み、
           「箱が小さいから入力欄も小さい」状態に戻ってしまう。 */}
@@ -172,7 +193,7 @@ export default function DraftPanel({
             <p className="text-xs text-gray-500 mt-0.5 truncate">{friendName}</p>
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="text-gray-400 hover:text-gray-600 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="閉じる"
           >

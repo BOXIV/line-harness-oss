@@ -82,6 +82,21 @@ export default function ScheduledMessagePanel({
   /** 開いた直後は「予約を作る」画面。登録できたら一覧へ切り替える。 */
   const [view, setView] = useState<'compose' | 'list'>('compose')
 
+  /**
+   * 書きかけを捨てる操作の前に一度だけ聞く。
+   * 本文欄が画面の 7 割あるぶん長文を書くので、背景クリックや ✕ で
+   * 数百字が黙って消えると被害が大きい。
+   */
+  const confirmDiscard = useCallback(
+    () => view !== 'compose' || !content.trim() || confirm('書きかけの内容を破棄しますか？'),
+    [view, content],
+  )
+
+  const requestClose = useCallback(() => {
+    if (!confirmDiscard()) return
+    onClose()
+  }, [confirmDiscard, onClose])
+
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -114,11 +129,11 @@ export default function ScheduledMessagePanel({
       if (showTemplatePicker) return
       // 一覧を見ている最中の Escape は作成画面に戻すだけ（書きかけを閉じない）。
       if (view === 'list') setView('compose')
-      else onClose()
+      else requestClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, view, showTemplatePicker, onClose])
+  }, [isOpen, view, showTemplatePicker, requestClose])
 
   const handleCreate = async () => {
     const trimmed = content.trim()
@@ -170,7 +185,7 @@ export default function ScheduledMessagePanel({
   return (
     <>
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/50" onClick={requestClose} />
 
       {/* 作成中だけ高さを固定する。固定しないと本文欄が中身なりに縮み、
           「箱が小さいから入力欄も小さい」状態に戻ってしまう。 */}
@@ -187,7 +202,7 @@ export default function ScheduledMessagePanel({
             <p className="text-xs text-gray-500 mt-0.5 truncate">{friendName}</p>
           </div>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="text-gray-400 hover:text-gray-600 min-h-[44px] min-w-[44px] flex items-center justify-center"
             aria-label="閉じる"
           >
