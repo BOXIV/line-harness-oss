@@ -34,6 +34,12 @@ interface TemplatePickerModalProps {
    * 相手と違う区分のテンプレを送りたいときはタブを切り替えればよい。
    */
   friendSource?: FriendSource
+  /**
+   * テキストのテンプレートだけを選ばせる。
+   * 下書きのように **本文が必ずテキストとして送られる** 置き場から呼ぶときに使う
+   * （Flex の JSON を入れてしまうと、JSON がそのまま本文として顧客に届く）。
+   */
+  textOnly?: boolean
 }
 
 const messageTypeLabels: Record<string, string> = {
@@ -43,7 +49,7 @@ const messageTypeLabels: Record<string, string> = {
   carousel: 'カルーセル',
 }
 
-export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitLabel = 'この内容で送信', friendSource }: TemplatePickerModalProps) {
+export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitLabel = 'この内容で送信', friendSource, textOnly = false }: TemplatePickerModalProps) {
   const [templates, setTemplates] = useState<Template[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -150,8 +156,8 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
   if (!isOpen) return null
 
   const messageType = selected?.messageType
-  const canEdit = messageType === 'text' || messageType === 'flex'
-  const isFlex = messageType === 'flex'
+  const canEdit = messageType === 'text' || (!textOnly && messageType === 'flex')
+  const isFlex = !textOnly && messageType === 'flex'
   let flexJsonValid = true
   if (isFlex) {
     try { JSON.parse(editedContent) } catch { flexJsonValid = false }
@@ -271,7 +277,7 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
               ) : (
                 <ul className="space-y-2">
                   {filtered.map((t) => {
-                    const supported = t.messageType === 'text' || t.messageType === 'flex'
+                    const supported = t.messageType === 'text' || (!textOnly && t.messageType === 'flex')
                     return (
                       <li key={t.id}>
                         <button
@@ -304,7 +310,9 @@ export default function TemplatePickerModal({ isOpen, onClose, onSubmit, submitL
                           <p className="text-xs text-gray-500 line-clamp-2 break-words">
                             {supported
                               ? t.messageContent.slice(0, 120)
-                              : `※ ${messageTypeLabels[t.messageType] || t.messageType} はこのバージョンでは未対応`}
+                              : textOnly && t.messageType === 'flex'
+                                ? '※ ここに入れられるのはテキストのテンプレートだけです'
+                                : `※ ${messageTypeLabels[t.messageType] || t.messageType} はこのバージョンでは未対応`}
                           </p>
                         </button>
                       </li>

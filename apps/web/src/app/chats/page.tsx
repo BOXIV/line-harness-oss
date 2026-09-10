@@ -1248,6 +1248,7 @@ export default function ChatsPage() {
             setShowDraftPanel(false)
           }}
           onChanged={loadChats}
+          friendSource={detailSource}
         />
       )}
 
