@@ -31,7 +31,7 @@ function formatDt(iso: string): string {
  *
  * 画面は 2 段階（テンプレート選択モーダルと同じ作り）。
  *   一覧: 保存済みの下書きを選ぶ。高さは中身なり（最大 85vh）。
- *   編集: 本文を書く。**高さを 90vh に固定して余白を本文欄に配る**ので、
+ *   編集: 本文を書く。**高さを 92vh に固定して余白を本文欄に配る**ので、
  *         入力欄はブラウザ縦幅の 7 割前後になる（rows 固定の小さい箱では書きにくかった）。
  */
 export default function DraftPanel({
@@ -161,7 +161,7 @@ export default function DraftPanel({
           「箱が小さいから入力欄も小さい」状態に戻ってしまう。 */}
       <div
         className={`relative bg-white rounded-xl shadow-2xl w-full flex flex-col ${
-          composing ? 'h-[90vh] max-w-2xl' : 'max-h-[85vh] max-w-xl'
+          composing ? 'h-[92vh] max-w-2xl' : 'max-h-[85vh] max-w-xl'
         }`}
       >
         <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -185,7 +185,7 @@ export default function DraftPanel({
         {composing ? (
           <>
             {/* min-h-0 が無いと flex-1 が縮まず、本文欄が画面外へはみ出す。 */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-2">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3 flex flex-col gap-2">
               {error && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700 shrink-0">{error}</div>
               )}
@@ -200,7 +200,7 @@ export default function DraftPanel({
                 value={formContent}
                 onChange={(e) => setFormContent(e.target.value)}
                 placeholder="送る前に用意しておく文面"
-                className="w-full flex-1 min-h-[50vh] text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 resize-y"
+                className="w-full flex-1 min-h-[45vh] text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 resize-y"
               />
             </div>
 

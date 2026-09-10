@@ -60,7 +60,7 @@ function formatDt(iso: string): string {
  * 送信予約。
  *
  * 画面は 2 段階（テンプレート選択モーダル・下書きと同じ作り）。
- *   作成: 日時と本文を書く。**高さを 90vh に固定して余白を本文欄に配る**ので、
+ *   作成: 日時と本文を書く。**高さを 92vh に固定して余白を本文欄に配る**ので、
  *         入力欄はブラウザ縦幅の 7 割前後になる（rows 固定の小さい箱では書きにくかった）。
  *   一覧: 予約中と履歴。作成できたらここへ戻すので、登録されたことがその場で見える。
  */
@@ -176,7 +176,7 @@ export default function ScheduledMessagePanel({
           「箱が小さいから入力欄も小さい」状態に戻ってしまう。 */}
       <div
         className={`relative bg-white rounded-xl shadow-2xl w-full flex flex-col ${
-          composing ? 'h-[90vh] max-w-2xl' : 'max-h-[85vh] max-w-xl'
+          composing ? 'h-[92vh] max-w-2xl' : 'max-h-[85vh] max-w-xl'
         }`}
       >
         <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -200,32 +200,26 @@ export default function ScheduledMessagePanel({
         {composing ? (
           <>
             {/* min-h-0 が無いと flex-1 が縮まず、本文欄が画面外へはみ出す。 */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-2">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3 flex flex-col gap-2">
               {error && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700 shrink-0">{error}</div>
               )}
 
-              <label className="block shrink-0">
-                <span className="text-xs text-gray-600">送信日時 (JST)</span>
-                <input
-                  type="datetime-local"
-                  value={scheduledAtLocal}
-                  onChange={(e) => setScheduledAtLocal(e.target.value)}
-                  className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:border-slate-900"
-                />
-              </label>
-
-              <div className="flex items-center justify-between gap-2 shrink-0">
-                <span className="text-xs text-gray-600">
-                  本文
-                  {messageType === 'flex' && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-[11px]">Flex</span>
-                  )}
-                </span>
+              {/* 日時とテンプレ選択は 1 行に畳む。行を増やすほど本文欄が痩せるため。 */}
+              <div className="flex items-end gap-2 shrink-0">
+                <label className="flex-1 min-w-0">
+                  <span className="text-xs text-gray-600">送信日時 (JST)</span>
+                  <input
+                    type="datetime-local"
+                    value={scheduledAtLocal}
+                    onChange={(e) => setScheduledAtLocal(e.target.value)}
+                    className="mt-1 w-full text-sm border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] bg-white focus:outline-none focus:border-slate-900"
+                  />
+                </label>
                 <button
                   type="button"
                   onClick={() => setShowTemplatePicker(true)}
-                  className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
+                  className="shrink-0 px-3 min-h-[44px] text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
                 >
                   📋 テンプレートから選択
                 </button>
@@ -235,11 +229,14 @@ export default function ScheduledMessagePanel({
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={messageType === 'flex' ? 'Flex JSON（テンプレートから選択を推奨）' : '送信したいメッセージを入力（またはテンプレートから選択）'}
-                className={`w-full flex-1 min-h-[50vh] text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 resize-y ${messageType === 'flex' ? 'font-mono text-xs' : ''}`}
+                className={`w-full flex-1 min-h-[45vh] text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:border-slate-900 resize-y ${messageType === 'flex' ? 'font-mono text-xs' : ''}`}
               />
 
               {messageType === 'flex' && (
-                <p className="text-[11px] text-gray-400 shrink-0">Flex テンプレート選択済み。予約時刻にこの JSON が Flex として配信されます。テキストに戻すにはテンプレートから選び直すか、本文を書き換えてください。</p>
+                <p className="text-[11px] text-gray-400 shrink-0">
+                  <span className="mr-1.5 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">Flex</span>
+                  テンプレート選択済み。予約時刻にこの JSON が Flex として配信されます。テキストに戻すにはテンプレートから選び直すか、本文を書き換えてください。
+                </p>
               )}
               <p className="text-xs text-gray-400 shrink-0">
                 予約は 5 分間隔の cron で配信されます (誤差 ±5 分)
