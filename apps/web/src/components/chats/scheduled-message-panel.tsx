@@ -87,9 +87,11 @@ export default function ScheduledMessagePanel({
    * 本文欄が画面の 7 割あるぶん長文を書くので、背景クリックや ✕ で
    * 数百字が黙って消えると被害が大きい。
    */
+  // ⚠️ view は見ない。一覧に切り替えても本文は保持されるので、
+  //    「書いた → 一覧を見に行った → ✕」でも消えてよいわけではない。
   const confirmDiscard = useCallback(
-    () => view !== 'compose' || !content.trim() || confirm('書きかけの内容を破棄しますか？'),
-    [view, content],
+    () => !content.trim() || confirm('書きかけの内容を破棄しますか？'),
+    [content],
   )
 
   const requestClose = useCallback(() => {

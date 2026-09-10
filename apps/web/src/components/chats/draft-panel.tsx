@@ -84,8 +84,8 @@ export default function DraftPanel({
    * 数百字が黙って消えると被害が大きい。
    */
   const confirmDiscard = useCallback(
-    () => view !== 'compose' || !formContent.trim() || confirm('書きかけの内容を破棄しますか？'),
-    [view, formContent],
+    () => !formContent.trim() || confirm('書きかけの内容を破棄しますか？'),
+    [formContent],
   )
 
   const backToList = useCallback(() => {
