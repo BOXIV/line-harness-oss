@@ -6,10 +6,36 @@
 // Notion 書き込み先・Slack 通知先・催促文面だけを source で切り替える。
 // migration: 905_listing_entries.sql / 916_listing_entries_source.sql
 
+import type { FlowId } from './line-login.boxiv.js';
+
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 
 /** 台帳の由来。出品者フォーム(/listing-form/*) と 購入者エントリー(/buyer-form/*)。 */
 export type EntrySource = 'seller' | 'buyer';
+
+/**
+ * 連携の入口。source が「どの DB・どの人種か」なのに対し、flow は「どこから来たか」。
+ * アプリ出品（app_listing）は Web 出品（listing_form）と同じ source='seller' なので、
+ * 連携完了イベントの種別を分けるにはこちらが要る。値は line-login.boxiv.ts の FlowId と同じ語彙。
+ * migration: 925_listing_entries_flow.sql
+ */
+export type EntryFlow = FlowId;
+
+/**
+ * flow → 連携完了イベント種別。連携時の callback（3経路）と follow webhook の救済経路が
+ * どれもここを引く。アプリ用イベント（#68）に分けるときは app_listing の行だけ差し替える。
+ */
+export const LINK_COMPLETED_EVENT: Record<EntryFlow, 'listing_link_completed' | 'buyer_link_completed'> = {
+  listing_form: 'listing_link_completed',
+  app_listing: 'listing_link_completed', // 仮: Web 出品と同じ automation に乗せる（#68 で app 用に差し替え）
+  buyer_form: 'buyer_link_completed',
+};
+
+/** 台帳の行から flow を決める。NULL（925 とコード反映の隙間に入った行）は source から補う。 */
+export function resolveEntryFlow(entry: Pick<ListingEntry, 'flow' | 'source'>): EntryFlow {
+  if (entry.flow) return entry.flow;
+  return entry.source === 'buyer' ? 'buyer_form' : 'listing_form';
+}
 
 export interface ListingEntry {
   match_key: string;
@@ -22,6 +48,8 @@ export interface ListingEntry {
   notion_page_id: string | null;
   status: 'form_only' | 'linked';
   source: EntrySource;
+  /** 連携の入口。925 より前の行は NULL のことがある（resolveEntryFlow で補う）。 */
+  flow: EntryFlow | null;
   reminder_count: number;
   email_sent_at: string | null;
   sms_sent_at: string | null;
@@ -42,6 +70,8 @@ export interface SubmitInput {
   returnTo?: string | null;
   /** 既定 'seller'（既存の出品フォーム呼び出しを壊さない）。購入者エントリーは 'buyer'。 */
   source?: EntrySource;
+  /** 連携の入口。省略不可（渡し忘れを型で止める。既定値で埋めると購入者の行が誤る）。 */
+  flow: EntryFlow;
 }
 
 /**
@@ -54,8 +84,8 @@ export async function upsertOnSubmit(db: D1Database, input: SubmitInput): Promis
   const formJson = JSON.stringify(input.formData ?? {});
   await db
     .prepare(
-      `INSERT INTO listing_entries (match_key, form_data, name, phone, email, return_to, source, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'form_only', ${NOW}, ${NOW})
+      `INSERT INTO listing_entries (match_key, form_data, name, phone, email, return_to, source, flow, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'form_only', ${NOW}, ${NOW})
        ON CONFLICT(match_key) DO UPDATE SET
          form_data  = excluded.form_data,
          name       = COALESCE(excluded.name, listing_entries.name),
@@ -63,6 +93,7 @@ export async function upsertOnSubmit(db: D1Database, input: SubmitInput): Promis
          email      = COALESCE(excluded.email, listing_entries.email),
          return_to  = COALESCE(excluded.return_to, listing_entries.return_to),
          source     = excluded.source,
+         flow       = excluded.flow,
          updated_at = ${NOW}`,
     )
     .bind(
@@ -73,6 +104,7 @@ export async function upsertOnSubmit(db: D1Database, input: SubmitInput): Promis
       input.email ?? null,
       input.returnTo ?? null,
       input.source ?? 'seller',
+      input.flow,
     )
     .run();
   return getEntry(db, input.matchKey);
@@ -107,18 +139,20 @@ export async function insertOrphanLink(
   matchKey: string,
   lineUserId: string,
   displayName: string | null,
-  source: EntrySource = 'seller',
+  source: EntrySource,
+  flow: EntryFlow, // 省略不可（渡し忘れを型で止める）
 ): Promise<ListingEntry | null> {
   await db
     .prepare(
-      `INSERT INTO listing_entries (match_key, line_user_id, display_name, source, status, created_at, linked_at, updated_at)
-       VALUES (?, ?, ?, ?, 'linked', ${NOW}, ${NOW}, ${NOW})
+      `INSERT INTO listing_entries (match_key, line_user_id, display_name, source, flow, status, created_at, linked_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'linked', ${NOW}, ${NOW}, ${NOW})
        ON CONFLICT(match_key) DO UPDATE SET
          line_user_id = excluded.line_user_id,
          display_name = COALESCE(excluded.display_name, listing_entries.display_name),
+         flow = COALESCE(listing_entries.flow, excluded.flow),
          status = 'linked', linked_at = ${NOW}, updated_at = ${NOW}`,
     )
-    .bind(matchKey, lineUserId, displayName, source)
+    .bind(matchKey, lineUserId, displayName, source, flow)
     .run();
   return getEntry(db, matchKey);
 }
@@ -304,6 +338,10 @@ export async function getLinkedEntryByLineUserId(db: D1Database, lineUserId: str
  * 連携完了通知の「送信済み」フラグ名（friend.metadata のキー）。
  * OAuth 完了時と follow webhook 救済の二重送信を防ぐ。source ごとに別フラグにしているので、
  * 出品者として連携済みの人が後から購入エントリーしても購入者向けの通知は1回届く。
+ *
+ * フラグは source 単位で、flow 単位ではない。アプリ出品（flow=app_listing）と Web 出品
+ * （listing_form）は同じ seller フラグを共有する（同じ automation に乗せている間は同一人物に
+ * 2 通送らないのが正。#68 でイベントを分けるときにフラグも分ける）。
  */
 // JSON パスは SQL リテラルとして埋め込む（値バインドではなくコード内定数の二択）。
 const LINK_NOTIFIED_PATH: Record<EntrySource, string> = {

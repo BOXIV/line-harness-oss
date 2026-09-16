@@ -32,6 +32,7 @@ import {
   setNotionPageId,
   claimLinkCompletedNotified,
   unmarkLinkCompletedNotified,
+  LINK_COMPLETED_EVENT,
 } from '../services/listing-entry.boxiv.js';
 import { fireEvent } from '../services/event-bus.js';
 import type { Friend } from '@line-crm/db';
@@ -164,7 +165,7 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
     try {
       entry = await markLinked(c.env.DB, matchKey, profile.userId, profile.displayName);
       if (!entry) {
-        entry = await insertOrphanLink(c.env.DB, matchKey, profile.userId, profile.displayName, 'seller');
+        entry = await insertOrphanLink(c.env.DB, matchKey, profile.userId, profile.displayName, 'seller', 'app_listing');
       }
     } catch (err) {
       console.error(`app-listing: D1 台帳の連携書き込みに失敗 (boxiv_id=${ctx.boxiv_id})`, err);
@@ -219,10 +220,9 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
     }
 
     // 連携完了イベントを発火して automation（出品価格お知らせ等）を駆動する。
-    // ⚠️ 仮実装: 本来はアプリ用の app_listing_link_completed を切る想定だが（TODO(#68/Q4)）、
-    //   イベント種別を増やすと automation の設定も新設が要る。まずはフォーム出品と同じ
-    //   listing_link_completed を流用し、既存の automation にそのまま乗せる。
-    //   アプリ固有の文面が要るようになった時点で別イベントへ分ける。
+    // 種別は LINK_COMPLETED_EVENT.app_listing（今は Web 出品と同じ listing_link_completed の流用。
+    // TODO(#68/Q4) でアプリ用イベントに分けるときは、あの表の1行を差し替えれば
+    // ここと follow webhook の救済経路が同時に切り替わる）。
     // TODO(#66/#73): 必要になれば boxivID → Cloud SQL User の紐付けをここに足す。
     await fireAppListingLinkCompleted(c.env, matchKey, ctx, profile, followStatus, friend).catch((err) =>
       console.error(`app-listing: listing_link_completed fire threw (boxiv_id=${ctx.boxiv_id})`, err),
@@ -279,7 +279,7 @@ async function fireAppListingLinkCompleted(
   try {
     await fireEvent(
       env.DB,
-      'listing_link_completed',
+      LINK_COMPLETED_EVENT.app_listing,
       {
         friendId: friend.id,
         eventData: {

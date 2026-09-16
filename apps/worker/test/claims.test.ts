@@ -99,7 +99,7 @@ describe('催促 cron の claim と連絡先リレー抑止', () => {
 
   it('claimReminderStep は expected が一致するときだけ 1 回進む', async () => {
     await cleanup();
-    await upsertOnSubmit(testDb, { matchKey: A, formData: {}, email: EMAIL });
+    await upsertOnSubmit(testDb, { matchKey: A, formData: {}, flow: 'listing_form', email: EMAIL });
     try {
       expect(await claimReminderStep(testDb, A, 0)).toBe(true);
       // 同じ expected（=別 tick が同じ行を再取得した状況）は取れない
@@ -117,8 +117,8 @@ describe('催促 cron の claim と連絡先リレー抑止', () => {
 
   it('hasRecentReminderToContact は別 match_key の同じ連絡先への直近送信だけを見る', async () => {
     await cleanup();
-    await upsertOnSubmit(testDb, { matchKey: A, formData: {}, email: EMAIL, phone: '09012345678' });
-    await upsertOnSubmit(testDb, { matchKey: B, formData: {}, email: EMAIL, phone: '09012345678' });
+    await upsertOnSubmit(testDb, { matchKey: A, formData: {}, flow: 'listing_form', email: EMAIL, phone: '09012345678' });
+    await upsertOnSubmit(testDb, { matchKey: B, formData: {}, flow: 'listing_form', email: EMAIL, phone: '09012345678' });
     try {
       // まだどこにも送っていない
       expect(await hasRecentReminderToContact(testDb, { email: EMAIL, phone: null, excludeMatchKey: B, withinHours: 24 })).toBe(false);
