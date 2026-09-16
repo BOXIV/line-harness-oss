@@ -67,7 +67,9 @@ export function notionSellerConfig(env: ListingNotionEnv): Cfg | null {
     emailProp: env.NOTION_SELLER_EMAIL_PROP || '[Form]メールアドレス',
     memoProp: env.NOTION_SELLER_MEMO_PROP || 'その他詳細備考',
     listingIdProp: env.NOTION_SELLER_LISTING_ID_PROP || '掲載ID',
-    boxivIdProp: env.NOTION_SELLER_BOXIV_ID_PROP || 'boxivID',
+    // 本番の出品者リストにあるのは「BOXIV ID」だけ（(Dev) にだけ旧名の boxivID が残っている）。
+    // 旧名のままだと本番では存在しない列への書き込みになり、アプリ出品の起票ごと Notion に弾かれる。
+    boxivIdProp: env.NOTION_SELLER_BOXIV_ID_PROP || 'BOXIV ID',
     zipProp: env.NOTION_SELLER_ZIP_PROP || '郵便番号',
     statusProp: env.NOTION_SELLER_STATUS_PROP || 'ステータス ',
     statusValue: env.NOTION_SELLER_STATUS_VALUE || '0_LINE登録',
