@@ -111,6 +111,20 @@ CREATE TABLE IF NOT EXISTS broadcasts (
 CREATE INDEX IF NOT EXISTS idx_broadcasts_status ON broadcasts (status);
 
 -- ============================================================
+-- Friend Notion Memos (BOXIV / migration 927)
+-- Notion の「取引メモ」の写し。Notion がマスターで書き戻しはしない。
+-- 1 人が出品者行と購入者行の両方に連携し得るので source ごとに 1 行持つ。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS friend_notion_memos (
+  friend_id  TEXT NOT NULL REFERENCES friends (id) ON DELETE CASCADE,
+  source     TEXT NOT NULL CHECK (source IN ('seller', 'buyer')),
+  memo       TEXT,
+  page_id    TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (friend_id, source)
+);
+
+-- ============================================================
 -- Messages Log
 -- ============================================================
 CREATE TABLE IF NOT EXISTS messages_log (

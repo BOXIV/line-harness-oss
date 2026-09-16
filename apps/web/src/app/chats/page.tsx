@@ -101,6 +101,8 @@ interface ChatDetail extends Chat {
   messages?: ChatMessage[]
   /** ウィンドウより前にまだメッセージがある。旧 worker と繋がったときは undefined。 */
   hasMoreMessages?: boolean
+  /** Notion 由来の取引メモ（source ごと / migration 927）。旧 worker では undefined。 */
+  notionMemos?: Partial<Record<'seller' | 'buyer', { memo: string | null; updatedAt: string }>>
 }
 
 // BOXIV: shared formatter — friend管理 と 個別チャット を同じ表示に統一
@@ -763,6 +765,13 @@ export default function ChatsPage() {
           : [chatDetail.notion]
         ).filter((l): l is NotionFriendLink => Boolean(l && l.label)),
         source: detailSource,
+        // 空文字だけのメモは「入力されていない」と同じなので出さない。
+        memos: (['seller', 'buyer'] as const)
+          .map((src) => {
+            const m = chatDetail.notionMemos?.[src]
+            return m && m.memo && m.memo.trim() ? { source: src, memo: m.memo, updatedAt: m.updatedAt } : null
+          })
+          .filter((m): m is { source: 'seller' | 'buyer'; memo: string; updatedAt: string } => m !== null),
         onEditName: openEditName,
         onNotionLinked: (message: string, linked: boolean) => {
           setNotionMessage(message)

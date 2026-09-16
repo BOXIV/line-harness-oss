@@ -9,6 +9,8 @@
 //   status  : Notion select/status の option id == status_options.notion_id（source 一致）
 //             → friend_status_assignments.status_option_id へ upsert（assigned_by='notion'）
 //   Notion 側でステータス未設定 → ローカル割当を解除（delete）。
+//   memo    : Notion「取引メモ」(rich_text) → friend_notion_memos へ upsert（migration 927）。
+//             空にされたらローカルも空にする（Notion がマスターなので消えたら消える）。
 //
 // 行の多重化ガード（重要）:
 //   1人が同じDB内に複数行を持つ場合（出品者: プレミアム出品 → アプリ出品へ変更 /
@@ -31,6 +33,10 @@ export interface NotionStatusSyncEnv {
   NOTION_SELLER_STATUS_PROP?: string;   // default: ステータス
   NOTION_BUYER_STATUS_PROP?: string;    // default: ステータス
   NOTION_PROP_LINE_USER_ID?: string;    // default: 'LINE User ID'
+  // 取引メモ（migration 927）。⚠️ 既存の NOTION_*_MEMO_PROP（既定「その他詳細備考」）は
+  // フォーム台帳の書き込み先で別物。混ぜると本来書くべきでない欄を上書きするので名前を分ける。
+  NOTION_SELLER_DEAL_MEMO_PROP?: string; // default: 取引メモ
+  NOTION_BUYER_DEAL_MEMO_PROP?: string;  // default: 取引メモ
 }
 
 type StatusSource = 'seller' | 'buyer';
@@ -69,6 +75,10 @@ function statusPropName(env: NotionStatusSyncEnv, source: StatusSource): string 
   return (source === 'seller' ? env.NOTION_SELLER_STATUS_PROP : env.NOTION_BUYER_STATUS_PROP) || 'ステータス';
 }
 
+function dealMemoPropName(env: NotionStatusSyncEnv, source: StatusSource): string {
+  return (source === 'seller' ? env.NOTION_SELLER_DEAL_MEMO_PROP : env.NOTION_BUYER_DEAL_MEMO_PROP) || '取引メモ';
+}
+
 // Notion property 名は前後空白を含むことがあるので trim 一致で探す。
 function findProp(props: NotionPage['properties'], name: string) {
   const target = name.trim();
@@ -76,12 +86,21 @@ function findProp(props: NotionPage['properties'], name: string) {
   return key ? props[key] : undefined;
 }
 
-// ページから { lineUserId, optionId(Notion option id|null), optionName } を取り出す。
+/** ページから取り込む値。プロパティが無い DB でも memo は null になるだけで害はない。 */
+interface ExtractedPage {
+  lineUserId: string | null;
+  optionId: string | null;
+  optionName: string | null;
+  /** 取引メモ。プロパティ自体が無い / 空なら null。 */
+  memo: string | null;
+}
+
+// ページから { lineUserId, optionId(Notion option id|null), optionName, memo } を取り出す。
 function extractFromPage(
   env: NotionStatusSyncEnv,
   source: StatusSource,
   page: NotionPage,
-): { lineUserId: string | null; optionId: string | null; optionName: string | null } {
+): ExtractedPage {
   const luidProp = findProp(page.properties, env.NOTION_PROP_LINE_USER_ID || 'LINE User ID');
   let lineUserId: string | null = null;
   if (luidProp) {
@@ -96,16 +115,19 @@ function extractFromPage(
     optionId = val?.id ?? null;
     optionName = val?.name ?? null;
   }
-  return { lineUserId, optionId, optionName };
+  const memoProp = findProp(page.properties, dealMemoPropName(env, source));
+  const memo = memoProp?.type === 'rich_text' ? plainText(memoProp.rich_text) : null;
+
+  return { lineUserId, optionId, optionName, memo };
 }
 
-// friend_status_assignments を Notion 値で upsert（未設定なら delete）。
-async function applyStatus(
+// friend_status_assignments / friend_notion_memos を Notion 値で upsert。
+// 友だちの特定と「連携先の行か」の判定は 1 回で済ませ、ステータスとメモの両方に効かせる。
+async function applyPage(
   db: D1Database,
   source: StatusSource,
   lineUserId: string,
-  optionId: string | null,
-  optionName: string | null,
+  extracted: ExtractedPage,
   sourcePageId: string | null,
 ): Promise<string> {
   const friend = await db
@@ -114,7 +136,7 @@ async function applyStatus(
     .first<{ id: string; metadata: string | null }>();
   if (!friend) return 'skip-no-friend';
 
-  // その source の連携先行が決まっているなら、同じDBの他の行のステータス変更は無視する。
+  // その source の連携先行が決まっているなら、同じDBの他の行の変更は無視する。
   // 出品者リンクと購入者リンクは独立に持てるので、比較は必ず同 source 同士で行う。
   if (sourcePageId) {
     const linked = readNotionLinks(friend.metadata)[source];
@@ -123,8 +145,49 @@ async function applyStatus(
     }
   }
 
+  await applyMemo(db, source, friend.id, extracted.memo, sourcePageId);
+  return applyStatus(db, source, friend.id, extracted.optionId, extracted.optionName);
+}
+
+/**
+ * 取引メモを friend_notion_memos へ upsert（migration 927）。
+ * Notion で空にされたらローカルも空にする — Notion がマスターなので、
+ * 消したはずのメモが管理画面に残り続ける方が事故になる。
+ */
+async function applyMemo(
+  db: D1Database,
+  source: StatusSource,
+  friendId: string,
+  memo: string | null,
+  sourcePageId: string | null,
+): Promise<void> {
+  try {
+    await db
+      .prepare(
+        `INSERT INTO friend_notion_memos (friend_id, source, memo, page_id, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(friend_id, source) DO UPDATE SET
+           memo = excluded.memo,
+           page_id = excluded.page_id,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(friendId, source, memo, sourcePageId, jstNow())
+      .run();
+  } catch (err) {
+    // メモの取り込み失敗でステータス同期まで巻き添えにしない（メモは表示用）。
+    console.error('applyMemo: failed', source, friendId, err);
+  }
+}
+
+async function applyStatus(
+  db: D1Database,
+  source: StatusSource,
+  friendId: string,
+  optionId: string | null,
+  optionName: string | null,
+): Promise<string> {
   if (!optionId) {
-    await db.prepare('DELETE FROM friend_status_assignments WHERE friend_id = ?').bind(friend.id).run();
+    await db.prepare('DELETE FROM friend_status_assignments WHERE friend_id = ?').bind(friendId).run();
     return 'cleared';
   }
 
@@ -150,7 +213,7 @@ async function applyStatus(
          assigned_by = 'notion',
          assigned_at = excluded.assigned_at`,
     )
-    .bind(friend.id, opt.id, jstNow())
+    .bind(friendId, opt.id, jstNow())
     .run();
   return 'updated';
 }
@@ -177,9 +240,9 @@ export async function syncNotionPageStatus(
   const page = (await res.json()) as NotionPage;
   const source = sourceOfDb(env, page.parent?.database_id);
   if (!source) return 'skip-unknown-db';
-  const { lineUserId, optionId, optionName } = extractFromPage(env, source, page);
-  if (!lineUserId) return 'skip-no-lineuserid';
-  return applyStatus(db, source, lineUserId, optionId, optionName, page.id || pageId);
+  const extracted = extractFromPage(env, source, page);
+  if (!extracted.lineUserId) return 'skip-no-lineuserid';
+  return applyPage(db, source, extracted.lineUserId, extracted, page.id || pageId);
 }
 
 // 12h reconcile: 出品者/購入者DB を走査し、全ページのステータスを取り込む（自己修復）。
@@ -209,9 +272,9 @@ export async function reconcileNotionStatuses(db: D1Database, env: NotionStatusS
       const data = (await res.json()) as { results?: NotionPage[]; has_more?: boolean; next_cursor?: string | null };
       for (const page of data.results ?? []) {
         try {
-          const { lineUserId, optionId, optionName } = extractFromPage(env, source, page);
-          if (!lineUserId) continue;
-          await applyStatus(db, source, lineUserId, optionId, optionName, page.id);
+          const extracted = extractFromPage(env, source, page);
+          if (!extracted.lineUserId) continue;
+          await applyPage(db, source, extracted.lineUserId, extracted, page.id);
         } catch (err) {
           console.error('reconcileNotionStatuses: row failed', err);
         }

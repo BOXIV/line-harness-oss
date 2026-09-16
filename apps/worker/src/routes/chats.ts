@@ -232,6 +232,17 @@ chats.get('/api/chats/:id', async (c) => {
       .bind(item.friend_id)
       .first<{ display_name: string | null; managed_name: string | null; picture_url: string | null; line_user_id: string; metadata: string | null }>();
 
+    // Notion の取引メモ（migration 927）。出品者行/購入者行それぞれ持ち得る。
+    // 取り込みは Notion オートメーション + 12h reconcile 側の仕事で、ここは読むだけ。
+    const memoRows = await c.env.DB
+      .prepare(`SELECT source, memo, updated_at FROM friend_notion_memos WHERE friend_id = ?`)
+      .bind(item.friend_id)
+      .all<{ source: string; memo: string | null; updated_at: string }>();
+    const notionMemos: Record<string, { memo: string | null; updatedAt: string }> = {};
+    for (const r of memoRows.results ?? []) {
+      notionMemos[r.source] = { memo: r.memo, updatedAt: r.updated_at };
+    }
+
     // チャットに関連するメッセージログも取得（直近ウィンドウ = 新しい方から）。
     // さかのぼりは GET /api/friends/:id/messages?before=... が担当する。
     const { rows, hasMore } = await loadMessageWindow(c.env.DB, item.friend_id);
@@ -251,6 +262,8 @@ chats.get('/api/chats/:id', async (c) => {
         notion: primaryLink(parseFriendNotionLinks(friend?.metadata ?? null)),
         // 出品者/購入者それぞれの連携（両方持ち得る）。詳細ヘッダのピル表示に使う。
         notionLinks: parseFriendNotionLinks(friend?.metadata ?? null),
+        // Notion 由来の取引メモ（source ごと）。Notion がマスターで書き戻しはしない。
+        notionMemos,
         operatorId: item.operator_id,
         status: item.status,
         notes: item.notes,

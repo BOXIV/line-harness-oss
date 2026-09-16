@@ -24,6 +24,24 @@ const NOTION_PILL_PREFIX: Record<'seller' | 'buyer', string> = {
   buyer: '取引',
 }
 
+/** Notion 由来の取引メモ（source ごと / migration 927）。 */
+export interface InfoPanelMemo {
+  source: 'seller' | 'buyer'
+  memo: string | null
+  updatedAt: string
+}
+
+const MEMO_SOURCE_LABELS: Record<'seller' | 'buyer', string> = {
+  seller: '出品者',
+  buyer: '購入者',
+}
+
+function formatMemoStamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 export interface FriendInfoPanelProps {
   friendId: string
   /** 画面に出す表示名（管理名 or Notion 合成名）。 */
@@ -41,6 +59,11 @@ export interface FriendInfoPanelProps {
   sendingSchedule: boolean
   /** Notion 連携／日程調整送信の結果メッセージ（数秒で消える）。 */
   notice?: string
+  /**
+   * Notion の取引メモ。Notion がマスターで、ここは表示のみ（編集させない）。
+   * 出品者行と購入者行の両方に連携している人は 2 件並ぶ。
+   */
+  memos: InfoPanelMemo[]
   /** ドロワー表示のときだけ渡す。渡すと右上に閉じるボタンが出る。 */
   onClose?: () => void
   /** 取引メモなど、下側に積みたい追加ブロック。 */
@@ -77,6 +100,7 @@ export default function FriendInfoPanel({
   onSendScheduleInvite,
   sendingSchedule,
   notice,
+  memos,
   onClose,
   children,
 }: FriendInfoPanelProps) {
@@ -183,6 +207,30 @@ export default function FriendInfoPanel({
               📅 送信予約
             </button>
           </div>
+        </Section>
+
+        <Section title="取引メモ">
+          {/* Notion がマスター。ここで編集させると「どちらが正か」が崩れるので表示専用。 */}
+          {memos.length === 0 ? (
+            <p className="text-[11px] text-gray-400">
+              Notion の「取引メモ」が入力されると、ここに自動で表示されます。
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {memos.map((m) => (
+                <div key={m.source} className="rounded-md border border-gray-200 bg-gray-50 px-2.5 py-2">
+                  <p className="text-[10px] text-gray-400 mb-1">
+                    {MEMO_SOURCE_LABELS[m.source]} ・ {formatMemoStamp(m.updatedAt)} 時点
+                  </p>
+                  {m.memo ? (
+                    <p className="text-xs text-gray-700 whitespace-pre-wrap break-words">{m.memo}</p>
+                  ) : (
+                    <p className="text-[11px] text-gray-400">（空）</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </Section>
 
         {children}
