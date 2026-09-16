@@ -15,7 +15,8 @@
 //    その scheme へ戻す。
 //
 // フォームフロー(listing_form)との違い:
-//   - 相関キーは match_key ではなく boxivID（BOXIV ユーザーID）。app が署名 state に積む。
+//   - 相関キーは boxivID（BOXIV ユーザーID）。app が署名 state に積む。台帳の match_key も
+//     boxivID（Portal の submit と同じ key）。入口の識別は key の形ではなく flow='app_listing'。
 //   - Notion 行は submit（起票）が boxivID 入りで作っている前提。連携時は boxivID で
 //     引き当てて LINE User ID を update する。
 //   - 終端は web の HTML ページでなく、未フォローでもアプリの自スキームへ redirect。
@@ -25,6 +26,7 @@ import type { Context } from 'hono';
 import { packSignedState, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { linkSellerRowByBoxivId } from '../services/listing-notion.boxiv.js';
+import { markLinked, insertOrphanLink, setNotionPageId } from '../services/listing-entry.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { slackPost, buildSlackCard } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
@@ -131,17 +133,47 @@ appListing.get('/app-listing/done', (c) => {
 
 /**
  * アプリ出品フローの連携確定処理。共有 callback（link-callback.boxiv.ts）から呼ばれる。
- * friend は共通前半で登録済み。ここでは Notion 連携（boxivID キー）＋タグ「出品者」＋
- * アプリへのスキーム redirect。
+ * friend は共通前半で登録済み。ここでは D1 台帳の連携書き込み → Notion 連携（boxivID キー）
+ * → タグ「出品者」→ アプリへのスキーム redirect。
  */
 export const appListingFlow: LinkFlow<AppListingStateV1> = {
   async complete(c, ctx, profile, followStatus, friend) {
+    // 台帳（listing_entries）の match_key は boxivID そのもの。Portal の起票
+    // （/listing-form/submit）が同じ boxivID を match_key に使うので、markLinked が起票行に当たる。
+    // 起票なしの直連携は insertOrphanLink で行を作る。
+    // 入口の識別は flow 列（app_listing）で行い、key の形に意味を持たせない。
+    const matchKey = ctx.boxiv_id;
+
+    // D1 台帳（listing_entries）に「連携済み」の行を作る。これが無いと follow webhook の
+    // 連携済み判定（getLinkedEntryByLineUserId）に引っかからず、OAuth 時に未フォローだった人が
+    // 後から友だち追加したときに、出品者向けではなく一般の friend_add 挨拶が飛ぶ。
+    // Portal の submit で起票済みなら markLinked が当たって linked になる（催促 CRON が止まる）。
+    // submit を経ない直連携は orphan 行を作る。
+    // ⚠️ この書き込みより前に遅い外部処理（Notion/Slack 等）を挟まないこと。
+    // follow webhook 側は新規フォロー時に 3 秒ホールドしてから再判定するため、
+    // 間に合わないと連携ユーザへ挨拶を誤送する（listing_form と同じ制約）。
+    let entry: Awaited<ReturnType<typeof markLinked>> = null;
+    try {
+      entry = await markLinked(c.env.DB, matchKey, profile.userId, profile.displayName);
+      if (!entry) {
+        entry = await insertOrphanLink(c.env.DB, matchKey, profile.userId, profile.displayName, 'seller');
+      }
+    } catch (err) {
+      console.error(`app-listing: D1 台帳の連携書き込みに失敗 (boxiv_id=${ctx.boxiv_id})`, err);
+    }
+
     // boxivID キーで Notion 出品者DB の LINE User ID を update（行は submit 起票済みが前提）。非致命。
     try {
       const pageId = await linkSellerRowByBoxivId(c.env, {
         boxivId: ctx.boxiv_id,
         lineUserId: profile.userId,
       });
+      // 台帳から Notion 行へ辿れるようにしておく（後続の PATCH・突合で使う）。
+      if (pageId && entry) {
+        await setNotionPageId(c.env.DB, matchKey, pageId).catch((err) =>
+          console.error(`app-listing: 台帳への notion_page_id 保存に失敗 (boxiv_id=${ctx.boxiv_id})`, err),
+        );
+      }
       if (!pageId) {
         // boxivID に対応する出品者行が無い（起票前提だが未検出）→ Slack で警告。
         // 通知先は env の SLACK_LISTING_LINK_CHANNEL_ID＝dev/prod で別チャンネル。別 try で握る（非致命）。
