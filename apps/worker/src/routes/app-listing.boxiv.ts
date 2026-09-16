@@ -171,13 +171,14 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
       console.error(`app-listing: D1 台帳の連携書き込みに失敗 (boxiv_id=${ctx.boxiv_id})`, err);
     }
 
-    // boxivID キーで Notion 出品者DB の LINE User ID を update（行は submit 起票済みが前提）。非致命。
+    // boxivID キーで Notion 出品者DB の LINE User ID を update（行は起票済みが前提）。非致命。
+    // 同じ人（boxivID）の行は掲載ごとに複数あるので全行に書く。返るのは最新行の pageId。
     try {
       const pageId = await linkSellerRowByBoxivId(c.env, {
         boxivId: ctx.boxiv_id,
         lineUserId: profile.userId,
       });
-      // 台帳から Notion 行へ辿れるようにしておく（後続の PATCH・突合で使う）。
+      // 台帳から Notion 行へ辿れるようにしておく（後続の PATCH・突合で使う）。台帳は人単位で 1 行なので最新行の id を持つ。
       if (pageId && entry) {
         await setNotionPageId(c.env.DB, matchKey, pageId).catch((err) =>
           console.error(`app-listing: 台帳への notion_page_id 保存に失敗 (boxiv_id=${ctx.boxiv_id})`, err),
