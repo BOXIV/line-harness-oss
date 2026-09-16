@@ -27,7 +27,10 @@ export type EntryFlow = FlowId;
  */
 export const LINK_COMPLETED_EVENT: Record<EntryFlow, 'listing_link_completed' | 'buyer_link_completed'> = {
   listing_form: 'listing_link_completed',
-  app_listing: 'listing_link_completed', // 仮: Web 出品と同じ automation に乗せる（#68 で app 用に差し替え）
+  // TODO(#68): アプリ用の app_listing_link_completed に差し替える（automation の新設とセットで）。
+  //   それまでは Web 出品と同じ listing_link_completed を流用し、既存の automation に乗せる（仮）。
+  //   この1行を変えれば、連携時の callback と follow webhook の救済経路が同時に切り替わる。
+  app_listing: 'listing_link_completed',
   buyer_form: 'buyer_link_completed',
 };
 
