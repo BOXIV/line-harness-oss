@@ -26,7 +26,15 @@ import type { Context } from 'hono';
 import { packSignedState, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { linkSellerRowByBoxivId } from '../services/listing-notion.boxiv.js';
-import { markLinked, insertOrphanLink, setNotionPageId } from '../services/listing-entry.boxiv.js';
+import {
+  markLinked,
+  insertOrphanLink,
+  setNotionPageId,
+  claimLinkCompletedNotified,
+  unmarkLinkCompletedNotified,
+} from '../services/listing-entry.boxiv.js';
+import { fireEvent } from '../services/event-bus.js';
+import type { Friend } from '@line-crm/db';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { slackPost, buildSlackCard } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
@@ -210,9 +218,15 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
       );
     }
 
-    // TODO(#68/Q4): アプリ用の連携完了イベント（app_listing_link_completed）を発火し、
-    //   フォロー促し/SMS・メール催促を automation で駆動する（listing_form の listing_link_completed と別イベント）。
+    // 連携完了イベントを発火して automation（出品価格お知らせ等）を駆動する。
+    // ⚠️ 仮実装: 本来はアプリ用の app_listing_link_completed を切る想定だが（TODO(#68/Q4)）、
+    //   イベント種別を増やすと automation の設定も新設が要る。まずはフォーム出品と同じ
+    //   listing_link_completed を流用し、既存の automation にそのまま乗せる。
+    //   アプリ固有の文面が要るようになった時点で別イベントへ分ける。
     // TODO(#66/#73): 必要になれば boxivID → Cloud SQL User の紐付けをここに足す。
+    await fireAppListingLinkCompleted(c.env, matchKey, ctx, profile, followStatus, friend).catch((err) =>
+      console.error(`app-listing: listing_link_completed fire threw (boxiv_id=${ctx.boxiv_id})`, err),
+    );
 
     // 終端: アプリの自スキームへ戻す。scheme は署名 state 内（start で許可リスト検証済み）＝改竄不可。
     // dev/prod で別アプリに戻る。followed=0 のとき app 側でフォロー促し画面を出す（#67）。
@@ -234,6 +248,54 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
     );
   },
 };
+
+/**
+ * 連携完了イベント（listing_link_completed）を発火する。listing_form の同名処理と同じ作法:
+ *   - フォロー済みのときだけ送る。未フォローは送れないので発火せず、後から友だち追加した際に
+ *     follow webhook が台帳の連携済み行を見て救済発火する。
+ *   - 送信権を **先に** 原子的に確保する（fire→mark の順だと follow webhook 側と数秒差で
+ *     競合したとき両方が送信に進み、2 通届く）。取れなければ相手が送っている。
+ */
+async function fireAppListingLinkCompleted(
+  env: Env['Bindings'],
+  matchKey: string,
+  ctx: AppListingStateV1,
+  profile: { userId: string; displayName: string; pictureUrl?: string },
+  followStatus: boolean | null,
+  friend: Friend | null,
+): Promise<void> {
+  if (!friend) {
+    console.warn(`app-listing: friend が無い — listing_link_completed をスキップ (boxiv_id=${ctx.boxiv_id})`);
+    return;
+  }
+  if (followStatus !== true) {
+    console.log(`app-listing: 未フォローのため listing_link_completed を保留（follow 時に送信） boxiv_id=${ctx.boxiv_id}`);
+    return;
+  }
+  if (!(await claimLinkCompletedNotified(env.DB, friend.id, 'seller'))) {
+    console.log(`app-listing: listing_link_completed は送信済み（follow 側が先行）friend=${friend.id}`);
+    return;
+  }
+  try {
+    await fireEvent(
+      env.DB,
+      'listing_link_completed',
+      {
+        friendId: friend.id,
+        eventData: {
+          formId: matchKey,
+          displayName: profile.displayName,
+          formInputName: ctx.display_name || null,
+        },
+      },
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+  } catch (err) {
+    // 送れなかったらフラグを戻す（次の機会＝再フォロー/follow 救済で送れるように）
+    await unmarkLinkCompletedNotified(env.DB, friend.id, 'seller').catch(() => undefined);
+    throw err;
+  }
+}
 
 /** 終端ページ共通のハードニング（キャッシュ・フレーム埋め込み・外部リソース・リファラを封じる）。 */
 function setTerminalPageHeaders(c: Context<Env>): void {
