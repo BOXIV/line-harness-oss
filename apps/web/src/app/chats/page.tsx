@@ -752,7 +752,9 @@ export default function ChatsPage() {
 
       <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
         {/* Left Panel: Chat List */}
-        <div className={`w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
+        {/* 顧客名が長い（会社名＋氏名＋車種）ので一覧は広めに取る。
+            lg で 26rem、xl 以上でさらに 30rem まで伸ばす。 */}
+        <div className={`w-full lg:w-[26rem] xl:w-[30rem] lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
           {/* Customer status filter (Notion-synced) */}
           <div className="px-3 py-2 border-b border-gray-200">
             <select
@@ -877,8 +879,10 @@ export default function ChatsPage() {
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
+                          {/* 名前は 1 行まるごと使う。ステータスピルを横に並べると
+                              名前の取り分が 200px 弱まで削られ、日本語だと 10 文字で切れる。 */}
                           <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
-                          <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5">
+                          <p className="text-xs text-gray-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
                             {/* 出品者/購入者/未連携は「全て」タブでも一目で分かるよう行内にも出す */}
                             {chat.source ? (
                               <span
@@ -903,14 +907,14 @@ export default function ChatsPage() {
                                 ✏️{chat.draftCount}
                               </span>
                             )}
+                            {chat.customerStatus && (
+                              <span className={`inline-flex items-center px-2 rounded-full text-[10px] font-medium leading-4 ${notionPillClass(chat.customerStatus.color)}`}>
+                                {chat.customerStatus.name}
+                              </span>
+                            )}
                             {formatDatetime(chat.lastMessageAt)}
                           </p>
                         </div>
-                        {chat.customerStatus && (
-                          <span className={`ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium flex-shrink-0 ${notionPillClass(chat.customerStatus.color)}`}>
-                            {chat.customerStatus.name}
-                          </span>
-                        )}
                         {!!chat.unreadCount && chat.unreadCount > 0 && (
                           <span
                             className="ml-1 flex-shrink-0 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-xs font-bold leading-none"
