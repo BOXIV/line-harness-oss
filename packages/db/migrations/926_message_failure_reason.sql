@@ -1,0 +1,20 @@
+-- 926_message_failure_reason.sql
+-- BOXIV: 送信失敗の「理由」を記録する。
+--
+-- これまで status='failed' は理由を持たず、管理画面は一律「⚠ 送信失敗（未達）」と出していた。
+-- 現場では原因で打つ手が変わる:
+--   blocked   … 相手がブロック/友だち削除した → LINE では二度と届かない。別経路へ切り替える判断が要る
+--   not_added … まだ一度も友だち追加されていない → 友だち追加を案内すれば届くようになる
+--   api_error … LINE API 側のエラー → 時間をおいて再送すれば通ることがある
+--
+-- ⚠️ 理由は「失敗した時点の事実」なので、後からフォロー状態が変わっても書き換えない。
+--    描画時に friends.is_following から推測すると、相手が友だち追加し直した瞬間に
+--    過去の失敗バブルの文言まで変わってしまう。だから列に焼き付ける。
+--
+-- ⚠️ blocked と not_added は LINE からは区別できない（どちらも is_following=0）。
+--    「過去に届いた実績があるか」（受信メッセージ or 成功した送信）で切り分ける。
+--    実績があるなら追加済みだったはずなので blocked、無ければ not_added。
+--
+-- 既存行は NULL のまま＝理由不明。管理画面は従来どおり「送信失敗（未達）」と出す。
+-- ALTER TABLE では CHECK を付けられないため、値の妥当性はアプリ側（message-log.boxiv.ts）が持つ。
+ALTER TABLE messages_log ADD COLUMN failure_reason TEXT;

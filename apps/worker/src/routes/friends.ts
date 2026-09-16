@@ -15,7 +15,7 @@ import {
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage } from '../services/step-delivery.js';
-import { logFailedOutgoing } from '../services/message-log.boxiv.js';
+import { logFailedOutgoing, notFollowingMessage, resolveNotFollowingReason } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId } from '../utils/quote.js';
 import { loadMessageWindow, parseMessageLimit } from '../utils/message-window.boxiv.js';
 import type { Env } from '../index.js';
@@ -406,6 +406,8 @@ friends.get('/api/friends/:id/messages', requireRole('owner','admin','manager'),
       status: m.status,
       // 送信者名（migration 923）。自動送信は NULL。管理画面だけの表示で顧客には出ない。
       sentByName: m.sent_by_name ?? null,
+      // 送信失敗の理由（migration 926）。管理画面の文言の出し分けに使う。古い行は NULL。
+      failureReason: m.failure_reason ?? null,
       createdAt: m.created_at,
       quotedMessageId: m.quoted_message_id ?? null,
       quotedMessage: m.quoted_message_id ? quoteIndex.get(m.quoted_message_id) ?? null : null,
@@ -446,8 +448,9 @@ friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager')
     // 未フォロー（友だち未追加/ブロック中）には送れない。LINE は push に 200 を返すが届かないため、
     // 失敗を即時通知し、送信失敗として記録する（黙って成功扱いにしない）。
     if (!friend.is_following) {
-      await logFailedOutgoing(db, friend.id, messageType, body.content, actor);
-      return c.json({ success: false, error: 'この友だちは未フォロー（友だち未追加・ブロック中）のため送信できません。友だち追加を依頼してください。' }, 422);
+      const reason = await resolveNotFollowingReason(db, friend.id);
+      await logFailedOutgoing(db, friend.id, messageType, body.content, actor, reason);
+      return c.json({ success: false, error: notFollowingMessage(reason) }, 422);
     }
 
     const { LineClient } = await import('@line-crm/line-sdk');
@@ -473,7 +476,7 @@ friends.post('/api/friends/:id/messages', requireRole('owner','admin','manager')
     try {
       sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [message]));
     } catch (err) {
-      await logFailedOutgoing(db, friend.id, messageType, body.content, actor);
+      await logFailedOutgoing(db, friend.id, messageType, body.content, actor, 'api_error');
       console.error('POST /api/friends/:id/messages: LINE push failed', err);
       return c.json({ success: false, error: 'LINE への送信に失敗しました。時間をおいて再度お試しください。' }, 502);
     }

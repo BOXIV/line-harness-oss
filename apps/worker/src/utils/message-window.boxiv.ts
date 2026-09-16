@@ -17,11 +17,13 @@ export const MESSAGE_WINDOW_MAX = 500;
 export type MessageRow = QuotableRow & {
   status: string | null;
   sent_by_name: string | null;
+  /** 送信失敗の理由（migration 926）。status='failed' のときだけ入る。既存行は NULL。 */
+  failure_reason: string | null;
   created_at: string;
 };
 
 const COLUMNS =
-  'id, friend_id, direction, message_type, content, status, line_message_id, quoted_message_id, sent_by_name, created_at';
+  'id, friend_id, direction, message_type, content, status, line_message_id, quoted_message_id, sent_by_name, failure_reason, created_at';
 
 /** limit クエリを既定値／上限へ丸める。数値でなければ既定値。 */
 export function parseMessageLimit(raw: string | undefined): number {

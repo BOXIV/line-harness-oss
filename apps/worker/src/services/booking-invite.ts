@@ -15,7 +15,7 @@ import {
 import { LineClient } from '@line-crm/line-sdk';
 import { prefectureToArea, generateInviteToken } from '../utils/area.js';
 import { queryCustomerByLineUserId, getCustomerByPageId } from './notion.js';
-import { logFailedOutgoing, type OutgoingActor } from './message-log.boxiv.js';
+import { logFailedOutgoing, resolveNotFollowingReason, type OutgoingActor } from './message-log.boxiv.js';
 import type { Env } from '../index.js';
 import { firstSentMessageId } from '../utils/quote.js';
 
@@ -198,7 +198,8 @@ export async function createAndSendBookingInvite(
     const flex = buildBookingInviteFlex(record.customer_name, url);
     // 未フォロー（友だち未追加/ブロック中）には届かないため、送信失敗として記録してスキップ。
     if (!friend.is_following) {
-      await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), input.actor);
+      const reason = await resolveNotFollowingReason(env.DB, friend.id);
+      await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), input.actor, reason);
       console.warn(`booking-invite service: friend ${friend.id} is not following — skip push, recorded as failed`);
     } else {
       try {
@@ -215,7 +216,7 @@ export async function createAndSendBookingInvite(
           .run();
       } catch (err) {
         // 失敗を握りつぶさず messages_log に記録（個別チャットに「送信失敗」として表示）
-        await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), input.actor);
+        await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), input.actor, 'api_error');
         console.error('booking-invite service: LINE push failed (non-blocking):', err);
       }
     }
