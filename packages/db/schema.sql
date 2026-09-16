@@ -136,6 +136,12 @@ CREATE TABLE IF NOT EXISTS messages_log (
   -- 自動送信（シナリオ / 一斉配信 / 自動応答 / automation）は両方 NULL のまま。
   sent_by_id       TEXT,
   sent_by_name     TEXT,
+  -- 送信失敗の理由。migration 926。status='failed' のときだけ入る（既存行は NULL=理由不明）。
+  --   'blocked'   = ブロック/友だち削除された（過去に届いた実績あり）
+  --   'not_added' = まだ友だち追加されていない（届いた実績なし）
+  --   'api_error' = LINE API がエラーを返した
+  -- 失敗した時点の事実として焼き付ける（後から is_following が変わっても書き換えない）。
+  failure_reason   TEXT,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 

@@ -11,6 +11,23 @@ export interface QuotedMessagePreview {
   content: string
 }
 
+/**
+ * 送信失敗バブルの文言。理由ごとに「次に何をすればいいか」が変わるので言い分ける。
+ * 理由不明（migration 926 より前の行）は従来どおりの表現に倒す。
+ */
+function failureText(reason: string | null | undefined): string {
+  switch (reason) {
+    case 'blocked':
+      return 'ブロックされているため送信できませんでした'
+    case 'not_added':
+      return '友だち未追加のため送信できませんでした'
+    case 'api_error':
+      return '送信に失敗しました（LINE エラー）'
+    default:
+      return '送信失敗（未達）'
+  }
+}
+
 export interface ChatMessageRow {
   id: string
   direction: 'incoming' | 'outgoing'
@@ -24,6 +41,12 @@ export interface ChatMessageRow {
    * 管理画面だけの表示で、顧客の LINE トークには一切出ない。
    */
   sentByName?: string | null
+  /**
+   * 送信失敗の理由（migration 926）。status='failed' のときだけ入る。
+   * 'blocked'=ブロック/友だち削除 / 'not_added'=まだ友だち追加されていない / 'api_error'=LINE API エラー。
+   * null は migration より前に記録された行＝理由不明。
+   */
+  failureReason?: string | null
   createdAt: string
   /** 引用返信のとき、引用元の LINE メッセージID（非NULL = 引用あり）。 */
   quotedMessageId?: string | null
@@ -222,6 +245,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
   const isOutgoing = message.direction === 'outgoing'
   const isRich = RICH_TYPES.has(message.messageType)
   const isFailed = isOutgoing && message.status === 'failed'
+  const failureLabel = isFailed ? failureText(message.failureReason) : null
   // 「誰が送ったか」を日時の左に出す（送信側のみ・管理画面だけの表示）。
   // 名前が無いのは自動送信 or migration 923 より前の記録なので、その場合は何も出さない。
   const senderLabel = isOutgoing ? message.sentByName?.trim() || null : null
@@ -244,7 +268,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
             <MediaContent messageType={message.messageType} content={message.content} />
           </div>
           <p className={`text-xs mt-1 ${isRich ? 'text-gray-500' : isOutgoing ? 'text-green-200' : 'text-gray-400'}`}>
-            {isFailed && <span className="text-red-500 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
+            {failureLabel && <span className="text-red-500 font-semibold mr-1">⚠ {failureLabel}</span>}
             {senderLabel && <span className="mr-1 font-medium">{senderLabel}</span>}
             {formatStamp(message.createdAt)}
           </p>
@@ -285,7 +309,7 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
           </div>
         )}
         <span className="text-xs text-white/50 mt-0.5 px-1">
-          {isFailed && <span className="text-red-400 font-semibold mr-1">⚠ 送信失敗（未達）</span>}
+          {failureLabel && <span className="text-red-400 font-semibold mr-1">⚠ {failureLabel}</span>}
           {senderLabel && <span className="mr-1 font-medium text-white/70">{senderLabel}</span>}
           {formatStamp(message.createdAt)}
         </span>

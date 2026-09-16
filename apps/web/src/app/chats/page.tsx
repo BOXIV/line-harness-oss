@@ -92,6 +92,8 @@ interface ChatMessage {
   status?: string | null
   /** 送信したオペレーター名（送信のみ / 自動送信は null）。顧客側には出ない。 */
   sentByName?: string | null
+  /** 送信失敗の理由（migration 926）。'blocked'|'not_added'|'api_error'|null。 */
+  failureReason?: string | null
   createdAt: string
   quotedMessageId?: string | null
   quotedMessage?: QuotedMessagePreview | null
@@ -144,6 +146,8 @@ interface MessageLog {
   status?: string | null
   /** 送信したオペレーター名（送信のみ / 自動送信は null）。顧客側には出ない。 */
   sentByName?: string | null
+  /** 送信失敗の理由（migration 926）。'blocked'|'not_added'|'api_error'|null。 */
+  failureReason?: string | null
   createdAt: string
   quotedMessageId?: string | null
   quotedMessage?: QuotedMessagePreview | null

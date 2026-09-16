@@ -601,8 +601,8 @@ async function sendBookingStatusNotification(
 
   // 未フォロー（友だち未追加/ブロック中）には届かない。送信失敗として記録してスキップ。
   if (!friend.is_following) {
-    const { logFailedOutgoing } = await import('../services/message-log.boxiv.js');
-    await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex));
+    const { logFailedOutgoing, resolveNotFollowingReason } = await import('../services/message-log.boxiv.js');
+    await logFailedOutgoing(env.DB, friend.id, 'flex', JSON.stringify(flex), null, await resolveNotFollowingReason(env.DB, friend.id));
     return;
   }
   const { LineClient } = await import('@line-crm/line-sdk');

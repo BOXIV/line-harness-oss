@@ -6,7 +6,7 @@ import {
   primaryLink,
   type NotionFriendLinks,
 } from '../services/notion-friend-link.boxiv.js';
-import { logFailedOutgoing } from '../services/message-log.boxiv.js';
+import { logFailedOutgoing, notFollowingMessage, resolveNotFollowingReason } from '../services/message-log.boxiv.js';
 import { buildQuoteIndex, firstSentMessageId } from '../utils/quote.js';
 import { loadMessageWindow } from '../utils/message-window.boxiv.js';
 import { SOURCE_TAG_NAMES } from '../services/source-tag.boxiv.js';
@@ -266,6 +266,8 @@ chats.get('/api/chats/:id', async (c) => {
           status: m.status,
           // 送信者名（migration 923）。自動送信は NULL。管理画面だけの表示で顧客には出ない。
           sentByName: m.sent_by_name ?? null,
+          // 送信失敗の理由（migration 926）。管理画面の文言の出し分けに使う。古い行は NULL。
+          failureReason: m.failure_reason ?? null,
           createdAt: m.created_at,
           // 引用返信: quotedMessageId が非NULL = 引用元あり。解決できた場合のみ quotedMessage を返す。
           quotedMessageId: m.quoted_message_id ?? null,
@@ -405,8 +407,9 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     // 未フォロー（友だち未追加/ブロック中）には送れない。LINE は push に 200 を返すが届かないため、
     // オペレーターに失敗を即時通知し、送信失敗として記録する（黙って成功扱いにしない）。
     if (!friend.is_following) {
-      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content, actor);
-      return c.json({ success: false, error: 'この友だちは未フォロー（友だち未追加・ブロック中）のため送信できません。友だち追加を依頼してください。' }, 422);
+      const reason = await resolveNotFollowingReason(c.env.DB, friend.id);
+      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content, actor, reason);
+      return c.json({ success: false, error: notFollowingMessage(reason) }, 422);
     }
 
     // LINE APIでメッセージ送信 — buildMessage で text / image / video / flex / file を統一処理
@@ -419,7 +422,7 @@ chats.post('/api/chats/:id/send', requireRole('owner','admin','manager'), async 
     try {
       sentLineId = firstSentMessageId(await lineClient.pushMessage(friend.line_user_id, [lineMessage]));
     } catch (err) {
-      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content, actor);
+      await logFailedOutgoing(c.env.DB, friend.id, messageType, body.content, actor, 'api_error');
       console.error('POST /api/chats/:id/send: LINE push failed', err);
       return c.json({ success: false, error: 'LINE への送信に失敗しました。時間をおいて再度お試しください。' }, 502);
     }
