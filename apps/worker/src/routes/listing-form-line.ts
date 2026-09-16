@@ -27,7 +27,7 @@
 import { Hono } from 'hono';
 import type { Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, claimLinkCompletedNotified, unmarkLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
+import { upsertOnSubmit, markLinked, insertOrphanLink, setNotionPageId, setSlackThreadTs, claimLinkCompletedNotified, unmarkLinkCompletedNotified, LINK_COMPLETED_EVENT } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateSellerRow, linkSellerRow } from '../services/listing-notion.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { lookupPostalCode } from '../services/jp-postal.boxiv.js';
@@ -203,7 +203,10 @@ listingFormLine.post('/listing-form/submit', async (c) => {
   const returnTo = body.return_to && isAllowedReturnTo(String(body.return_to), reqHost) ? String(body.return_to) : null;
 
   // 1) D1 台帳に upsert（正本）— 非致命
-  await upsertOnSubmit(c.env.DB, { matchKey, formData: fields, name, phone, email, returnTo })
+  // boxiv_id 付きの submit は Portal アプリ経由の起票。連携完了イベントの種別は flow で決まるので、
+  // ここで入口を記録する（boxiv_id 無し＝Web フォームからの起票）。
+  const submitFlow = boxivId ? 'app_listing' : 'listing_form';
+  await upsertOnSubmit(c.env.DB, { matchKey, formData: fields, name, phone, email, returnTo, flow: submitFlow })
     .catch((e) => console.error('listing-form submit: D1 upsert failed', e));
 
   // 2) 郵便番号（住所→API、ベストエフォート）
@@ -253,7 +256,7 @@ export const listingFormFlow: LinkFlow<ListingStateV1> = {
     try {
       const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
       if (!entry) {
-        await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
+        await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName, 'seller', 'listing_form');
       } else {
         linkedEntry = entry;
         notionPageId = entry.notion_page_id;
@@ -504,7 +507,7 @@ async function fireListingLinkCompleted(
   try {
     await fireEvent(
       env.DB,
-      'listing_link_completed',
+      LINK_COMPLETED_EVENT.listing_form,
       {
         friendId: friend.id,
         eventData: {

@@ -67,7 +67,9 @@ export function notionSellerConfig(env: ListingNotionEnv): Cfg | null {
     emailProp: env.NOTION_SELLER_EMAIL_PROP || '[Form]メールアドレス',
     memoProp: env.NOTION_SELLER_MEMO_PROP || 'その他詳細備考',
     listingIdProp: env.NOTION_SELLER_LISTING_ID_PROP || '掲載ID',
-    boxivIdProp: env.NOTION_SELLER_BOXIV_ID_PROP || 'boxivID',
+    // 本番の出品者リストにあるのは「BOXIV ID」だけ（(Dev) にだけ旧名の boxivID が残っている）。
+    // 旧名のままだと本番では存在しない列への書き込みになり、アプリ出品の起票ごと Notion に弾かれる。
+    boxivIdProp: env.NOTION_SELLER_BOXIV_ID_PROP || 'BOXIV ID',
     zipProp: env.NOTION_SELLER_ZIP_PROP || '郵便番号',
     statusProp: env.NOTION_SELLER_STATUS_PROP || 'ステータス ',
     statusValue: env.NOTION_SELLER_STATUS_VALUE || '0_LINE登録',
@@ -268,6 +270,27 @@ async function queryPageId(cfg: Cfg, prop: string, value: string): Promise<strin
   }
 }
 
+/**
+ * prop = value の行を**全部**返す（created_time 降順）。queryPageId が先頭 1 件しか見ないのに対し、
+ * 「人」単位の照合（BOXIV ID）で同じ人の全掲載行を扱うときに使う。
+ * page_size は 100。同一人物の掲載が 100 を超えることは想定しない（超えた分は次ページで、今は扱わない）。
+ */
+async function queryPageIdsAll(cfg: Cfg, prop: string, value: string): Promise<string[]> {
+  try {
+    const q = await notionApi(cfg, `/databases/${cfg.dbId}/query`, 'POST', {
+      filter: { property: prop, rich_text: { equals: value } },
+      sorts: [{ timestamp: 'created_time', direction: 'descending' }],
+      page_size: 100,
+    });
+    const ids = (q.results ?? []).map((r: { id?: string }) => r.id).filter((id: unknown): id is string => typeof id === 'string');
+    if (q.has_more) console.warn(`listing-notion: ${prop}=${value} の行が 100 件を超えています（先頭 100 件だけ処理）`);
+    return ids;
+  } catch (err) {
+    console.error(`listing-notion: ${prop}=${value} の検索に失敗`, err);
+    return [];
+  }
+}
+
 export interface CreateInput {
   matchKey: string;
   formData: Record<string, unknown>;
@@ -373,7 +396,15 @@ export interface LinkByBoxivIdInput {
 /**
  * アプリ出品フロー用: boxivID で Notion 出品者DB を引き当て、lineUserId / 連携ステータス(連携済) を PATCH。
  * フォームフロー(match_key)と違い、アプリは boxivID を署名 state で持つのでそれをキーにする。
- * 行は submit（起票）が boxivID 入りで作っている前提。無ければ何もしない(null)。返り値: pageId or null。
+ * 行は起票（portal-notion-daemon / submit）が boxivID 入りで作っている前提。
+ *
+ * BOXIV ID は「人」の ID で、起票は「掲載（車両）」ごとに 1 行作るので、同じ人に複数行あるのが普通
+ * （2 台目を出せば 2 行）。LINE 連携は人単位なので、**見つかった全行に同じ lineUserId を書く**
+ * （2026-09-16 決定）。1 行だけ更新すると、残りの掲載が Notion 上で「LINE未登録」のまま見え、
+ * どの行が更新されるかも Notion の返却順任せになる。
+ * 既に別の lineUserId が入っている行も上書きする（LINE アカウントを変えて連携し直した扱い）。
+ *
+ * 返り値: 更新した行のうち最新（created_time 降順の先頭）の pageId。行が無ければ null。
  */
 export async function linkSellerRowByBoxivId(
   env: ListingNotionEnv,
@@ -381,13 +412,30 @@ export async function linkSellerRowByBoxivId(
 ): Promise<string | null> {
   const cfg = notionSellerConfig(env);
   if (!cfg) return null;
-  const pageId = await queryPageId(cfg, cfg.boxivIdProp, input.boxivId);
-  if (!pageId) return null; // 起票済みが前提。無ければ紐付け対象なし
-  await notionApi(cfg, `/pages/${pageId}`, 'PATCH', {
-    properties: {
-      [cfg.lineUserIdProp]: richText(input.lineUserId),
-      [cfg.linkStatusProp]: notionValue('select', cfg.linkStatusLinked),
-    },
-  });
-  return pageId;
+  const pageIds = await queryPageIdsAll(cfg, cfg.boxivIdProp, input.boxivId);
+  if (pageIds.length === 0) return null; // 起票済みが前提。無ければ紐付け対象なし
+  const properties = {
+    [cfg.lineUserIdProp]: richText(input.lineUserId),
+    [cfg.linkStatusProp]: notionValue('select', cfg.linkStatusLinked),
+  };
+  // 1 行ずつ順に PATCH（Notion のレート制限は 3 req/s。同一人物の掲載数は少ないので直列で足りる）。
+  // 途中で失敗しても残りは続け、1 行も更新できなければ throw（呼び出し側が非致命として握る）。
+  let done = 0;
+  let lastErr: unknown = null;
+  for (const pageId of pageIds) {
+    try {
+      await notionApi(cfg, `/pages/${pageId}`, 'PATCH', { properties });
+      done += 1;
+    } catch (err) {
+      lastErr = err;
+      console.error(`listing-notion: boxivID=${input.boxivId} の行 ${pageId} への lineUserId PATCH に失敗`, err);
+    }
+  }
+  if (done === 0) throw lastErr ?? new Error(`boxivID=${input.boxivId} の Notion 行を 1 行も更新できませんでした`);
+  if (done < pageIds.length) {
+    console.warn(`listing-notion: boxivID=${input.boxivId} は ${pageIds.length} 行中 ${done} 行だけ更新（残りは失敗）`);
+  } else {
+    console.log(`listing-notion: boxivID=${input.boxivId} の ${done} 行に lineUserId を書き込み`);
+  }
+  return pageIds[0];
 }

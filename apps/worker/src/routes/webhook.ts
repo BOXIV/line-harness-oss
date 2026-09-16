@@ -18,7 +18,7 @@ import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
 import { ingestLineMedia } from '../services/incoming-media.boxiv.js';
 import { enqueueBurstNotify } from '../services/slack-burst-notify.boxiv.js';
-import { getLinkedEntryByLineUserId, claimLinkCompletedNotified, unmarkLinkCompletedNotified } from '../services/listing-entry.boxiv.js';
+import { getLinkedEntryByLineUserId, claimLinkCompletedNotified, unmarkLinkCompletedNotified, resolveEntryFlow, LINK_COMPLETED_EVENT } from '../services/listing-entry.boxiv.js';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { firstSentMessageId } from '../utils/quote.js';
 import type { Env } from '../index.js';
@@ -204,7 +204,8 @@ async function handleEvent(
         await ensureSourceTag(db, friend.id, entrySource).catch((err) =>
           console.error(`follow: ensureSourceTag(${entrySource}) failed (friend=${friend.id})`, err),
         );
-        const eventType = entrySource === 'buyer' ? 'buyer_link_completed' : 'listing_link_completed';
+        // 種別は入口（flow）で決める。source だけだと Web 出品とアプリ出品が同じ seller で区別できない。
+        const eventType = LINK_COMPLETED_EVENT[resolveEntryFlow(linkedEntry)];
         try {
           await fireEvent(
             db,

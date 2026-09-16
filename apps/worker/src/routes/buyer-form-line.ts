@@ -27,6 +27,7 @@ import {
   setSlackThreadTs,
   claimLinkCompletedNotified,
   unmarkLinkCompletedNotified,
+  LINK_COMPLETED_EVENT,
 } from '../services/listing-entry.boxiv.js';
 import { createOrUpdateBuyerRow, linkBuyerRow, ENTRY_TYPE_LABEL } from '../services/buyer-notion.boxiv.js';
 import type { BuyerEntryType } from '../services/buyer-notion.boxiv.js';
@@ -219,7 +220,7 @@ buyerFormLine.post('/buyer-form/submit', async (c) => {
   if (vehicle) formData['車両'] = vehicle;
 
   // 1) D1 台帳に upsert（正本）— 非致命
-  await upsertOnSubmit(c.env.DB, { matchKey, formData, name, phone, email, returnTo, source: 'buyer' })
+  await upsertOnSubmit(c.env.DB, { matchKey, formData, name, phone, email, returnTo, source: 'buyer', flow: 'buyer_form' })
     .catch((e) => console.error('buyer-form submit: D1 upsert failed', e));
 
   // 2) 郵便番号（住所→API、ベストエフォート）
@@ -412,7 +413,7 @@ export const buyerFormFlow: LinkFlow<BuyerStateV1> = {
     try {
       const entry = await markLinked(c.env.DB, ctx.form_id, profile.userId, profile.displayName);
       if (!entry) {
-        await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName, 'buyer');
+        await insertOrphanLink(c.env.DB, ctx.form_id, profile.userId, profile.displayName, 'buyer', 'buyer_form');
       } else {
         linkedEntry = entry;
         notionPageId = entry.notion_page_id;
@@ -658,7 +659,7 @@ async function fireBuyerLinkCompleted(
   try {
     await fireEvent(
       env.DB,
-      'buyer_link_completed',
+      LINK_COMPLETED_EVENT.buyer_form,
       {
         friendId: friend.id,
         eventData: {

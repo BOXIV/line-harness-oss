@@ -15,7 +15,8 @@
 //    その scheme へ戻す。
 //
 // フォームフロー(listing_form)との違い:
-//   - 相関キーは match_key ではなく boxivID（BOXIV ユーザーID）。app が署名 state に積む。
+//   - 相関キーは boxivID（BOXIV ユーザーID）。app が署名 state に積む。台帳の match_key も
+//     boxivID（Portal の submit と同じ key）。入口の識別は key の形ではなく flow='app_listing'。
 //   - Notion 行は submit（起票）が boxivID 入りで作っている前提。連携時は boxivID で
 //     引き当てて LINE User ID を update する。
 //   - 終端は web の HTML ページでなく、未フォローでもアプリの自スキームへ redirect。
@@ -25,6 +26,16 @@ import type { Context } from 'hono';
 import { packSignedState, escapeHtml, buildLinkCallbackUrl } from '../services/line-login.boxiv.js';
 import type { LinkFlow, LinkStateBase } from '../services/line-login.boxiv.js';
 import { linkSellerRowByBoxivId } from '../services/listing-notion.boxiv.js';
+import {
+  markLinked,
+  insertOrphanLink,
+  setNotionPageId,
+  claimLinkCompletedNotified,
+  unmarkLinkCompletedNotified,
+  LINK_COMPLETED_EVENT,
+} from '../services/listing-entry.boxiv.js';
+import { fireEvent } from '../services/event-bus.js';
+import type { Friend } from '@line-crm/db';
 import { ensureSourceTag } from '../services/source-tag.boxiv.js';
 import { slackPost, buildSlackCard } from '../services/slack.boxiv.js';
 import type { Env } from '../index.js';
@@ -131,17 +142,48 @@ appListing.get('/app-listing/done', (c) => {
 
 /**
  * アプリ出品フローの連携確定処理。共有 callback（link-callback.boxiv.ts）から呼ばれる。
- * friend は共通前半で登録済み。ここでは Notion 連携（boxivID キー）＋タグ「出品者」＋
- * アプリへのスキーム redirect。
+ * friend は共通前半で登録済み。ここでは D1 台帳の連携書き込み → Notion 連携（boxivID キー）
+ * → タグ「出品者」→ アプリへのスキーム redirect。
  */
 export const appListingFlow: LinkFlow<AppListingStateV1> = {
   async complete(c, ctx, profile, followStatus, friend) {
-    // boxivID キーで Notion 出品者DB の LINE User ID を update（行は submit 起票済みが前提）。非致命。
+    // 台帳（listing_entries）の match_key は boxivID そのもの。Portal の起票
+    // （/listing-form/submit）が同じ boxivID を match_key に使うので、markLinked が起票行に当たる。
+    // 起票なしの直連携は insertOrphanLink で行を作る。
+    // 入口の識別は flow 列（app_listing）で行い、key の形に意味を持たせない。
+    const matchKey = ctx.boxiv_id;
+
+    // D1 台帳（listing_entries）に「連携済み」の行を作る。これが無いと follow webhook の
+    // 連携済み判定（getLinkedEntryByLineUserId）に引っかからず、OAuth 時に未フォローだった人が
+    // 後から友だち追加したときに、出品者向けではなく一般の friend_add 挨拶が飛ぶ。
+    // Portal の submit で起票済みなら markLinked が当たって linked になる（催促 CRON が止まる）。
+    // submit を経ない直連携は orphan 行を作る。
+    // ⚠️ この書き込みより前に遅い外部処理（Notion/Slack 等）を挟まないこと。
+    // follow webhook 側は新規フォロー時に 3 秒ホールドしてから再判定するため、
+    // 間に合わないと連携ユーザへ挨拶を誤送する（listing_form と同じ制約）。
+    let entry: Awaited<ReturnType<typeof markLinked>> = null;
+    try {
+      entry = await markLinked(c.env.DB, matchKey, profile.userId, profile.displayName);
+      if (!entry) {
+        entry = await insertOrphanLink(c.env.DB, matchKey, profile.userId, profile.displayName, 'seller', 'app_listing');
+      }
+    } catch (err) {
+      console.error(`app-listing: D1 台帳の連携書き込みに失敗 (boxiv_id=${ctx.boxiv_id})`, err);
+    }
+
+    // boxivID キーで Notion 出品者DB の LINE User ID を update（行は起票済みが前提）。非致命。
+    // 同じ人（boxivID）の行は掲載ごとに複数あるので全行に書く。返るのは最新行の pageId。
     try {
       const pageId = await linkSellerRowByBoxivId(c.env, {
         boxivId: ctx.boxiv_id,
         lineUserId: profile.userId,
       });
+      // 台帳から Notion 行へ辿れるようにしておく（後続の PATCH・突合で使う）。台帳は人単位で 1 行なので最新行の id を持つ。
+      if (pageId && entry) {
+        await setNotionPageId(c.env.DB, matchKey, pageId).catch((err) =>
+          console.error(`app-listing: 台帳への notion_page_id 保存に失敗 (boxiv_id=${ctx.boxiv_id})`, err),
+        );
+      }
       if (!pageId) {
         // boxivID に対応する出品者行が無い（起票前提だが未検出）→ Slack で警告。
         // 通知先は env の SLACK_LISTING_LINK_CHANNEL_ID＝dev/prod で別チャンネル。別 try で握る（非致命）。
@@ -178,9 +220,14 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
       );
     }
 
-    // TODO(#68/Q4): アプリ用の連携完了イベント（app_listing_link_completed）を発火し、
-    //   フォロー促し/SMS・メール催促を automation で駆動する（listing_form の listing_link_completed と別イベント）。
+    // 連携完了イベントを発火して automation（出品価格お知らせ等）を駆動する。
+    // 種別は LINK_COMPLETED_EVENT.app_listing（今は Web 出品と同じ listing_link_completed の流用。
+    // TODO(#68/Q4) でアプリ用イベントに分けるときは、あの表の1行を差し替えれば
+    // ここと follow webhook の救済経路が同時に切り替わる）。
     // TODO(#66/#73): 必要になれば boxivID → Cloud SQL User の紐付けをここに足す。
+    await fireAppListingLinkCompleted(c.env, matchKey, ctx, profile, followStatus, friend).catch((err) =>
+      console.error(`app-listing: listing_link_completed fire threw (boxiv_id=${ctx.boxiv_id})`, err),
+    );
 
     // 終端: アプリの自スキームへ戻す。scheme は署名 state 内（start で許可リスト検証済み）＝改竄不可。
     // dev/prod で別アプリに戻る。followed=0 のとき app 側でフォロー促し画面を出す（#67）。
@@ -202,6 +249,54 @@ export const appListingFlow: LinkFlow<AppListingStateV1> = {
     );
   },
 };
+
+/**
+ * 連携完了イベント（listing_link_completed）を発火する。listing_form の同名処理と同じ作法:
+ *   - フォロー済みのときだけ送る。未フォローは送れないので発火せず、後から友だち追加した際に
+ *     follow webhook が台帳の連携済み行を見て救済発火する。
+ *   - 送信権を **先に** 原子的に確保する（fire→mark の順だと follow webhook 側と数秒差で
+ *     競合したとき両方が送信に進み、2 通届く）。取れなければ相手が送っている。
+ */
+async function fireAppListingLinkCompleted(
+  env: Env['Bindings'],
+  matchKey: string,
+  ctx: AppListingStateV1,
+  profile: { userId: string; displayName: string; pictureUrl?: string },
+  followStatus: boolean | null,
+  friend: Friend | null,
+): Promise<void> {
+  if (!friend) {
+    console.warn(`app-listing: friend が無い — listing_link_completed をスキップ (boxiv_id=${ctx.boxiv_id})`);
+    return;
+  }
+  if (followStatus !== true) {
+    console.log(`app-listing: 未フォローのため listing_link_completed を保留（follow 時に送信） boxiv_id=${ctx.boxiv_id}`);
+    return;
+  }
+  if (!(await claimLinkCompletedNotified(env.DB, friend.id, 'seller'))) {
+    console.log(`app-listing: listing_link_completed は送信済み（follow 側が先行）friend=${friend.id}`);
+    return;
+  }
+  try {
+    await fireEvent(
+      env.DB,
+      LINK_COMPLETED_EVENT.app_listing,
+      {
+        friendId: friend.id,
+        eventData: {
+          formId: matchKey,
+          displayName: profile.displayName,
+          formInputName: ctx.display_name || null,
+        },
+      },
+      env.LINE_CHANNEL_ACCESS_TOKEN,
+    );
+  } catch (err) {
+    // 送れなかったらフラグを戻す（次の機会＝再フォロー/follow 救済で送れるように）
+    await unmarkLinkCompletedNotified(env.DB, friend.id, 'seller').catch(() => undefined);
+    throw err;
+  }
+}
 
 /** 終端ページ共通のハードニング（キャッシュ・フレーム埋め込み・外部リソース・リファラを封じる）。 */
 function setTerminalPageHeaders(c: Context<Env>): void {
