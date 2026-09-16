@@ -68,8 +68,12 @@ interface MessageBubbleProps {
 
 function MediaContent({ messageType, content }: { messageType: string; content: string }) {
   if (messageType === 'flex') {
+    // ⚠️ 上限をビューポート基準(80vw)にすると、トーク欄が画面より狭いとき
+    //    （左に一覧・右にユーザー情報がある3カラム）に欄からはみ出す。
+    //    送信バブルは右寄せなので、はみ出した分は **左へ** 流れて切れる。
+    //    親の幅を上限にすること（横スクロールは内側で持つ）。
     return (
-      <div className="overflow-x-auto" style={{ maxWidth: 'min(640px, 80vw)' }}>
+      <div className="overflow-x-auto max-w-full" style={{ maxWidth: 640 }}>
         <FlexPreview content={content} maxWidth={300} />
       </div>
     )
@@ -287,13 +291,14 @@ export default function MessageBubble({ message, friendPictureUrl, variant = 'ch
         )
       )}
 
-      <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
+      {/* min-w-0 が無いと、中身の実寸より縮まずカルーセルがトーク欄からはみ出す。 */}
+      <div className={`flex flex-col min-w-0 ${isOutgoing ? 'items-end' : 'items-start'}`}>
         <QuotedBubble quotedMessageId={message.quotedMessageId} quotedMessage={message.quotedMessage} tone="onDark" onJump={onQuoteJump} />
         {isRich ? (
           // Rich content renders its own frame (LINE-style card / video player / file card).
           // No outer bubble — keeps the chat background visible around it.
           // flex（カルーセル等）は MediaContent 側で幅と横スクロールを持つので外側 cap を外す。
-          <div className={message.messageType === 'flex' ? '' : 'max-w-[320px]'}>
+          <div className={message.messageType === 'flex' ? 'max-w-full min-w-0' : 'max-w-[320px]'}>
             <MediaContent messageType={message.messageType} content={message.content} />
           </div>
         ) : (
