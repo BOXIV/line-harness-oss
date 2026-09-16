@@ -144,6 +144,10 @@ export type Env = {
     NOTION_SELLER_STATUS_PROP?: string;  // default: ステータス
     NOTION_BUYER_STATUS_PROP?: string;
     NOTION_SELLER_LISTING_ID_PROP?: string;  // default: 掲載ID
+    // 取引メモ (BOXIV / migration 927) — Notion の「取引メモ」を個別チャットに出す。
+    // ⚠️ 下の NOTION_*_MEMO_PROP（既定「その他詳細備考」）はフォーム台帳の**書き込み先**で別物。
+    NOTION_SELLER_DEAL_MEMO_PROP?: string;   // default: 取引メモ
+    NOTION_BUYER_DEAL_MEMO_PROP?: string;    // default: 取引メモ
     NOTION_SELLER_LISTING_TYPE_PROP?: string; // default: 出品タイプ（連携先候補の表示用）
     NOTION_AUTOMATION_SECRET?: string;       // PR6: Notion DBオートメーション Send webhook の共有シークレット（未設定なら受信口は無効）
     // バッテリー劣化診断 LIFF フォーム (BOXIV) — 全て任意（未設定なら該当処理をスキップ）
