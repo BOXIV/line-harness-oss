@@ -126,18 +126,14 @@ export default function NotionLinkPicker({ friendId, onLinked, className }: Prop
 
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false)
-    }
+    // 画面外クリックでの close は背景（backdrop）が担う。
+    // パネルはボタンの外（fixed のオーバーレイ）に出ているので、
+    // wrapperRef.contains() で判定すると**パネル内のクリックでも閉じてしまう**。
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
-    document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
+    return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
   const allCandidates = groups.flatMap((g) => g.candidates)
@@ -185,8 +181,14 @@ export default function NotionLinkPicker({ friendId, onLinked, className }: Prop
         🔗 Notion連携 {open ? '▴' : '▾'}
       </button>
 
+      {/* ⚠️ ボタン基準の absolute ドロップダウンにしない。
+          このピッカーは幅 288px のユーザー情報カラム（overflow-y-auto）に置かれていて、
+          幅 26rem のパネルは**カラムの外へはみ出した分が切り取られる**（実際に左半分が消えた）。
+          画面中央の固定オーバーレイにすれば置き場所の幅に左右されない。 */}
       {open && (
-        <div className="absolute right-0 z-30 mt-1 w-[26rem] max-w-[calc(100vw-2rem)] rounded-md border border-gray-200 bg-white p-3 shadow-lg">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div className="relative w-full max-w-[26rem] max-h-[85vh] overflow-y-auto rounded-md border border-gray-200 bg-white p-3 shadow-2xl">
           <p className="text-xs font-semibold text-gray-700">連携する行を選択（出品者 / 購入者）</p>
 
           {loading ? (
@@ -326,7 +328,8 @@ export default function NotionLinkPicker({ friendId, onLinked, className }: Prop
             </>
           )}
 
-          {error && <p className="mt-2 text-[11px] text-red-600">{error}</p>}
+            {error && <p className="mt-2 text-[11px] text-red-600">{error}</p>}
+          </div>
         </div>
       )}
     </div>
