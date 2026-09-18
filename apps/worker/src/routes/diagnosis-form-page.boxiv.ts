@@ -1,12 +1,15 @@
-// BOXIV-only: バッテリー劣化診断フォームのページ HTML。
+// BOXIV-only: 愛車相場チェック・Battery劣化診断フォームのページ HTML。
 // デザインは lightning.boxiv.co.jp 準拠（白基調 / #1a1a1a / ピル型ボタン / Noto Sans JP / 角丸カード）。
-// ファーストビュー = 動画背景（街を走るテスラ→側面→バッテリー可視化）＋
-// 字幕シーケンス＋バッテリーゲージのベクターアニメ＋CTA。
-// 動画は R2 (`/media/video/diagnosis-hero.mp4`) から配信。reduced-motion / 動画エラー時は
-// ポスター静止画＋完成状態に即フォールバックする。
+//
+// 最初の 1 問「お車の種類」で入力項目を切り替える:
+//   ルートA（Tesla Model 3 / Y）          = VIN だけ入力（車両情報は spec_API から取る）
+//   ルートB（その他のテスラ／テスラ以外のEV） = 車種・グレード・初度登録年月を入力
+// Model 3 / Y で「車台番号がわからない方はこちら」を押すとルートB に切り替わり、車種を選択済みにする。
+//
+// 旧版にあったテスラ向けのイントロ演出（動画＋バッテリーゲージ）は外した。全 EV 向けの入口に合わず、
+// 訴求は LP と広告で済んでいるため（依頼書 §5-5 ②）。
 
-const HERO_VIDEO = '/media/video/diagnosis-hero.mp4';
-const HERO_POSTER = '/media/video/diagnosis-hero-poster.jpg';
+import { SOUBA_CAR_GROUPS } from '../services/souba-car-models.boxiv.js';
 
 // 公式ロゴ（Figma「Lightning_logo_str」エクスポート・稲妻はブランドグラデーション）
 function logoSvg(textColor: string, id: string): string {
@@ -26,12 +29,14 @@ function logoSvg(textColor: string, id: string): string {
 }
 
 export function renderFormPage(liffId: string): string {
+  // 車種・グレード候補はサーバ側の検証と同じ表を埋め込む（</script> で途切れないよう < をエスケープ）
+  const carGroupsJson = JSON.stringify(SOUBA_CAR_GROUPS).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>バッテリー劣化 無料診断｜BOXIV Lightning</title>
+<title>愛車相場チェック・Battery劣化診断｜BOXIV Lightning</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap" rel="stylesheet">
@@ -41,80 +46,24 @@ export function renderFormPage(liffId: string): string {
     --bg:#fff; --green:#2fd06f; --err:#c62828;
   }
   *{ box-sizing:border-box; margin:0; padding:0; }
+  [hidden]{ display:none !important; }
   html{ scroll-behavior:smooth; }
   body{ background:var(--bg); color:var(--text);
         font-family:"Noto Sans JP","Hiragino Kaku Gothic ProN","Hiragino Sans",sans-serif;
         font-size:15px; line-height:1.8; -webkit-font-smoothing:antialiased; }
 
-  /* ───────── HERO ───────── */
-  #hero{ position:relative; height:100svh; min-height:560px; overflow:hidden; background:#0b1530; }
-  #hero video, #hero .poster{
-    position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center;
-  }
-  #hero .poster{ background:url('${HERO_POSTER}') center/cover no-repeat; display:none; }
-  #hero.no-video video{ display:none; }
-  #hero.no-video .poster{ display:block; }
-  .scrim{ position:absolute; inset:0; pointer-events:none;
-    background:linear-gradient(180deg, rgba(6,12,30,.5) 0%, rgba(6,12,30,0) 30%, rgba(6,12,30,0) 55%, rgba(6,12,30,.72) 100%); }
-  .hbrand{ position:absolute; top:calc(env(safe-area-inset-top, 0px) + 18px); left:20px; width:128px; z-index:3; }
-  .hbrand svg{ width:100%; height:auto; display:block; }
-
-  .cap{
-    position:absolute; left:24px; right:24px; bottom:19%; z-index:2;
-    color:#fff; font-size:22px; font-weight:700; letter-spacing:.02em; line-height:1.6;
-    text-shadow:0 2px 18px rgba(0,10,30,.55);
-    opacity:0; transform:translateY(14px); transition:opacity .7s ease, transform .7s ease;
-    pointer-events:none;
-  }
-  .cap.show{ opacity:1; transform:none; }
-
-  #finale{
-    position:absolute; inset:auto 0 0 0; z-index:4; padding:0 24px calc(env(safe-area-inset-bottom, 0px) + 34px);
-    display:flex; flex-direction:column; align-items:flex-start; gap:14px;
-    opacity:0; transform:translateY(22px); transition:opacity .8s ease, transform .8s ease;
-    pointer-events:none;
-  }
-  #finale.show{ opacity:1; transform:none; pointer-events:auto; }
-  .batt-row{ display:flex; align-items:center; gap:14px; }
-  /* バッテリーが車体側面に「出現→拡大」するエントランス */
-  #finale.show .batt-row{ animation:battpop .9s cubic-bezier(.18,.85,.3,1.15) both .15s; }
-  @keyframes battpop{
-    0%{ opacity:0; transform:scale(.45) translateY(30px); filter:drop-shadow(0 0 0 rgba(76,227,138,0)); }
-    60%{ opacity:1; }
-    100%{ opacity:1; transform:none; filter:drop-shadow(0 0 22px rgba(76,227,138,.45)); }
-  }
-  @media (prefers-reduced-motion: reduce){ #finale.show .batt-row{ animation:none; filter:none; } }
-  .batt{ display:flex; align-items:center; }
-  .batt-shell{ width:132px; height:52px; border:3px solid #fff; border-radius:12px; padding:5px; }
-  .batt-fill{ height:100%; width:100%; border-radius:5px;
-    background:linear-gradient(180deg,#4ce38a,#1fbf5f); transition:none; }
-  .batt-cap{ width:7px; height:20px; background:#fff; border-radius:0 4px 4px 0; margin-left:3px; }
-  .batt-num{ color:#fff; font-weight:900; font-size:44px; line-height:1;
-    font-variant-numeric:tabular-nums; text-shadow:0 2px 14px rgba(0,10,30,.5); }
-  .batt-num small{ font-size:22px; font-weight:700; margin-left:2px; }
-  .batt-note{ color:rgba(255,255,255,.65); font-size:10.5px; margin-top:-6px; }
-  #finale h1{ color:#fff; font-size:29px; font-weight:900; line-height:1.45; letter-spacing:.01em;
-    text-shadow:0 2px 18px rgba(0,10,30,.55); }
-  #finale .sub{ color:rgba(255,255,255,.92); font-size:13.5px; text-shadow:0 1px 10px rgba(0,10,30,.5); }
-
   .pill{
     display:flex; align-items:center; justify-content:center; width:100%; min-height:56px;
     background:var(--ink); color:#fff; border:none; border-radius:999px;
     font-family:inherit; font-size:16px; font-weight:700; letter-spacing:.04em; cursor:pointer;
-    box-shadow:0 8px 28px rgba(0,10,30,.35);
   }
   .pill:active{ transform:scale(.985); }
-  .pill.light{ background:#fff; color:var(--ink); }
-
-  #skip{ position:absolute; right:16px; top:calc(env(safe-area-inset-top, 0px) + 16px); z-index:5;
-    background:rgba(10,18,40,.4); color:rgba(255,255,255,.9); border:1px solid rgba(255,255,255,.45);
-    border-radius:999px; padding:7px 16px; font-family:inherit; font-size:12px; cursor:pointer;
-    backdrop-filter:blur(4px); transition:opacity .4s; }
-  #skip.hide{ opacity:0; pointer-events:none; }
 
   /* ───────── FORM ───────── */
-  main{ max-width:480px; margin:0 auto; padding:44px 22px 72px; }
-  h2.formtitle{ color:var(--ink); font-size:23px; font-weight:700; line-height:1.5; }
+  .brand{ max-width:480px; margin:0 auto; padding:calc(env(safe-area-inset-top, 0px) + 20px) 22px 0; }
+  .brand svg{ width:124px; height:auto; display:block; }
+  main{ max-width:480px; margin:0 auto; padding:26px 22px 72px; }
+  h1.formtitle{ color:var(--ink); font-size:23px; font-weight:700; line-height:1.5; }
   .formlede{ color:var(--mute); font-size:13px; margin-top:8px; }
   .steps{ display:flex; gap:8px; margin-top:18px; }
   .steps span{ flex:1; text-align:center; border-radius:999px;
@@ -130,6 +79,7 @@ export function renderFormPage(liffId: string): string {
     transition:border-color .15s; }
   input:focus, select:focus{ outline:none; border-color:var(--ink); }
   input::placeholder{ color:#b9b9bf; }
+  select:disabled{ background-color:var(--surface); color:var(--mute); }
   .hint{ font-size:12px; color:var(--mute); margin-top:6px; }
   .row2{ display:flex; gap:10px; }
   .row2 > *{ flex:1; }
@@ -138,12 +88,17 @@ export function renderFormPage(liffId: string): string {
   .unit input{ padding-right:48px; }
   select{ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%231a1a1a'/%3E%3C/svg%3E");
           background-repeat:no-repeat; background-position:right 16px center; }
+  #gradeFree{ margin-top:10px; }
   details.vin{ background:var(--surface); border-radius:14px; margin-top:10px; font-size:12.5px; }
   details.vin summary{ cursor:pointer; padding:11px 16px; font-weight:700; color:var(--ink); list-style:none; }
   details.vin summary::before{ content:"＋"; margin-right:8px; }
   details.vin[open] summary::before{ content:"−"; }
   details.vin div{ padding:0 16px 12px; color:var(--mute); }
   details.vin li{ margin:4px 0 4px 1.2em; }
+  .linkbtn{ background:none; border:none; padding:0; margin-top:10px; font-family:inherit; font-size:13px;
+            color:var(--ink); text-decoration:underline; cursor:pointer; }
+  .routenote{ background:var(--surface); border-radius:14px; padding:12px 16px; font-size:12.5px; color:var(--mute); margin-top:20px; }
+  .routenote .linkbtn{ margin-top:4px; font-size:12.5px; }
   .consent{ display:flex; gap:12px; align-items:flex-start; margin-top:26px; padding:16px;
             background:var(--surface); border-radius:16px; font-size:13px; }
   .consent input{ width:19px; height:19px; margin-top:3px; accent-color:var(--ink); flex:none; }
@@ -151,7 +106,7 @@ export function renderFormPage(liffId: string): string {
   .note{ font-size:11.5px; color:var(--mute); margin-top:14px; }
   .error{ display:none; background:#fdecec; color:var(--err); font-size:13px; border-radius:14px;
           padding:12px 16px; margin-top:18px; white-space:pre-wrap; }
-  form .pill{ margin-top:22px; box-shadow:none; }
+  form .pill{ margin-top:22px; }
   form .pill:disabled{ opacity:.45; cursor:default; }
 
   #done{ display:none; margin-top:34px; background:var(--surface); border-radius:20px; padding:30px 24px; text-align:center; }
@@ -162,45 +117,88 @@ export function renderFormPage(liffId: string): string {
   #done p{ font-size:13.5px; color:var(--mute); }
   footer{ margin-top:26px; font-size:10.5px; color:var(--mute); letter-spacing:.06em; text-align:center; }
 
-  @media (prefers-reduced-motion: reduce){
-    html{ scroll-behavior:auto; }
-    .cap, #finale{ transition:none; }
-  }
+  @media (prefers-reduced-motion: reduce){ html{ scroll-behavior:auto; } }
 </style>
 </head>
 <body>
 
-<!-- ───────── ファーストビュー ───────── -->
-<section id="hero">
-  <video id="hv" src="${HERO_VIDEO}" poster="${HERO_POSTER}" muted playsinline autoplay preload="auto"></video>
-  <div class="poster" aria-hidden="true"></div>
-  <div class="scrim" aria-hidden="true"></div>
-  <div class="hbrand">${logoSvg('#ffffff', 'hero')}</div>
-  <button id="skip" type="button">スキップ →</button>
+<div class="brand">${logoSvg('#1a1a1a', 'top')}</div>
 
-  <p class="cap" id="cap1">今日も走る、あなたのテスラ。</p>
-  <p class="cap" id="cap2">その走りの裏で――</p>
-  <p class="cap" id="cap3">バッテリーは、静かに劣化しています。</p>
-
-  <div id="finale">
-    <div class="batt-row" aria-hidden="true">
-      <div class="batt"><div class="batt-shell"><div class="batt-fill" id="bfill"></div></div><div class="batt-cap"></div></div>
-      <div class="batt-num"><span id="bnum">100</span><small>%</small></div>
-    </div>
-    <p class="batt-note">※数値はイメージです</p>
-    <h1>いま何％残っているか、<br>知っていますか？</h1>
-    <p class="sub">車両の実データから劣化率と現在の充電容量を無料で診断。<br>結果はLINEでお届けします。</p>
-    <button class="pill light" type="button" onclick="document.getElementById('form-section').scrollIntoView({behavior:'smooth'})">無料で診断する（入力1分）</button>
-  </div>
-</section>
-
-<!-- ───────── フォーム ───────── -->
 <main id="form-section">
-  <h2 class="formtitle">テスラバッテリー診断</h2>
-  <p class="formlede">入力いただいた車台番号（VIN）から車両データを照会し、<b>バッテリー劣化率</b>と<b>現在の充電容量</b>を診断します。</p>
-  <div class="steps"><span>① 1分で入力</span><span>② データ照会</span><span>③ LINEで結果</span></div>
+  <h1 class="formtitle">愛車相場チェック・Battery劣化診断</h1>
+  <p class="formlede">あなたのEVのいまの相場を、市場データにもとづくレポートで無料でお届けします。テスラ Model 3 / Model Y は、<b>バッテリー劣化診断</b>もセットでお送りします。</p>
+  <div class="steps"><span>① 1分で入力</span><span>② 相場・データ照会</span><span>③ LINEでお届け</span></div>
 
   <form id="f" novalidate>
+    <div class="field">
+      <label class="top" for="cartype">お車の種類 <span class="req">必須</span></label>
+      <select id="cartype">
+        <option value="">選択してください</option>
+        <option value="tesla_m3">Tesla Model 3</option>
+        <option value="tesla_my">Tesla Model Y</option>
+        <option value="tesla_other">その他のテスラ</option>
+        <option value="other_ev">テスラ以外のEV</option>
+      </select>
+      <p class="hint">電気自動車（EV）が対象です。</p>
+    </div>
+
+    <!-- ルートA: Tesla Model 3 / Y -->
+    <div id="routeA" hidden>
+      <div class="field">
+        <label class="top" for="vin">VIN（車台番号・17桁） <span class="req">必須</span></label>
+        <input type="text" id="vin" maxlength="17" autocapitalize="characters" autocomplete="off"
+               placeholder="5YJ3E7EBXKF******" style="text-transform:uppercase">
+        <details class="vin">
+          <summary>VINの探し方</summary>
+          <div>
+            <ul>
+              <li>テスラアプリの車両画面 いちばん下に記載（<b>長押しでコピーできます</b>）</li>
+              <li>車内画面 → コントロール → ソフトウェア</li>
+              <li>フロントガラス左下（外から見えるプレート）</li>
+              <li>運転席ドアを開けた枠のラベル</li>
+              <li>車検証の「車台番号」欄</li>
+            </ul>
+          </div>
+        </details>
+        <button type="button" class="linkbtn" id="novin">車台番号がわからない方はこちら</button>
+      </div>
+    </div>
+
+    <!-- ルートB: その他のテスラ／テスラ以外のEV／VINがわからない -->
+    <div id="routeB" hidden>
+      <p class="routenote" id="novinNote" hidden>車台番号がなくても、愛車相場レポートをお届けできます（バッテリー劣化診断は付きません）。<br>
+        <button type="button" class="linkbtn" id="backToVin">車台番号を入力する</button></p>
+      <div class="field">
+        <label class="top" for="model">車種 <span class="req">必須</span></label>
+        <select id="model"><option value="">選択してください</option></select>
+      </div>
+      <div class="field">
+        <label class="top" for="grade">グレード <span class="req">必須</span></label>
+        <select id="grade" disabled><option value="">先に車種を選択してください</option></select>
+        <input type="text" id="gradeFree" maxlength="50" placeholder="グレードを入力" hidden>
+      </div>
+      <div class="field">
+        <label class="top">初度登録年月 <span class="req">必須</span></label>
+        <div class="row2">
+          <select id="fy"><option value="">年</option></select>
+          <select id="fm"><option value="">月</option></select>
+        </div>
+        <p class="hint">車検証の「初度登録年月」欄に書かれています。わからなければ「不明」を選んでください。</p>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="top" for="odo">走行距離 <span class="req">必須</span></label>
+      <div class="unit"><input type="text" id="odo" inputmode="numeric" placeholder="35000"><span>km</span></div>
+    </div>
+    <div class="field">
+      <label class="top">次回車検の満了年月 <span class="req">必須</span></label>
+      <div class="row2">
+        <select id="sy"><option value="">年</option></select>
+        <select id="sm"><option value="">月</option></select>
+      </div>
+      <p class="hint">フロントガラス上部のステッカーに書かれています。車検のタイミングに合わせて、売り時もご案内できます。</p>
+    </div>
     <div class="field">
       <label class="top" for="name">お名前 <span class="req">必須</span></label>
       <input type="text" id="name" autocomplete="name" placeholder="山田 太郎">
@@ -213,49 +211,21 @@ export function renderFormPage(liffId: string): string {
       <label class="top" for="phone">電話番号 <span class="req">必須</span></label>
       <input type="tel" id="phone" autocomplete="tel" inputmode="numeric" placeholder="09012345678">
     </div>
-    <div class="field">
-      <label class="top" for="vin">VIN（車台番号・17桁） <span class="req">必須</span></label>
-      <input type="text" id="vin" maxlength="17" autocapitalize="characters" autocomplete="off"
-             placeholder="5YJ3E7EBXKF******" style="text-transform:uppercase">
-      <details class="vin">
-        <summary>VINの探し方</summary>
-        <div>
-          <ul>
-            <li>テスラアプリの車両画面 いちばん下に記載（<b>長押しでコピーできます</b>）</li>
-            <li>フロントガラス左下（外から見えるプレート）</li>
-            <li>運転席ドアを開けた枠のラベル</li>
-            <li>車検証の「車台番号」欄</li>
-          </ul>
-        </div>
-      </details>
-    </div>
-    <div class="field">
-      <label class="top" for="odo">走行距離 <span class="req">必須</span></label>
-      <div class="unit"><input type="text" id="odo" inputmode="numeric" placeholder="35000"><span>km</span></div>
-    </div>
-    <div class="field">
-      <label class="top">次回車検の年月 <span class="req">必須</span></label>
-      <div class="row2">
-        <select id="sy"><option value="">年</option></select>
-        <select id="sm"><option value="">月</option></select>
-      </div>
-      <p class="hint">車検のタイミングに合わせて、売却のベストな時期もご案内できます。</p>
-    </div>
 
     <label class="consent">
       <input type="checkbox" id="consent">
-      <span><a href="https://lightning.boxiv.co.jp/terms" target="_blank" rel="noopener">利用規約</a>・<a href="https://boxiv.co.jp/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意し、診断結果と関連するご案内をLINE・メールで受け取ります。</span>
+      <span><a href="https://lightning.boxiv.co.jp/terms" target="_blank" rel="noopener">利用規約</a>・<a href="https://boxiv.co.jp/privacy" target="_blank" rel="noopener">プライバシーポリシー</a>に同意し、相場レポート・診断結果と関連するご案内をLINE・メールで受け取ります。</span>
     </label>
 
     <div class="error" id="err"></div>
-    <button class="pill" id="submit" type="submit">無料で診断を申し込む</button>
-    <p class="note">※診断結果は推定・参考値です。実際の売却価格を保証するものではありません。</p>
+    <button class="pill" id="submit" type="submit">無料でレポートを申し込む</button>
+    <p class="note">※相場・診断結果は推定・参考値です。実際の売却価格を保証するものではありません。</p>
   </form>
 
   <div id="done">
     <div class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M4 12.5L10 18.5L20 6.5" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
     <h3>受け付けました</h3>
-    <p>診断結果は <b>1営業日以内</b> にLINEでお送りします。<br>そのままお待ちください。</p>
+    <p>レポートは <b>1営業日以内</b> にLINEでお送りします。<br>そのままお待ちください。</p>
   </div>
 
   <footer>©BOXIV Inc 2026</footer>
@@ -265,75 +235,99 @@ export function renderFormPage(liffId: string): string {
 <script>
 (function(){
   var LIFF_ID = ${JSON.stringify(liffId)};
+  var CAR_GROUPS = ${carGroupsJson};
   var profile = { userId:'', displayName:'' };
-
-  /* ── ヒーロー動画シーケンス ── */
-  var hero = document.getElementById('hero');
-  var video = document.getElementById('hv');
-  var skip = document.getElementById('skip');
-  var finale = document.getElementById('finale');
-  var caps = [
-    { el: document.getElementById('cap1'), t: 0.8, out: 3.6 },
-    { el: document.getElementById('cap2'), t: 4.4, out: 6.9 },
-    { el: document.getElementById('cap3'), t: 7.4, out: 10.6 }
-  ];
-  var finaleShown = false;
   var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var el = function(id){ return document.getElementById(id); };
+  var SUBMIT_LABEL = '無料でレポートを申し込む';
 
-  function showFinale(){
-    if (finaleShown) return;
-    finaleShown = true;
-    caps.forEach(function(c){ c.el.classList.remove('show'); });
-    skip.classList.add('hide');
-    finale.classList.add('show');
-    animateBattery();
-  }
-  function animateBattery(){
-    var fill = document.getElementById('bfill');
-    var numEl = document.getElementById('bnum');
-    var from = 100, to = 91.8, dur = 2200, t0 = null;
-    function step(ts){
-      if (!t0) t0 = ts;
-      var p = Math.min((ts - t0) / dur, 1);
-      var eased = 1 - Math.pow(1 - p, 3);
-      var val = from + (to - from) * eased;
-      fill.style.width = val + '%';
-      numEl.textContent = val.toFixed(1);
-      if (p < 1) requestAnimationFrame(step);
-    }
-    if (reduced) { fill.style.width = to + '%'; numEl.textContent = to.toFixed(1); return; }
-    requestAnimationFrame(step);
-  }
-  function heroFallback(){ hero.classList.add('no-video'); showFinale(); }
-
-  if (reduced) { heroFallback(); }
-  else {
-    video.addEventListener('error', heroFallback);
-    // 自動再生ブロック時もフォールバック
-    var playPromise = video.play ? video.play() : null;
-    if (playPromise && playPromise.catch) playPromise.catch(function(){ heroFallback(); });
-    setTimeout(function(){ if (video.readyState < 2 && !finaleShown) heroFallback(); }, 4000);
-    video.addEventListener('timeupdate', function(){
-      var t = video.currentTime;
-      caps.forEach(function(c){ c.el.classList.toggle('show', t >= c.t && t < c.out); });
-      if (t >= 11.2) showFinale();
+  /* ── お車の種類でルートを切り替える ── */
+  var MODELS = {};
+  var modelEl = el('model'), gradeEl = el('grade'), gradeFree = el('gradeFree');
+  CAR_GROUPS.forEach(function(g){
+    var og = document.createElement('optgroup');
+    og.label = g.maker;
+    g.models.forEach(function(m){
+      MODELS[m.id] = m;
+      var o = document.createElement('option');
+      o.value = m.id; o.textContent = m.label;
+      og.appendChild(o);
     });
-    video.addEventListener('ended', showFinale);
-    skip.addEventListener('click', function(){
-      try { video.currentTime = Math.max(video.duration - 0.15, 0); } catch(e){}
-      showFinale();
-    });
-  }
+    modelEl.appendChild(og);
+  });
 
-  /* ── 車検 年月セレクト（今年〜+6年） ── */
-  var yEl = document.getElementById('sy'), mEl = document.getElementById('sm');
+  var carType = el('cartype');
+  var noVin = false; // Model 3 / Y で「車台番号がわからない」を押した
+  function currentRoute(){
+    var t = carType.value;
+    if (!t) return '';
+    if (t === 'tesla_m3' || t === 'tesla_my') return noVin ? 'B' : 'A';
+    return 'B';
+  }
+  function render(){
+    var r = currentRoute();
+    el('routeA').hidden = r !== 'A';
+    el('routeB').hidden = r !== 'B';
+    el('novinNote').hidden = !(r === 'B' && noVin);
+  }
+  function fillGrades(){
+    var m = MODELS[modelEl.value];
+    gradeEl.innerHTML = '';
+    var add = function(value, label){
+      var o = document.createElement('option'); o.value = value; o.textContent = label; gradeEl.appendChild(o);
+    };
+    if (!m) { add('', '先に車種を選択してください'); gradeEl.disabled = true; toggleFree(); return; }
+    gradeEl.disabled = false;
+    add('', '選択してください');
+    m.grades.forEach(function(g){ add('pick:' + g, g); });
+    add('unknown', 'わからない');
+    add('free', 'リストにない（入力する）');
+    // 候補を持たない車種は最初から入力欄を出す
+    if (m.grades.length === 0) gradeEl.value = 'free';
+    gradeFree.value = '';
+    toggleFree();
+  }
+  function toggleFree(){ gradeFree.hidden = gradeEl.value !== 'free'; }
+
+  carType.addEventListener('change', function(){
+    noVin = false;
+    render();
+  });
+  modelEl.addEventListener('change', fillGrades);
+  gradeEl.addEventListener('change', toggleFree);
+  el('novin').addEventListener('click', function(){
+    noVin = true;
+    modelEl.value = carType.value === 'tesla_m3' ? 'tesla_model3' : 'tesla_modely';
+    fillGrades();
+    render();
+  });
+  el('backToVin').addEventListener('click', function(){ noVin = false; render(); });
+
+  /* ── 年月セレクト ── */
+  var opt = function(sel, value, label){ sel.insertAdjacentHTML('beforeend', '<option value="' + value + '">' + label + '</option>'); };
   var thisYear = new Date().getFullYear();
-  for (var y = thisYear; y <= thisYear + 6; y++) yEl.insertAdjacentHTML('beforeend', '<option>' + y + '</option>');
-  for (var m = 1; m <= 12; m++) mEl.insertAdjacentHTML('beforeend', '<option>' + m + '</option>');
+  // 次回車検（今年〜+6年）。温度（HOT/WARM/COLD）と出品提案の時期を決めるキー項目なので「わからない」は置かない
+  var yEl = el('sy'), mEl = el('sm');
+  for (var y = thisYear; y <= thisYear + 6; y++) opt(yEl, y, y);
+  for (var m = 1; m <= 12; m++) opt(mEl, m, m);
+  // 初度登録（今年〜2020・2019以前・不明）
+  var fyEl = el('fy'), fmEl = el('fm');
+  for (var fy = thisYear; fy >= 2020; fy--) opt(fyEl, fy, fy);
+  opt(fyEl, '2019以前', '2019以前');
+  opt(fyEl, '不明', '不明');
+  for (var fm = 1; fm <= 12; fm++) opt(fmEl, fm, fm + '月');
+  opt(fmEl, '不明', '不明');
 
-  /* ── 流入パラメータ（UTM等） ── */
+  /* ── 流入パラメータ（流入タグ src と UTM 等） ── */
+  // LIFF で開くと最初はクエリが liff.state に包まれて届くので、その中も見る
+  var params = new URLSearchParams(location.search);
+  var src = params.get('src') || '';
+  var liffState = params.get('liff.state');
+  if (!src && liffState && liffState.indexOf('?') >= 0) {
+    src = new URLSearchParams(liffState.slice(liffState.indexOf('?') + 1)).get('src') || '';
+  }
   var utm = {};
-  new URLSearchParams(location.search).forEach(function(v, k){
+  params.forEach(function(v, k){
     if (/^(utm_|campaign|adid|ref$|liff\\.state)/.test(k)) utm[k] = v;
   });
 
@@ -347,52 +341,74 @@ export function renderFormPage(liffId: string): string {
   }
 
   /* ── 送信 ── */
-  var form = document.getElementById('f');
-  var err = document.getElementById('err');
-  var btn = document.getElementById('submit');
+  var form = el('f');
+  var err = el('err');
+  var btn = el('submit');
 
   form.addEventListener('submit', function(ev){
     ev.preventDefault();
     err.style.display = 'none';
-    var v = function(id){ return document.getElementById(id).value.trim(); };
+    var v = function(id){ return el(id).value.trim(); };
+    var route = currentRoute();
     var problems = [];
-    if (!v('name')) problems.push('お名前を入力してください');
-    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(v('email'))) problems.push('メールアドレスの形式が正しくありません');
-    if (!/^[\\d-]{10,13}$/.test(v('phone').replace(/[０-９]/g, function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })))
+    var payload = {
+      car_type: carType.value, no_vin: noVin,
+      odometer_km: v('odo').replace(/,/g,''),
+      shaken_month: yEl.value + '-' + ('0' + mEl.value).slice(-2),
+      name: v('name'), email: v('email'), phone: v('phone'),
+      consent: true,
+      line_user_id: profile.userId, display_name: profile.displayName,
+      src: src,
+      utm: Object.keys(utm).length ? JSON.stringify(utm) : ''
+    };
+
+    if (!route) problems.push('お車の種類を選択してください');
+    if (route === 'A') {
+      payload.vin = v('vin').toUpperCase();
+      if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(payload.vin)) problems.push('VINは17桁の英数字です（I・O・Qは含まれません）');
+    }
+    if (route === 'B') {
+      payload.car_model = modelEl.value;
+      if (!payload.car_model) problems.push('車種を選択してください');
+      var g = gradeEl.value;
+      if (g.indexOf('pick:') === 0) { payload.grade_mode = 'pick'; payload.grade = g.slice(5); }
+      else if (g === 'unknown') { payload.grade_mode = 'unknown'; }
+      else if (g === 'free') {
+        payload.grade_mode = 'free'; payload.grade = gradeFree.value.trim();
+        if (!payload.grade) problems.push('グレードを入力してください');
+      }
+      else if (payload.car_model) problems.push('グレードを選択してください');
+      payload.first_reg_year = fyEl.value; payload.first_reg_month = fmEl.value;
+      if (!fyEl.value || !fmEl.value) problems.push('初度登録年月を選択してください');
+    }
+    if (!/^\\d+$/.test(payload.odometer_km)) problems.push('走行距離を数字で入力してください');
+    if (!yEl.value || !mEl.value) problems.push('次回車検の満了年月を選択してください');
+    if (!payload.name) problems.push('お名前を入力してください');
+    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(payload.email)) problems.push('メールアドレスの形式が正しくありません');
+    if (!/^[\\d-]{10,13}$/.test(payload.phone.replace(/[０-９]/g, function(c){ return String.fromCharCode(c.charCodeAt(0)-0xFEE0); })))
       problems.push('電話番号は数字10〜11桁で入力してください');
-    var vin = v('vin').toUpperCase();
-    if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) problems.push('VINは17桁の英数字です（I・O・Qは含まれません）');
-    if (!/^\\d+$/.test(v('odo').replace(/,/g,''))) problems.push('走行距離を数字で入力してください');
-    if (!yEl.value || !mEl.value) problems.push('次回車検の年月を選択してください');
-    if (!document.getElementById('consent').checked) problems.push('同意にチェックしてください');
+    if (!el('consent').checked) problems.push('同意にチェックしてください');
     if (problems.length) { err.textContent = problems.join('\\n'); err.style.display = 'block'; return; }
 
     btn.disabled = true; btn.textContent = '送信中…';
     fetch('/diagnosis-form/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: v('name'), email: v('email'), phone: v('phone'),
-        vin: vin, odometer_km: v('odo').replace(/,/g,''),
-        shaken_month: yEl.value + '-' + ('0' + mEl.value).slice(-2),
-        consent: true,
-        line_user_id: profile.userId, display_name: profile.displayName,
-        utm: Object.keys(utm).length ? JSON.stringify(utm) : ''
-      })
+      body: JSON.stringify(payload)
     }).then(function(r){ return r.json(); }).then(function(res){
       if (res && res.success) {
         form.style.display = 'none';
-        document.getElementById('done').style.display = 'block';
-        document.getElementById('done').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+        el('done').style.display = 'block';
+        el('done').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
       } else {
         err.textContent = (res && res.error) || '送信に失敗しました。時間をおいて再度お試しください。';
         err.style.display = 'block';
-        btn.disabled = false; btn.textContent = '無料で診断を申し込む';
+        btn.disabled = false; btn.textContent = SUBMIT_LABEL;
       }
     }).catch(function(){
       err.textContent = '通信エラーが発生しました。電波状況をご確認のうえ再度お試しください。';
       err.style.display = 'block';
-      btn.disabled = false; btn.textContent = '無料で診断を申し込む';
+      btn.disabled = false; btn.textContent = SUBMIT_LABEL;
     });
   });
 })();
