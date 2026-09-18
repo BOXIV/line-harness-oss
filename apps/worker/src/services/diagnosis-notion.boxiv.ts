@@ -1,4 +1,4 @@
-// BOXIV-only: バッテリー劣化診断リードを Notion「出品者リードリスト」へ起票する。
+// BOXIV-only: 愛車相場チェック・バッテリー劣化診断リードを Notion「出品者リードリスト」へ起票する。
 // DB は出品者リストのコピーから診断用に整理済み（依頼ID/診断ステータス/劣化率(%) 等を追加）。
 // 呼び出し元: routes/diagnosis-form.boxiv.ts（非致命 — 失敗しても送信自体は成功させる）と
 // services/diagnosis-spec-backfill.boxiv.ts（後追いで spec を取得できた行の追記）。
@@ -15,11 +15,18 @@ export type DiagnosisLeadInput = {
   name: string;
   email: string;
   phone: string;
-  vin: string;
+  vin: string; // ルートB は空文字
   odometerKm: number;
-  shakenMonth: string; // YYYY-MM
+  shakenMonth: string; // YYYY-MM（必須）
   consentedAt: string; // ISO8601
   status: string; // 診断依頼 | API取得不可 | 非テスラ
+  diagnosisKind?: string | null; // 劣化診断 | 相場のみ
+  entrySource?: string | null; // richmenu | greeting | ad_souba
+  // ルートB の入力値。ルートA では spec 側（model/trim）が優先される
+  carModelName?: string | null; // [Form]車種名 に書く名前（例: Nissan SAKURA）
+  grade?: string | null;
+  gradeIsFree?: boolean;
+  firstRegMonth?: string | null; // YYYY-MM
   lineUserId?: string | null;
   displayName?: string | null;
   utm?: string | null;
@@ -42,6 +49,10 @@ const MODEL_NAMES: Record<string, string> = {
   mx: 'Tesla Model X',
 };
 
+export function specModelName(model: string | null | undefined): string | null {
+  return model ? MODEL_NAMES[model.toLowerCase()] ?? model : null;
+}
+
 function rt(content: string) {
   return { rich_text: [{ text: { content: content.slice(0, 1900) } }] };
 }
@@ -51,7 +62,7 @@ function rt(content: string) {
 // 値が無いものは props に載せない（Notion 側の既存値を空で上書きしないため）。
 function buildSpecProps(input: DiagnosisSpecFields): Record<string, unknown> {
   const props: Record<string, unknown> = {};
-  const modelName = input.model ? MODEL_NAMES[input.model.toLowerCase()] ?? input.model : null;
+  const modelName = specModelName(input.model);
   if (modelName) props['[Form]車種名'] = { select: { name: modelName } };
   if (input.modelYear != null) props['[App]年式'] = { number: input.modelYear };
   if (input.trim) props['[Form]グレード'] = rt(input.trim);
@@ -106,26 +117,41 @@ export async function updateDiagnosisLeadSpec(
   return true;
 }
 
-export async function createDiagnosisLeadRow(
-  env: DiagnosisNotionEnv,
-  input: DiagnosisLeadInput
-): Promise<string | null> {
-  if (!env.NOTION_API_KEY || !env.DIAGNOSIS_NOTION_DB_ID) return null;
-
+// 起票時のプロパティ一式。テストが Notion に送る形を直接確かめられるよう関数に分けている。
+export function buildLeadRowProps(input: DiagnosisLeadInput): Record<string, unknown> {
   const props: Record<string, unknown> = {
     名前: { title: [{ text: { content: input.name } }] },
     依頼ID: rt(input.leadId),
     '[Form]メールアドレス': { email: input.email },
     '[Form]電話番号': { phone_number: input.phone },
-    '車台番号・VIN（車検証）': rt(input.vin),
     '[Form]走行距離': { number: input.odometerKm },
     次回車検: { date: { start: `${input.shakenMonth}-01` } },
     同意日時: { date: { start: input.consentedAt } },
     診断ステータス: { select: { name: input.status } },
   };
+  if (input.vin) props['車台番号・VIN（車検証）'] = rt(input.vin);
+  if (input.diagnosisKind) props['診断種別'] = { select: { name: input.diagnosisKind } };
+  if (input.entrySource) props['流入タグ'] = { select: { name: input.entrySource } };
   if (input.lineUserId) props['LINE User ID'] = rt(input.lineUserId);
   if (input.utm) props['流入(UTM)'] = rt(input.utm);
+
+  // ルートB の入力値（ルートA は下の spec 由来が上書きする）
+  if (input.carModelName) props['[Form]車種名'] = { select: { name: input.carModelName } };
+  if (input.grade) {
+    // 候補から選んだか自由入力かを、相場算定の担当者が見分けられるようにする
+    props['[Form]グレード'] = rt(input.gradeIsFree ? `${input.grade}（自由入力）` : input.grade);
+  }
+  if (input.firstRegMonth) props['[Form]初度登録日'] = { date: { start: `${input.firstRegMonth}-01` } };
+
   Object.assign(props, buildSpecProps(input));
+  return props;
+}
+
+export async function createDiagnosisLeadRow(
+  env: DiagnosisNotionEnv,
+  input: DiagnosisLeadInput
+): Promise<string | null> {
+  if (!env.NOTION_API_KEY || !env.DIAGNOSIS_NOTION_DB_ID) return null;
 
   const res = await fetch(`${NOTION_API}/pages`, {
     method: 'POST',
@@ -136,7 +162,7 @@ export async function createDiagnosisLeadRow(
     },
     body: JSON.stringify({
       parent: { database_id: env.DIAGNOSIS_NOTION_DB_ID },
-      properties: props,
+      properties: buildLeadRowProps(input),
     }),
   });
   if (!res.ok) {
