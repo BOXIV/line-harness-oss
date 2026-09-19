@@ -17,6 +17,13 @@ import { fileURLToPath } from 'node:url';
 //   認証する。共有トークンだと Cloudflare 側には token id しか残らないので、誰がデプロイしたかを
 //   Pages の commit messageに焼き込む（WITH_SECRETS_PRINCIPAL = GSM の実行主体）。ビルド工程にはトークンを渡さない。
 import { announceAuth, buildEnv, deployMessage } from '../../../../../scripts/deploy-env.mjs';
+import { loadDotenv } from '../../../../../scripts/dotenv.mjs';
+
+// 非機密の設定（CLOUDFLARE_ACCOUNT_ID 等）を config/public*.env から env に乗せる。
+// アカウント所有のデプロイトークンは /memberships でアカウントを引けないので、これが無いと
+// `pages project create` / `pages deploy` が 9106 で落ちる（2026-09-19 実測）。
+// env は test を明示（worker 側 deploy-boxiv-test.mjs と同じ理由）。
+loadDotenv({ env: 'test' });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webDir = resolve(__dirname, '..');
