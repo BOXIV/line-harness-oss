@@ -29,6 +29,11 @@ import { copyFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotenv, requireEnv } from '../../../../../scripts/dotenv.mjs';
+// 認証と作者の焼き込み（親リポ docs/RUNBOOK-deploy-access.md）:
+//   wrangler は環境の CLOUDFLARE_API_TOKEN（with-secrets.mjs line-deploy が注入する共有デプロイトークン）で
+//   認証する。共有トークンだと Cloudflare 側には token id しか残らないので、誰がデプロイしたかを
+//   版メッセージに焼き込む（WITH_SECRETS_PRINCIPAL = GSM の実行主体）。ビルド工程にはトークンを渡さない。
+import { announceAuth, buildEnv, deployMessage } from '../../../../../scripts/deploy-env.mjs';
 
 // ⚠️ env を**明示**する。省略すると BOXIV_ENV / WITH_SECRETS_PROFILE 次第で test に倒れ、
 //    test の LIFF ID が本番ビルドに焼かれる。requireEnv は「値がある」ので素通りし、
@@ -57,9 +62,10 @@ if (!existsSync(wranglerBoxiv)) {
 // swap の途中状態に左右されない。
 function runWorkerTests() {
   console.log('▶ vitest run (デプロイ前ゲート: ロール × エンドポイント到達性)');
-  execSync('pnpm exec vitest run', { cwd: workerDir, stdio: 'inherit' });
+  execSync('pnpm exec vitest run', { cwd: workerDir, stdio: 'inherit', env: buildEnv() });
 }
 
+announceAuth();
 runWorkerTests();
 
 let swapped = false;
@@ -76,17 +82,18 @@ try {
   execSync('pnpm --filter @line-crm/line-sdk build', {
     cwd: workerDir,
     stdio: 'inherit',
+    env: buildEnv(),
   });
 
   console.log('▶ vite build (VITE_LIFF_ID=' + VITE_LIFF_ID + ')');
   execSync('pnpm exec vite build', {
     cwd: workerDir,
     stdio: 'inherit',
-    env: { ...process.env, VITE_LIFF_ID },
+    env: buildEnv({ VITE_LIFF_ID }),
   });
 
   console.log('▶ wrangler deploy (BOXIV production)');
-  execSync('pnpm exec wrangler deploy', {
+  execSync(`pnpm exec wrangler deploy --message "${deployMessage('line-connect')}"`, {
     cwd: workerDir,
     stdio: 'inherit',
   });
